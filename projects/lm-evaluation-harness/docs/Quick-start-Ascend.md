@@ -72,7 +72,7 @@ modelscope 1.37.0
 ```
 
 ## 运行评测
-下面这段脚本一次完成下载与评测。模型约 1 GB，由 `snapshot_download` 首次运行时自动下载到默认缓存；两个任务的数据集也经 ModelScope 自动下载 parquet 文件到本地，任务 YAML 从安装好的官方定义复制，只把 `dataset_path` 改为本地目录（script 型数据集在 datasets≥3.x 已废弃，改用 parquet 镜像 + 去掉 `dataset_name`）。`--limit 10` 是跑通口径，不代表真实榜单值。
+下面这段脚本一次完成下载与评测。模型约 1 GB，两个数据集经 ModelScope 下载 parquet 到本地，任务定义复制官方 YAML 并只改 `dataset_path` 为本地目录。`--limit 10` 是跑通口径，不代表真实榜单值。
 
 ```shell #test id="run-eval"
 python << 'PY'
