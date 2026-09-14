@@ -150,9 +150,13 @@ import json
 found = {}
 for path in glob.glob("output/lm_eval_out/**/*.json", recursive=True):
     for task, metrics in json.load(open(path)).get("results", {}).items():
-        if task in ("arc_easy", "winogrande") and "acc" in metrics:
-            value = metrics["acc"]
-            found[task] = value.get("value", value) if isinstance(value, dict) else value
+        if task in ("arc_easy", "winogrande"):
+            # v0.4.x stores metrics as "acc,none" / "acc_norm,none"
+            for k in metrics:
+                if k.startswith("acc") and "norm" not in k:
+                    value = metrics[k]
+                    found[task] = value.get("value", value) if isinstance(value, dict) else value
+                    break
 for task in ("arc_easy", "winogrande"):
     assert task in found
     assert 0.0 <= float(found[task]) <= 1.0
