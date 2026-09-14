@@ -46,7 +46,7 @@ count 1
 
 **安装 timm。** PyPI 最新 release，由 uv 统一安装并自动解析依赖。
 ```shell #test id="install-timm"
-pip install uv
+pip install uv >/dev/null 2>&1
 uv pip install timm
 python -c "import timm; print('timm', timm.__version__)"
 ```
