@@ -49,8 +49,8 @@ concurrency:
 on:
   # Enable after the first successful workflow_dispatch run (same
   # convention as mooncake / tensorflow / most of the repo).
-  # schedule:
-  #   - cron: '45 */6 * * *'
+  schedule:
+    - cron: '45 */6 * * *'
   workflow_dispatch:
 
 permissions:
@@ -94,44 +94,10 @@ jobs:
       # flakes.
       timeout_minutes: 240
       upstream_repo: ModelTC/LightX2V
-      # fixed_ref: main because the doc tracks rolling main: its clone
-      # block is a bare `git clone` of the default branch, which is
-      # exactly what a user gets, and the doc's version table says so.
-      # Pinning main makes the monitor poll /commits/main and use that
-      # SHA as the change key, so every upstream push fires a cycle.
-      # Without it the engine would resolve the latest release tag
-      # (0.5.0 at the time of writing) and guard a ref the doc never
-      # installs. The dispatch path resolves ref="main" directly, so
-      # UPSTREAM_REF is a non-empty "main"; the doc body does not
-      # consume it either way.
-      fixed_ref: main
-      # Same URL the legacy workflow monitored. Cache keys were hardened to
-      # the strict quick-start-monitor-state-lightx2v_* format (2026-09-11);
-      # old-prefix state was intentionally dropped (one cold round).
-      # GitHub Contents API URL (NOT raw.githubusercontent.com):
-      #   * raw.githubusercontent.com is firewalled off the NPU runner
-      #     → test's MONITORED_DOC_URL fetch fails (returns HTML error
-      #     page that mistune can't parse → empty doc body → "no commands
-      #     parsed" failure). CI 33255726245 / 33258866596 both hit
-      #     `URLError(TimeoutError('_ssl.c:993: The handshake operation timed out'))`
-      #     on the raw URL before this switch.
-      #   * engine's monitor already sends `Authorization: Bearer
-      #     $GH_TOKEN` + `Accept: application/vnd.github.raw`, which is
-      #     exactly the Contents API contract for raw markdown; with the
-      #     raw URL those headers are silently ignored and a HTML error
-      #     page is hashed instead, so doc signal is permanently "unknown"
-      #     and doc edits never trigger a run (only release / retry drives
-      #     it). Contents API + the existing engine headers fix both
-      #     ends with one URL change.
-      # `markdown_doc_test_base.py` already special-cases `api.github.com`
-      # URLs and re-applies the same Accept header on the test-side
-      # fetch, so MONITORED_DOC_URL inherits the fix.
-      # `?ref=${{ github.sha }}` is load-bearing: the Contents API without
-      # a ref defaults to the repo's default branch (`main`), so a dispatch
-      # on hdc would silently fetch main's doc and the test would never
-      # reflect hdc edits. Same pattern as aibrix / bitsandbytes / colossalai /
-      # mooncake / llama.cpp / onnxruntime / opencv / flagscale / specforge /
-      # torchtune.
+      # The doc installs the latest upstream release tag: its clone
+      # block injects UPSTREAM_REF via store/load into `git clone
+      # --branch <ref>`, so the engine release signal tracks
+      # exactly what the doc installs. No fixed_ref needed.
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/lightx2v/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/lightx2v/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/lightx2v; env contract (MONITORED_DOC_URL /
