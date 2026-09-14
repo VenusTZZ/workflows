@@ -212,10 +212,6 @@ jobs:
       PIP_TIMEOUT: "120"
     container:
       image: ${{ matrix.example.image }}
-      # TODO: confirm from the first green run's log (df -h /dev/shm in
-      # the Run example step) whether this option is honored at all,
-      # and whether the example needs it. Drop it if dead weight.
-      options: --shm-size=64g
     steps:
       - name: Checkout workflows
         uses: actions/checkout@v4
