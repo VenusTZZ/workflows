@@ -19,22 +19,18 @@
 # tensordict / pytorch.vision / accelerate / ray / torchtitan /
 # transformers / diffusers / mooncake.
 #
-# Two bind mounts beyond the defaults:
-#   1. modelscope cache -> /root/.cache/modelscope (default location
-#      modelscope writes to when --local_dir is omitted; some helper
-#      commands like `snapshot_download(..., allow_patterns=...)`
-#      bypass --local_dir and land here). Reused across runs.
-#   2. <doc-cwd>/models (/root/lightx2v-test/models on CI — the test
-#      class chdirs there in prepare_environment; the doc body is
-#      cwd-relative, "wherever you run it is the project root") ->
-#      /data/ci-cache/lightx2v-models. This is where the doc's
-#      `modelscope download --local_dir models/...` writes. Bind-mount
-#      covers persistence + the cache invalidation contract
-#      (purge_corrupt_models walks this dir).
-# The HF cache bind from earlier iterations was dropped: the doc's
-# e2e scope no longer downloads from HF (Wan2.2 T2V distill and the
-# Qwen-Image-Edit I2I route were cut to pointer-only sections; all
-# smoke weights come from ModelScope now).
+# One bind mount beyond the defaults: the modelscope cache ->
+# /root/.cache/modelscope, which is where the doc's embedded
+# `snapshot_download('Wan-AI/Wan2.1-T2V-1.3B')` writes (no local dir is
+# requested, so weights land in the default cache). Reused across runs;
+# also the dir the test class's purge_modelscope_corrupt() walks.
+#
+# The <doc-cwd>/models bind from earlier iterations was dropped together
+# with the doc's `modelscope download --local_dir models/...` block: the
+# generation script now resolves the weights through snapshot_download
+# into the default cache, so nothing writes to <doc-cwd>/models any more.
+# The HF cache bind was dropped earlier for the same reason (all smoke
+# weights come from ModelScope).
 
 name: lightx2v-quick-start
 
@@ -77,35 +73,37 @@ jobs:
       # in the smoke step picks card 0 only).
       test_runner: '["linux-aarch64-a2-2"]'
       # Plain CANN base image (the proven old stack): the image ships
-      # only CANN 9.1.0 - torch 2.9.0 + torch_npu 2.9.0.post2 are
-      # installed by the doc's own `lightx2v-install-torch` #test
-      # block, so the whole install path (torch included) is guarded
-      # by CI instead of being baked into an opaque image. MindIE is
-      # NOT needed by the current route (npu_flash_attn comes from
-      # torchada). Same SWR registry domain as the previous images -
-      # the runner's host docker daemon already pulls this exact tag
-      # daily (it ran the pre-Wan2.2 stack for many green runs).
+      # only CANN 9.1.0 - the whole torch stack (torch 2.9.0 +
+      # torchvision 0.24.* + torch_npu 2.9.0.post2 + triton 3.5.*) is
+      # installed by the doc's own `lightx2v-install-torch` block, so
+      # the install path is guarded by CI instead of being baked into
+      # an opaque image. MindIE is NOT needed by the current route:
+      # `npu_flash_attn` resolves to torch_npu's own
+      # `npu_fusion_attention`, and the `mindie` compile backend is
+      # only created on explicit request. Same SWR registry domain as
+      # the previous images - the runner's host docker daemon already
+      # pulls this exact tag daily.
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
       container_options: >-
         --volume=/data/ci-cache/modelscope/lightx2v:/root/.cache/modelscope
-        --volume=/data/ci-cache/lightx2v-models:/root/lightx2v-test/models
-      # 4h ceiling: cold run pulls ~18 GB of weights (Wan-AI/
-      # Wan2.1-T2V-1.3B, include-filtered) at cluster network speed +
-      # 50-step 1.3B t2v smoke on a single 910B4 (480P / 81 frames
-      # typically runs in minutes). 4h covers cache-cold downloads +
-      # several retries on dependency flakes.
+      # 4h ceiling: cold run pulls the full ~17.6 GB Wan-AI/
+      # Wan2.1-T2V-1.3B repo into the default modelscope cache at
+      # cluster network speed + a 50-step 1.3B t2v smoke on a single
+      # 910B4 (480x832 / 81 frames typically runs in minutes). 4h
+      # covers cache-cold downloads + several retries on dependency
+      # flakes.
       timeout_minutes: 240
       upstream_repo: ModelTC/LightX2V
-      # LightX2V has zero GitHub Releases and zero tags (verified via
-      # the API: /tags returns 200 + []), rolling main only. The
-      # engine's auto-fallback chain short-circuits on that empty-tags
-      # 200: monitor resolves ref="" and the decide step's
-      # /commits/$ref lookup 422s -> exit 1 (the same failure that
-      # killed every schedule run of the tagless specforge guard
-      # before fixed_ref existed). fixed_ref: main makes the monitor
-      # poll /commits/main and use its SHA as the change key, and the
-      # dispatch path resolves ref="main" directly, so UPSTREAM_REF
-      # is a non-empty "main" the doc's store/load contract can use.
+      # fixed_ref: main because the doc tracks rolling main: its clone
+      # block is a bare `git clone` of the default branch, which is
+      # exactly what a user gets, and the doc's version table says so.
+      # Pinning main makes the monitor poll /commits/main and use that
+      # SHA as the change key, so every upstream push fires a cycle.
+      # Without it the engine would resolve the latest release tag
+      # (0.5.0 at the time of writing) and guard a ref the doc never
+      # installs. The dispatch path resolves ref="main" directly, so
+      # UPSTREAM_REF is a non-empty "main"; the doc body does not
+      # consume it either way.
       fixed_ref: main
       # Same URL the legacy pattern monitors: doc-hash state carries
       # over via the shared monitor-state-lightx2v- cache prefix.

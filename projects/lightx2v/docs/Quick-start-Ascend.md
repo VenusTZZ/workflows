@@ -1,6 +1,6 @@
 # LightX2V 快速入门指南（Ascend NPU）
 
-欢迎使用 LightX2V！本指南帮助你在单卡昇腾 NPU 上快速搭建环境并生成视频。
+欢迎使用 LightX2V！本指南帮助你在单卡昇腾 NPU 上装好 LightX2V 并生成第一条视频。
 
 ## 🚀 系统要求
 
@@ -10,165 +10,132 @@
 
 | 组件 | 版本 | 来源 |
 | --- | --- | --- |
-| CANN | ≥ 8.5.1 | 环境搭建安装（CI 以 9.1.0 验证） |
-| Python | ≥ 3.10 | 自备环境（CI 镜像为 3.12） |
-| torch / torch_npu | 2.9.0 / 2.9.0.post2 | 环境搭建安装 |
-| lightx2v | GitHub main 分支（滚动 main） | 下方安装 |
+| CANN | ≥ 8.5.1 | 下方环境搭建 |
+| Python | ≥ 3.10 | 自备环境 |
+| torch / torch_npu | 2.9.0 / 2.9.0.post2 | 下方安装 |
+| torchvision | 0.24.* | 下方安装 |
+| triton | 3.5.* | 下方安装 |
+| lightx2v | GitHub main 分支 | 下方源码安装 |
+| 模型 | [Wan-AI/Wan2.1-T2V-1.3B](https://modelscope.cn/models/Wan-AI/Wan2.1-T2V-1.3B)，约 17.6 GB | 首次运行自动下载 |
 
-> 也可用带 CANN 的昇腾镜像（如 [ascendhub cann 镜像](https://www.hiascend.com/developer/ascendhub)）跳过 CANN 安装，其余步骤相同。
+**配套机器**：Atlas 900 A2 PODc（Ascend 910B4，32 GB × 1），Ubuntu 22.04。
 
-## 🐧 Linux 系统环境搭建
+**配套镜像**：swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 
-### 🐍 环境搭建
+> 也可直接用带 CANN 的昇腾镜像（[ascendhub](https://www.hiascend.com/developer/ascendhub)）跳过 CANN 安装，其余步骤相同。
 
-**安装 CANN**（≥ 8.5.1，与驱动配套，[快速安装脚本](https://ascend.github.io/docs/sources/ascend/quick_install.html)会自动识别卡型），安装完成后：
+## 🐧 环境搭建
+
+**安装 CANN。** 版本需与驱动配套，[快速安装脚本](https://ascend.github.io/docs/sources/ascend/quick_install.html)会自动识别卡型。安装完成后加载环境变量：
 
 ```shell
 source ~/Ascend/ascend-toolkit/set_env.sh
 ```
 
-**准备 Python 环境**：Python ≥ 3.10。
+**准备 Python 环境。** Python ≥ 3.10。
 
-**安装 torch + torch_npu**：
+**安装 torch 栈。** torch、torch_npu、torchvision、triton 四者版本严格配套，跟随 torch 官方线：
 
 ```shell #test-setup id="lightx2v-install-torch"
 pip install uv
-uv pip install "torch==2.9.0" "torchvision==0.24.*" "torch_npu==2.9.0.post2"
+uv pip install "torch==2.9.0" "torchvision==0.24.*" "torch_npu==2.9.0.post2" "triton==3.5.*"
 ```
 
-### 安装 LightX2V
+## 📦 安装 LightX2V
 
-以下步骤通用：
-
-**克隆项目**（先进入想放置项目的目录，后续步骤都在该目录下执行）：
+**克隆项目。** 后续步骤都在当前目录下执行：
 
 ```shell #test-setup id="lightx2v-install-source"
-git clone --depth 1 https://github.com/ModelTC/LightX2V.git
+git clone https://github.com/ModelTC/LightX2V.git
 ```
 
-**安装依赖及代码**（aarch64 上部分依赖无预编译包，无法自动解析依赖，先装源码再补齐）：
+**安装代码与依赖。** LightX2V 没有发布到 PyPI，从克隆目录源码安装。它的依赖清单里含只在 x86_64 提供预编译包的项，整包解析在 aarch64 上装不上，所以先跳过依赖解析装代码，再按 NPU 推理实际用到的清单补齐：
 
 ```shell #test-setup id="lightx2v-install-deps"
-uv pip install --no-deps -v ./LightX2V
+uv pip install --no-deps ./LightX2V
 
-uv pip install \
-    numpy scipy diffusers transformers tokenizers tqdm accelerate safetensors \
-    imageio imageio-ffmpeg einops loguru omegaconf peft \
-    swanlab qtorch 'comfy-kitchen>=0.2.15' ftfy gradio \
-    aiohttp pydantic prometheus-client gguf fastapi uvicorn PyJWT requests \
-    aio-pika 'asyncpg>=0.27.0' 'aioboto3>=12.0.0' \
-    'alibabacloud_dypnsapi20170525==1.2.2' 'redis==6.4.0' tos \
-    av 'torchada>=0.1.10' pyzmq soundfile \
-    'modelscope==1.37.0' 'triton==3.5.*'
+uv pip install numpy pillow einops loguru tqdm packaging safetensors regex ftfy gguf imageio imageio-ffmpeg transformers prometheus-client pydantic pyzmq "modelscope==1.37.0"
 ```
 
-**验证安装**（没有 `uv` 先 `pip install uv`）：
+**验证安装。** 打印 import 链、版本号与 NPU 平台分发结果。LightX2V 用 `PLATFORM` 环境变量选后端，NPU 上一律加 `PLATFORM=ascend_npu` 前缀：
 
 ```shell #test id="lightx2v-install-verify"
-python -c "
-import os
-os.environ.setdefault('PLATFORM', 'ascend_npu')   # lightx2v 按此选后端,默认 cuda
-import lightx2v
-spec = __import__('importlib.util').util.find_spec('lightx2v')
-print('lightx2v spec:', spec.origin if spec else 'MISSING')
-print('lightx2v version:', getattr(lightx2v, '__version__', 'unknown'))
+PLATFORM=ascend_npu python -c "
+import torch, torch_npu, lightx2v
+from lightx2v_platform.base.global_var import AI_DEVICE, PLATFORM
+print('torch:', torch.__version__)
+print('torch_npu:', torch_npu.__version__)
+print('lightx2v:', lightx2v.__version__)
+print('platform:', PLATFORM, AI_DEVICE)
+print('npu available:', torch.npu.is_available(), 'count:', torch.npu.device_count())
 "
 ```
 
+输出结果如下：
+
 ```shell #test-result id="lightx2v-install-verify" fuzzy='xxx' fuzzy='...'
-...
-lightx2v spec: xxx
-lightx2v version: xxx
+...torch: 2.9.xxx
+torch_npu: 2.9.xxx
+lightx2v: xxx
+platform: ascend_npu npu
+npu available: True count: xxx
 ```
 
+## 🎯 生成视频
 
-## 🎯 推理使用
+用官方 [Wan2.1-T2V-1.3B](https://modelscope.cn/models/Wan-AI/Wan2.1-T2V-1.3B) 跑文生视频。模型约 17.6 GB，首次运行由脚本内的 `snapshot_download` 自动下载到默认缓存，无需手动下载。推理参数取仓库自带的 NPU 配置 `configs/platforms/ascend_npu/wan_t2v.json`：
 
-### 📥 模型准备
-
-本文使用 [Wan-AI/Wan2.1-T2V-1.3B](https://modelscope.cn/models/Wan-AI/Wan2.1-T2V-1.3B)（~17.6 GB）：
-
-```shell #test-setup id="lightx2v-pull-wan21-t2v"
-modelscope download --model Wan-AI/Wan2.1-T2V-1.3B --local_dir models/Wan2.1-T2V-1.3B
-```
-
-### 🚀 开始推理
-
-通过 [Python API](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/getting_started/quickstart.html) 生成视频：
-
-```shell #test-setup id="lightx2v-i2v-smoke-run"
-python - <<'PY'
-import os
-os.environ.setdefault('PLATFORM', 'ascend_npu')      # lightx2v 按此选后端
+```shell #test id="lightx2v-wan-t2v"
+PLATFORM=ascend_npu python - <<'PY'
+from modelscope import snapshot_download
 from lightx2v import LightX2VPipeline
 
-root = os.getcwd()
-model_path = root + '/models/Wan2.1-T2V-1.3B'
-save_result_path = root + '/save_results/output_lightx2v_wan_t2v.mp4'
-os.makedirs(os.path.dirname(save_result_path), exist_ok=True)
+model_path = snapshot_download('Wan-AI/Wan2.1-T2V-1.3B')
 
 pipe = LightX2VPipeline(
     model_path=model_path,
     model_cls='wan2.1',
     task='t2v',
 )
-# 仓库自带的 NPU 专用配置（npu_flash_attn / 50 步 / cpu_offload 已预调好）
-pipe.config_json = root + '/LightX2V/configs/platforms/ascend_npu/wan_t2v.json'
-pipe.create_generator()
+pipe.create_generator(config_json='LightX2V/configs/platforms/ascend_npu/wan_t2v.json')
 
-seed = 42
 prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
 negative_prompt = "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 
 pipe.generate(
-    seed=seed,
+    seed=42,
     prompt=prompt,
     negative_prompt=negative_prompt,
-    save_result_path=save_result_path,
+    save_result_path='save_results/output_lightx2v_wan_t2v.mp4',
 )
+print('saved: save_results/output_lightx2v_wan_t2v.mp4')
 PY
 ```
 
-### 输出校验
+输出结果如下：
 
-```shell #test id="lightx2v-i2v-output"
+```shell #test-result id="lightx2v-wan-t2v" fuzzy='...'
+...saved: save_results/output_lightx2v_wan_t2v.mp4
+```
+
+**校验输出。** 检查 MP4 文件头 `ftyp`、封装索引 `moov` 与文件大小下限，防止空视频和写到一半的坏文件：
+
+```shell #test id="lightx2v-output"
 python - <<'PY'
-import os, re, subprocess
-root = os.getcwd()
-out = os.path.join(root, 'save_results', 'output_lightx2v_wan_t2v.mp4')
-size = os.path.getsize(out)
+p = 'save_results/output_lightx2v_wan_t2v.mp4'
+data = open(p, 'rb').read()
+size = len(data)
 assert size > 100_000, f'output too small: {size} bytes'
-with open(out, 'rb') as fh:
-    magic = fh.read(12)
-assert magic[4:8] == b'ftyp', f'not an mp4: {magic!r}'
+assert data[4:8] == b'ftyp', 'not an mp4'
+assert b'moov' in data, 'truncated mp4: no moov box'
 print('size:', size)
-print('ftyp_brand:', magic[8:12].decode('ascii', 'ignore'))
-try:
-    import imageio_ffmpeg
-    err = subprocess.run(
-        [imageio_ffmpeg.get_ffmpeg_exe(), '-i', out, '-f', 'null', '-'],
-        capture_output=True, text=True, timeout=300,
-    ).stderr
-    m = re.search(r'Video: (\w+)', err)
-    d = re.search(r'Duration: (\d+):(\d+):([\d.]+)', err)
-    fr = re.findall(r'frame=\s*(\d+)', err)
-    print('codec:', m.group(1) if m else 'unknown')
-    print('duration_s:',
-          round(int(d.group(1)) * 3600 + int(d.group(2)) * 60 + float(d.group(3)), 2) if d else 'unknown')
-    print('frames:', fr[-1] if fr else 'unknown')
-except Exception as exc:
-    print('codec: probe-skip', type(exc).__name__)
-    print('duration_s: probe-skip')
-    print('frames: probe-skip')
 PY
 ```
 
-```shell #test-result id="lightx2v-i2v-output" fuzzy='xxx'
+输出结果如下：
+
+```shell #test-result id="lightx2v-output" fuzzy='xxx'
 size: xxx
-ftyp_brand: xxx
-codec: xxx
-duration_s: xxx
-frames: xxx
 ```
 
-> **注意**：如新开终端执行推理，先 `source ~/Ascend/ascend-toolkit/set_env.sh`。
+> **注意**：如新开终端执行生成，先 `source ~/Ascend/ascend-toolkit/set_env.sh`。多卡并行、量化、服务化部署等更多用法见 [LightX2V examples](https://github.com/ModelTC/LightX2V/tree/main/examples)。
