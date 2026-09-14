@@ -7,7 +7,7 @@
 # I/O, state relay and publishing all live in the engine. See the
 # engine's `workflow_call.inputs` block for the full input contract.
 #
-# Cache keys (monitor-state-xdit-*) and artifact names are derived
+# Cache keys (quick-start-monitor-state-xdit_*) and artifact names are derived
 # from project=xdit, not from the workflow name.
 #
 # Container options:
@@ -52,7 +52,7 @@ jobs:
   xdit-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-xdit-*), artifacts
+      # Namespaces cache keys (quick-start-monitor-state-xdit_*), artifacts
       # (xdit-quick-start-<run_id>) and the test working dir
       # (workflows/projects/xdit).
       project: xdit

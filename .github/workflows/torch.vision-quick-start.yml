@@ -7,7 +7,7 @@
 # I/O, state relay and publishing all live in the engine. See the
 # engine's `workflow_call.inputs` block for the full input contract.
 #
-# Cache keys (monitor-state-torch.vision-*) and artifact names
+# Cache keys (quick-start-monitor-state-torch.vision_*) and artifact names
 # are derived from project=torch.vision, not from the workflow name.
 # The dot in the project name is allowed by both GitHub cache keys
 # (treated as a literal character) and artifact names (alphanumeric
@@ -100,7 +100,7 @@ jobs:
   torch-vision-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-torch.vision-*),
+      # Namespaces cache keys (quick-start-monitor-state-torch.vision_*),
       # artifacts (torch.vision-quick-start-<run_id>) and the test
       # working dir (workflows/projects/torch.vision).
       project: torch.vision

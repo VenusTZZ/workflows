@@ -1,0 +1,333 @@
+# Examples guard engine - the common, reusable part of the examples
+# guarding pipeline.
+
+name: examples-template
+
+on:
+  workflow_call:
+    inputs:
+      project:
+        description: Project directory under projects/; namespaces cache keys, artifact names and scheduling paths
+        type: string
+        required: true
+      upstream_repo:
+        description: Upstream repo (owner/name) polled for releases; fallback target when dispatch inputs are empty
+        type: string
+        required: true
+      target_repo:
+        description: Dispatch-only override of the repository under test
+        type: string
+        default: ''
+      target_ref:
+        description: Dispatch-only override of the ref under test (defaults to main)
+        type: string
+        default: ''
+      max_parallel:
+        description: Max parallel run-example matrix legs
+        type: number
+        default: 4
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    outputs:
+      need_to_run: ${{ steps.decide.outputs.need_to_run }}
+      trigger: ${{ steps.decide.outputs.trigger }}
+      target_repo: ${{ steps.decide.outputs.target_repo }}
+      target_ref: ${{ steps.decide.outputs.target_ref }}
+    env:
+      UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+    steps:
+      - name: Restore monitor state
+        id: cache-restore
+        if: github.event_name == 'schedule'
+        uses: actions/cache/restore@v4
+        with:
+          path: .monitor-state
+          # Per-run key always misses; restore-keys picks the latest
+          # save (ownership verified by the next step).
+          key: examples-monitor-state-${{ inputs.project }}_${{ github.run_id }}
+          restore-keys: |
+            examples-monitor-state-${{ inputs.project }}_
+
+      - name: Verify matched cache key
+        if: github.event_name == 'schedule'
+        env:
+          PROJECT: ${{ inputs.project }}
+          MATCHED_KEY: ${{ steps.cache-restore.outputs.cache-matched-key }}
+        run: |
+          set -euo pipefail
+          if [ -n "$MATCHED_KEY" ] \
+            && ! printf '%s' "$MATCHED_KEY" | grep -Eq "^examples-monitor-state-${PROJECT}_[0-9]+$"; then
+            echo "::warning::monitor-state cache cross-talk: matched key '$MATCHED_KEY' is not owned by project '$PROJECT' - discarding cache (cold start)"
+            rm -rf .monitor-state
+          else
+            echo "matched cache key ok: ${MATCHED_KEY:-cold start}"
+          fi
+
+      - name: Monitor upstream latest release
+        id: monitor-release
+        if: github.event_name == 'schedule'
+        run: |
+          set -euo pipefail
+          RESP_FILE=$(mktemp)
+          HTTP_CODE=$(curl -sSL --retry 3 -o "$RESP_FILE" -w '%{http_code}' \
+            "https://api.github.com/repos/$UPSTREAM_REPO/releases/latest" || true)
+          TAG=""
+          if [ "$HTTP_CODE" = "200" ]; then
+            TAG=$(jq -r '.tag_name // empty' "$RESP_FILE")
+          fi
+          rm -f "$RESP_FILE"
+          if [ "$HTTP_CODE" = "404" ]; then
+            echo "no release published for $UPSTREAM_REPO - nothing to guard"
+            {
+              echo "## examples guard: $UPSTREAM_REPO"
+              echo "No release published - nothing to guard, no result."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "need_to_run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$TAG" ]; then
+            echo "release signal unknown (HTTP $HTTP_CODE) - not triggering, state untouched"
+            echo "need_to_run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          last_release_tag=""
+          release_outcome=""
+          if [ -f .monitor-state/.monitor ]; then
+            . .monitor-state/.monitor
+          fi
+          if [ "$last_release_tag" != "$TAG" ]; then
+            {
+              echo "need_to_run=true"
+              echo "ref=$TAG"
+              echo "reason=release"
+            } >> "$GITHUB_OUTPUT"
+            echo "release signal FIRED: ${last_release_tag:-<none>} -> $TAG"
+          elif [ "$release_outcome" = "failure" ]; then
+            {
+              echo "need_to_run=true"
+              echo "ref=$TAG"
+              echo "reason=release-retry"
+            } >> "$GITHUB_OUTPUT"
+            echo "release signal RETRY (previous outcome failure, tag $TAG unchanged)"
+          else
+            echo "need_to_run=false" >> "$GITHUB_OUTPUT"
+            echo "release tag unchanged ($TAG), previous outcome: ${release_outcome:-none}"
+          fi
+
+      # Schedule picks the ref from the release signal; manual runs
+      # always proceed with the given inputs (default upstream main).
+      - name: Decide target
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_REPO: ${{ inputs.target_repo }}
+          INPUT_REF: ${{ inputs.target_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            {
+              echo "need_to_run=true"
+              echo "trigger=workflow_dispatch"
+              echo "target_repo=${INPUT_REPO:-$UPSTREAM_REPO}"
+              echo "target_ref=${INPUT_REF:-main}"
+            } >> "$GITHUB_OUTPUT"
+            echo "resolved repo=${INPUT_REPO:-$UPSTREAM_REPO} ref=${INPUT_REF:-main} (manual)"
+            exit 0
+          fi
+          NEED="false"
+          REASON=""
+          REF=""
+          if [ "${{ steps.monitor-release.outputs.need_to_run }}" = "true" ]; then
+            NEED="true"
+            REASON="${{ steps.monitor-release.outputs.reason }}"
+            REF="${{ steps.monitor-release.outputs.ref }}"
+          fi
+          {
+            echo "need_to_run=$NEED"
+            echo "trigger=schedule"
+            echo "target_repo=$UPSTREAM_REPO"
+            echo "target_ref=$REF"
+          } >> "$GITHUB_OUTPUT"
+          if [ "$NEED" = "true" ]; then
+            echo "resolved repo=$UPSTREAM_REPO ref=$REF reason=$REASON"
+          else
+            echo "No release change - skipping manifest check and examples"
+          fi
+
+  manifest-check:
+    needs: monitor
+    if: needs.monitor.outputs.need_to_run == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      supported_matrix: ${{ steps.check.outputs.supported_matrix }}
+      has_supported: ${{ steps.check.outputs.has_supported }}
+    steps:
+      - name: Checkout workflows
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+
+      - name: Checkout target
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.monitor.outputs.target_repo }}
+          ref: ${{ needs.monitor.outputs.target_ref }}
+          path: target
+
+      - name: Check supported entries and derive matrix
+        id: check
+        run: |
+          set -euo pipefail
+          python3 -m pip install -q pyyaml
+          python3 workflows/scripts/check_supported_entries.py \
+            --target-root target \
+            --manifest "workflows/projects/${{ inputs.project }}/examples_manifest.yaml"
+
+  run-example:
+    name: run-example (${{ matrix.example.path }})
+    needs: [monitor, manifest-check]
+    if: needs.manifest-check.outputs.has_supported == 'true'
+    runs-on: ${{ matrix.example.runner }}
+    timeout-minutes: ${{ matrix.example.timeout_minutes }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ inputs.max_parallel }}
+      matrix:
+        example: ${{ fromJSON(needs.manifest-check.outputs.supported_matrix) }}
+    env:
+      PROJECT_ROOT: ${{ github.workspace }}/workflows/projects/${{ inputs.project }}
+      TARGET_ROOT: ${{ github.workspace }}/target
+      FIXTURE_DIR: ${{ github.workspace }}/workflows/projects/${{ inputs.project }}/fixtures
+      HF_ENDPOINT: https://hf-mirror.com
+      PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
+      PIP_TIMEOUT: "120"
+    container:
+      image: ${{ matrix.example.image }}
+      # TODO: confirm from the first green run's log (df -h /dev/shm in
+      # the Run example step) whether this option is honored at all,
+      # and whether the example needs it. Drop it if dead weight.
+      options: --shm-size=64g
+    steps:
+      - name: Checkout workflows
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+
+      - name: Checkout target
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.monitor.outputs.target_repo }}
+          ref: ${{ needs.monitor.outputs.target_ref }}
+          path: target
+
+      - name: Setup example environment
+        env:
+          PROFILE: ${{ matrix.example.profile }}
+        run: bash "$PROJECT_ROOT/scripts/setup_example.sh" "$PROFILE"
+
+      - name: Run example
+        env:
+          EXAMPLE_PATH: ${{ matrix.example.path }}
+          EXEC: ${{ matrix.example.exec }}
+          OVERLAY_ARGS: ${{ toJSON(matrix.example.overlay_args) }}
+        run: |
+          df -h /dev/shm
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          CI_OUTPUT_DIR="$GITHUB_WORKSPACE/output" \
+            bash "$PROJECT_ROOT/scripts/run_example.sh" "$EXAMPLE_PATH" \
+            2>&1 | tee "$GITHUB_WORKSPACE/output/train.log"
+
+  validate-results:
+    name: publish-result (${{ matrix.example.path }})
+    needs: [monitor, manifest-check, run-example]
+    if: always() && needs.manifest-check.outputs.has_supported == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        example: ${{ fromJSON(needs.manifest-check.outputs.supported_matrix) }}
+    steps:
+      - name: Checkout workflows
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+
+      - name: Write result JSON
+        env:
+          TARGET_REPO: ${{ needs.monitor.outputs.target_repo }}
+          TARGET_REF: ${{ needs.monitor.outputs.target_ref }}
+          TRIGGER: ${{ needs.monitor.outputs.trigger }}
+          EXAMPLE_PATH: ${{ matrix.example.path }}
+          IMAGE: ${{ matrix.example.image }}
+          EXPECTED_JOB_NAME: run-example (${{ matrix.example.path }})
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 workflows/scripts/write_example_result.py \
+            --output "$GITHUB_WORKSPACE/output/result.json"
+
+      - name: Validate result.json
+        run: |
+          set -euo pipefail
+          python3 -m pip install -q check-jsonschema
+          check-jsonschema --schemafile workflows/schemas/result.schema.json \
+            output/result.json
+
+      # Artifact upload runs on GitHub-hosted infrastructure. The self-hosted
+      # NPU runner only executes the example and reports its normal job status.
+      - name: Upload result JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.project }}-examples-${{ github.run_id }}-${{ strategy.job-index }}
+          if-no-files-found: error
+          path: output/result.json
+
+  save-monitor-state:
+    needs: [monitor, manifest-check, run-example]
+    if: |
+      always() &&
+      github.event_name == 'schedule' &&
+      needs.monitor.outputs.need_to_run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Save monitor state
+        env:
+          TARGET_REF: ${{ needs.monitor.outputs.target_ref }}
+          RUN_RESULT: ${{ needs.run-example.result }}
+          MANIFEST_RESULT: ${{ needs.manifest-check.result }}
+          HAS_SUPPORTED: ${{ needs.manifest-check.outputs.has_supported }}
+        run: |
+          set -euo pipefail
+          mkdir -p .monitor-state
+          TAG="${TARGET_REF:?TARGET_REF is required}"
+          # A skipped run-example is fine when the manifest has no
+          # supported entry; any other non-success must retry.
+          if [ "$RUN_RESULT" = "success" ]; then
+            OUT="success"
+          elif [ "$RUN_RESULT" = "skipped" ] && [ "$MANIFEST_RESULT" = "success" ] \
+            && [ "$HAS_SUPPORTED" = "false" ]; then
+            OUT="success"
+          else
+            OUT="failure"
+          fi
+          {
+            echo "last_release_tag='$TAG'"
+            echo "release_outcome='$OUT'"
+          } > .monitor-state/.monitor
+          echo "recorded outcome: $OUT, tag $TAG"
+
+      - name: Persist monitor state to cache
+        uses: actions/cache/save@v4
+        with:
+          path: .monitor-state
+          key: examples-monitor-state-${{ inputs.project }}_${{ github.run_id }}

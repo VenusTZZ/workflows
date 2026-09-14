@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Validate the supported section of an examples manifest.
+
+The examples guard engine's manifest-check step: every supported entry
+must exist on the target checkout and carry valid scheduling params
+(path / profile / runner / image / timeout_minutes; optional
+overlay_args as a list of CLI strings and exec). Writes
+supported_matrix (the JSON array the run-example matrix expands from)
+and has_supported to GITHUB_OUTPUT when set.
+
+Deliberately does NOT scan the target tree or compute new/stale diffs:
+discovering unclassified new upstream examples is a separate
+workflow's concern - this check only validates what the engine
+schedules. Exit 1 after listing every problem found.
+
+Requires PyYAML (preinstalled on ubuntu-latest runners).
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+import yaml
+
+REQUIRED_FIELDS = ('path', 'profile', 'runner', 'image', 'timeout_minutes')
+
+
+def validate(supported: list[dict], target_root: Path
+             ) -> tuple[list[dict], list[str]]:
+    """Return (valid matrix entries, error messages) for the manifest."""
+    entries: list[dict] = []
+    errors: list[str] = []
+    for item in supported:
+        path = item.get('path', '<missing path>')
+        if not (target_root / path).exists():
+            errors.append(
+                f'supported example missing from target tree: {path}')
+            continue
+        missing = [field for field in REQUIRED_FIELDS if not item.get(field)]
+        if missing:
+            errors.append(f'{path}: missing required field(s): {missing}')
+            continue
+        overlay_args = item.get('overlay_args')
+        if overlay_args is None:
+            overlay_args = []
+        elif not isinstance(overlay_args, list) or not all(
+                isinstance(arg, str) and arg.strip() for arg in overlay_args):
+            errors.append(
+                f'{path}: overlay_args must be a list of non-empty strings')
+            continue
+        exec_path = item.get('exec')
+        if exec_path is not None and (
+                not isinstance(exec_path, str) or not exec_path.strip()):
+            errors.append(f'{path}: exec must be a non-empty string')
+            continue
+        entry = dict(item)
+        entry['overlay_args'] = overlay_args
+        if exec_path is not None:
+            entry['exec'] = exec_path.strip()
+        entries.append(entry)
+    return entries, errors
+
+
+def write_github_output(entries: list[dict]) -> None:
+    output_path = os.environ.get('GITHUB_OUTPUT')
+    if not output_path:
+        return
+    with open(output_path, 'a', encoding='utf-8') as handle:
+        handle.write('supported_matrix<<EOF\n')
+        handle.write(json.dumps(entries, ensure_ascii=False))
+        handle.write('\nEOF\n')
+        handle.write(
+            'has_supported={}\n'.format('true' if entries else 'false'))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        '--target-root', required=True,
+        help='Checkout of the target project tree')
+    parser.add_argument(
+        '--manifest', required=True,
+        help='Path to projects/<project>/examples_manifest.yaml')
+    args = parser.parse_args()
+    manifest = yaml.safe_load(
+        Path(args.manifest).read_text(encoding='utf-8')) or {}
+    supported = manifest.get('supported') or []
+    entries, errors = validate(supported, Path(args.target_root))
+    write_github_output(entries)
+    if errors:
+        for message in errors:
+            print(message, file=sys.stderr)
+        print('fix the supported section of the manifest before this '
+              'pipeline can schedule examples', file=sys.stderr)
+        raise SystemExit(1)
+    print(f'manifest ok: {len(entries)} supported entry(ies)')
+
+
+if __name__ == '__main__':
+    main()

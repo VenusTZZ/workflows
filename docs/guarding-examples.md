@@ -86,7 +86,7 @@
 3. 看护失败会重试：run 结束后 `record-outcome` job 把本次成败回写进 monitor 状态；上次失败的信号即使没有新变化，下个周期也会以 `<信号>-retry` 为由再跑一次，直到成功。
 4. `workflow_dispatch` 手动触发不经过 monitor 门（changed 恒为 true），`target_repo` / `target_ref` 从输入取，默认上游仓库的 main。
 
-monitor 状态存在 `.monitor-state/` 目录，用 actions/cache 持久化（条目约 7 天未访问会被清除，monitor 每周期的 restore 会保活；状态丢失只会让下次 run 多跑一轮，无害）。注意：同一项目各流水线的 cache key 前缀必须互不为对方的前缀（examples 用 `<project>-examples-monitor-state-`，quick-start 用 `monitor-state-<project>-`），因为 restore-keys 按前缀匹配，前缀重叠会串状态。
+monitor 状态存在 `.monitor-state/` 目录，用 actions/cache 持久化（条目约 7 天未访问会被清除，monitor 每周期的 restore 会保活；状态丢失只会让下次 run 多跑一轮，无害）。注意：同一项目各流水线的 cache key 前缀必须互不为对方的前缀，因为 restore-keys 按前缀匹配，前缀重叠会串状态。当前约定：legacy examples workflow 用 `<project>-examples-monitor-state-`；引擎化的流水线用严格格式 `<引擎>-monitor-state-<project>_<run_id>`（examples 引擎前缀 `examples-monitor-state-`，quick-start 引擎前缀 `quick-start-monitor-state-`）——`_` 作项目名终止分隔符、项目名禁 `_`，构造性无跨项目碰撞，restore 后另有 matched-key 断言与 `.project` 属主标签校验，校验失败按无缓存处理（告警 + 冷启动，不判红）。
 
 ### 要求 3
 

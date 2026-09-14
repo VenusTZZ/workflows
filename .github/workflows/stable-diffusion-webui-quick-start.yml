@@ -9,7 +9,7 @@
 #
 # Engine-fixed behaviours this trigger relies on (declared in the
 # engine, NOT here):
-#   * cache key prefix: monitor-state-stable-diffusion-webui-  (from inputs.project)
+#   * cache key prefix: quick-start-monitor-state-stable-diffusion-webui_  (from inputs.project)
 #   * artifact name:    stable-diffusion-webui-quick-start-<run_id>
 #   * result.json is written by the engine and validated against
 #     schemas/result.schema.json before upload.
@@ -57,7 +57,7 @@ jobs:
   stable-diffusion-webui-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-stable-diffusion-webui-*),
+      # Namespaces cache keys (quick-start-monitor-state-stable-diffusion-webui_*),
       # artifacts (stable-diffusion-webui-quick-start-<run_id>) and the
       # test working dir (workflows/projects/stable-diffusion-webui).
       project: stable-diffusion-webui
@@ -85,7 +85,7 @@ jobs:
       timeout_minutes: 180
       upstream_repo: AUTOMATIC1111/stable-diffusion-webui
       # Raw URL the engine's monitor hashes and the test fetches;
-      # doc-hash state lives under the monitor-state-stable-diffusion-webui-
+      # doc-hash state lives under the quick-start-monitor-state-stable-diffusion-webui-
       # cache prefix.
       doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/stable-diffusion-webui/docs/Quick-start-Ascend.md
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/stable-diffusion-webui/docs/Quick-start-Ascend.md

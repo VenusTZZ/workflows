@@ -7,7 +7,7 @@
 # I/O, state relay and publishing all live in the engine. See the
 # engine's `workflow_call.inputs` block for the full input contract.
 #
-# Cache keys (monitor-state-accelerate-*) and artifact names
+# Cache keys (quick-start-monitor-state-accelerate_*) and artifact names
 # are derived from project=accelerate, not from the workflow name.
 
 name: accelerate-quick-start
@@ -40,7 +40,7 @@ jobs:
   accelerate-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-accelerate-*), artifacts
+      # Namespaces cache keys (quick-start-monitor-state-accelerate_*), artifacts
       # (accelerate-quick-start-<run_id>) and the test working dir
       # (workflows/projects/accelerate).
       project: accelerate

@@ -9,7 +9,7 @@
 #
 # Engine-fixed behaviours this trigger relies on (declared in the
 # engine, NOT here):
-#   * cache key prefix: monitor-state-fastchat-  (from inputs.project)
+#   * cache key prefix: quick-start-monitor-state-fastchat_  (from inputs.project)
 #   * artifact name:    fastchat-quick-start-<run_id>
 #   * result.json is written by the engine and validated against
 #     schemas/result.schema.json before upload.
@@ -57,7 +57,7 @@ jobs:
   fastchat-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-fastchat-*), artifacts
+      # Namespaces cache keys (quick-start-monitor-state-fastchat_*), artifacts
       # (fastchat-quick-start-<run_id>) and the test working dir
       # (workflows/projects/fastchat).
       project: fastchat
@@ -73,7 +73,7 @@ jobs:
       timeout_minutes: 120
       upstream_repo: lm-sys/FastChat
       # Raw URL the engine's monitor hashes and the test fetches;
-      # doc-hash state lives under the monitor-state-fastchat- cache
+      # doc-hash state lives under the quick-start-monitor-state-fastchat_ cache
       # prefix.
       doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/fastchat/docs/Quick-start-Ascend.md
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/fastchat/docs/Quick-start-Ascend.md
