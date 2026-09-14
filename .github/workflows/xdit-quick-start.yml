@@ -9,7 +9,7 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # schedule temporarily disabled until first green run after the 2-card addition
+  # schedule 已具备绿灯基线，可按节奏恢复
   # schedule:
   #   - cron: '0 */6 * * *'
   workflow_dispatch:
@@ -26,10 +26,8 @@ jobs:
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
       container_options: >-
         --volume=/data/ci-cache/modelscope/xdit:/root/.cache/modelscope:z
-      # Doc body: install torch stack (2.9.0 + torch_npu 2.9.0.post2 + triton 3.5.*) +
-      # xfuser PyPI -> verify npu hccl -> single-card SD3 smoke (256x256, 1 step) ->
-      # PNG check -> 2-card Ulysses parallel smoke. 90 min covers cold install + SD3
-      # cold-cache download (~28 GB) + T5 load + single/dual-card inference.
+      # Doc body: torch stack install -> xfuser PyPI -> NPU verify -> single-card SD3
+      # -> PNG check -> 2-card Ulysses SDPA. 90 min covers cold download (~28 GB).
       timeout_minutes: 90
       upstream_repo: xdit-project/xDiT
       # Contents API URL with ref pin; same pattern as other projects.
