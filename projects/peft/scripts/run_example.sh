@@ -118,17 +118,20 @@ PY
 
 ensure_passthrough "$LAUNCH_PATH"
 
-# peft's sft example calls load_dataset(path) with a local .jsonl
-# fixture and reads BOTH "train" and "test" splits (splits="train,test");
-# datasets 3.x cannot infer a builder from a single file path. This
-# sitecustomize.py patches datasets.load_dataset at interpreter
-# startup: local data files are rewritten to
-# load_dataset("<builder>", data_files={"train": path, "test": path}),
-# everything else passes through untouched.
-prepare_dataset_shim() {
+# One sitecustomize.py, two patches, injected at interpreter startup:
+# 1. CUDA->NPU: most peft examples hardcode device="cuda";
+#    torch_npu's transfer_to_npu maps torch.cuda onto npu.
+# 2. Dataset: the sft example calls load_dataset(path) with a local
+#    .jsonl fixture and reads BOTH "train" and "test" splits
+#    (splits="train,test"); datasets 3.x cannot infer a builder from a
+#    single file path - rewrite local data files to
+#    load_dataset("<builder>", data_files={"train": path, "test": path}).
+prepare_shims() {
   local shim_dir="$GITHUB_WORKSPACE/ci_patch"
   mkdir -p "$shim_dir"
   cat > "$shim_dir/sitecustomize.py" <<'PY'
+from torch_npu.contrib import transfer_to_npu  # noqa: F401  (cuda->npu)
+
 import os
 
 import datasets as _datasets
@@ -169,7 +172,7 @@ PY
   export PYTHONPATH="$shim_dir:${PYTHONPATH:-}"
 }
 
-prepare_dataset_shim
+prepare_shims
 
 # run_peft.sh invokes `python train.py` with a path relative to its own
 # directory, so shell examples run with cwd = the example's directory;
