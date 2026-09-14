@@ -14,12 +14,8 @@ on:
         description: Upstream repo (owner/name) polled for releases; fallback target when dispatch inputs are empty
         type: string
         required: true
-      target_repo:
-        description: Dispatch-only override of the repository under test
-        type: string
-        default: ''
       target_ref:
-        description: Dispatch-only override of the ref under test (defaults to main)
+        description: Dispatch-only ref under test (defaults to main)
         type: string
         default: ''
       max_parallel:
@@ -37,7 +33,6 @@ jobs:
     outputs:
       need_to_run: ${{ steps.decide.outputs.need_to_run }}
       trigger: ${{ steps.decide.outputs.trigger }}
-      target_repo: ${{ steps.decide.outputs.target_repo }}
       target_ref: ${{ steps.decide.outputs.target_ref }}
     env:
       UPSTREAM_REPO: ${{ inputs.upstream_repo }}
@@ -126,7 +121,6 @@ jobs:
         id: decide
         env:
           EVENT_NAME: ${{ github.event_name }}
-          INPUT_REPO: ${{ inputs.target_repo }}
           INPUT_REF: ${{ inputs.target_ref }}
         run: |
           set -euo pipefail
@@ -134,10 +128,9 @@ jobs:
             {
               echo "need_to_run=true"
               echo "trigger=workflow_dispatch"
-              echo "target_repo=${INPUT_REPO:-$UPSTREAM_REPO}"
               echo "target_ref=${INPUT_REF:-main}"
             } >> "$GITHUB_OUTPUT"
-            echo "resolved repo=${INPUT_REPO:-$UPSTREAM_REPO} ref=${INPUT_REF:-main} (manual)"
+            echo "resolved repo=$UPSTREAM_REPO ref=${INPUT_REF:-main} (manual)"
             exit 0
           fi
           NEED="false"
@@ -151,7 +144,6 @@ jobs:
           {
             echo "need_to_run=$NEED"
             echo "trigger=schedule"
-            echo "target_repo=$UPSTREAM_REPO"
             echo "target_ref=$REF"
           } >> "$GITHUB_OUTPUT"
           if [ "$NEED" = "true" ]; then
@@ -176,7 +168,7 @@ jobs:
       - name: Checkout target
         uses: actions/checkout@v4
         with:
-          repository: ${{ needs.monitor.outputs.target_repo }}
+          repository: ${{ inputs.upstream_repo }}
           ref: ${{ needs.monitor.outputs.target_ref }}
           path: target
 
@@ -221,7 +213,7 @@ jobs:
       - name: Checkout target
         uses: actions/checkout@v4
         with:
-          repository: ${{ needs.monitor.outputs.target_repo }}
+          repository: ${{ inputs.upstream_repo }}
           ref: ${{ needs.monitor.outputs.target_ref }}
           path: target
 
@@ -259,7 +251,7 @@ jobs:
 
       - name: Write result JSON
         env:
-          TARGET_REPO: ${{ needs.monitor.outputs.target_repo }}
+          TARGET_REPO: ${{ inputs.upstream_repo }}
           TARGET_REF: ${{ needs.monitor.outputs.target_ref }}
           TRIGGER: ${{ needs.monitor.outputs.trigger }}
           EXAMPLE_PATH: ${{ matrix.example.path }}

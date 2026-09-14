@@ -114,7 +114,7 @@ flowchart TD
 
 只保留 release 一个触发信号，无 fallback 链：
 
-1. **被测对象由 release 决定**：example 的行为 = example 脚本 × 它依赖的软件版本。脚本与依赖同时定版的公开时点就是发版——release tag 是「这次该测什么版本」的完整答案。main 上的中间态（无论改 src 还是改 examples）不是稳定被测对象，需要验证时用 `workflow_dispatch` 指定 ref 手动跑。
+1. **被测对象由 release 决定**：example 的行为 = example 脚本 × 它依赖的软件版本。脚本与依赖同时定版的公开时点就是发版——release tag 是「这次该测什么版本」的完整答案。main 上的中间态（无论改 src 还是改 examples）不是稳定被测对象，需要验证时用 `workflow_dispatch` 指定 ref 手动跑（仓库恒为 `upstream_repo`，界面上不提供仓库选择）。
 2. **NPU 占用最小化**：release 频率天然有限（peft 约每 1~2 月一版），schedule 轮询几乎永远只花免费 ubuntu-latest 上的几秒钟；三信号时代的 main HEAD 高频触发问题从机制上消失，schedule 可以常开。
 3. **无 release 的语义是「如实显示」，不是「想办法触发」**：`/releases/latest` 404 或解析不到 tag 时，monitor 在日志与 step summary 写明 no release，`need_to_run=false`，本次 run 在 monitor 后结束——不产生 result.json、不占 NPU。quick start 引擎的 fallback 链（prerelease → tags → HEAD）**不移植**：那条链存在是因为 quick start 必须解析出一个可测 ref；examples 看护面对「上游从未发版」时没有东西可测，如实报告即可，把版本信号退化成 commit 监控只会把删掉的高频触发从后门加回来。
 
@@ -194,9 +194,8 @@ peft 侧新增（引擎零改动）：
 | input | 类型 | 默认 | 说明 |
 |-------|------|------|------|
 | `project` | string | 必填 | `projects/` 下的项目目录名。派生：清单路径、cache key `examples-monitor-state-<project>_*`、artifact 名前缀 |
-| `upstream_repo` | string | 必填 | `owner/name`。monitor 轮询对象、dispatch 未覆盖时的默认目标仓 |
-| `target_repo` | string | `''` | dispatch 专用：覆盖被测仓库（schedule 时为空） |
-| `target_ref` | string | `''` | dispatch 专用：覆盖被测 ref（空则 `main`） |
+| `upstream_repo` | string | 必填 | `owner/name`。monitor 轮询对象、checkout 的目标仓（唯一来源，dispatch 不提供仓库选择） |
+| `target_ref` | string | `''` | dispatch 专用：被测 ref（空则 `main`）；schedule 时恒由 monitor 的 release tag 决定 |
 | `max_parallel` | number | `4` | run-example 矩阵并行上限 |
 
 容器零挂载：该 CI 的 runner 无法提供 host 路径挂载（`/data/ci-cache`、Ascend driver 等），自托管 runner 的容器默认可见 NPU 设备（与 quick-start 引擎同一假设）。卡数由 runner 标签钉死（`linux-aarch64-a2-N` 即 N 卡，选对 runner 即选对卡），本设计无任何卡配置字段——schema 已删除 `npu_devices`，peft 清单不含它。legacy 清单里的 `npu_devices` 是旧设计遗留，共享脚本检测到时仍为其派生设备挂载（兼容，不属于本设计）。容器零 options：首轮 run 实测 `/dev/shm` 为 16G（runner 自带，非 docker 默认 64MB），`--shm-size=64g` 未被应用且该负载 shm 用量为 0——已删。Run example 步骤保留一行 `df -h /dev/shm` 诊断。模型缓存无需挂载：ModelScope 走容器内默认缓存目录（`~/.cache/modelscope`），容器销毁即丢，但 release 触发频率低，重下载可接受。镜像、runner、超时逐条目来自矩阵——引擎 YAML 不出现任何调度参数。
@@ -228,14 +227,9 @@ on:
   #   - cron: '30 */6 * * *'
   workflow_dispatch:
     inputs:
-      target_repo:
-        description: Target repository to checkout and run
-        required: true
-        default: huggingface/peft
-        type: string
       target_ref:
-        description: Branch, tag, or SHA in the target repository
-        required: true
+        description: Branch, tag, or SHA to test
+        required: false
         default: main
         type: string
 
@@ -251,9 +245,6 @@ jobs:
     with:
       project: peft
       upstream_repo: huggingface/peft
-      # '' on schedule (dispatch inputs unset) — engine falls back to
-      # upstream_repo / monitor-decided ref.
-      target_repo: ${{ inputs.target_repo }}
       target_ref: ${{ inputs.target_ref }}
       max_parallel: 4
 ```
@@ -307,7 +298,7 @@ unsupported:
 
 ### 4.1 引擎对外接口（workflow_call）
 
-见 §3.1 输入表。接口语义总结：**接入一个新项目的全部工作 = 薄触发器声明这 5 个输入 + 提供一份清单和两个脚本**；引擎负责其余一切。
+见 §3.1 输入表。接口语义总结：**接入一个新项目的全部工作 = 薄触发器声明这 4 个输入 + 提供一份清单和两个脚本**；引擎负责其余一切。
 
 ### 4.2 上游轮询接口（monitor job，GitHub REST API）
 
@@ -323,7 +314,7 @@ GET /repos/<upstream_repo>/releases/latest    → release 信号（tag_name）
 
 ### 4.4 内部接口（引擎 job 间）
 
-- **monitor → manifest-check / run-example / validate-results**：job outputs `need_to_run` / `trigger` / `target_repo` / `target_ref`（`need_to_run`：本周期是否需要执行——新 release、失败重试或手动触发；`reason` 仅存于 monitor 内部日志，不再是 job output）；下游 checkout 目标仓、result.json 记 `trigger` / `target_ref`。
+- **monitor → manifest-check / run-example / validate-results**：job outputs `need_to_run` / `trigger` / `target_ref`（`need_to_run`：本周期是否需要执行——新 release、失败重试或手动触发；`reason` 仅存于 monitor 内部日志，不再是 job output）；下游 checkout 目标仓、result.json 记 `trigger` / `target_ref`。
 - **manifest-check → run-example / validate-results**：job outputs `supported_matrix`（JSON 数组，条目含 `device_options` 派生值）/ `has_supported`；空矩阵时两个下游 job 整体跳过。
 - **run-example → validate-results**：不传数据，validate-results 调 `scripts/write_example_result.py`（Job API 按 `run-example (<path>)` job 名查 conclusion——**后缀匹配**：可复用 workflow 的 Jobs API 会给 job 名加 `<调用方名> / ` 前缀，如 `peft-examples / run-example (…)`；urllib 分页，无 gh/jq 依赖）——NPU runner 不写 artifact，发布统一在 GitHub 托管 runner 上完成。
 - **monitor + run-example + manifest-check → save-monitor-state**：被测 tag 取自 `needs.monitor.outputs.target_ref`，成败由 `needs.run-example.result`（矩阵聚合）+ `needs.manifest-check.result` + `has_supported` 映射为 `success` / `failure`；save-monitor-state 不 restore，直接重建单文件状态（tag + outcome）单次保存（§2.4.3）。
@@ -336,7 +327,7 @@ GET /repos/<upstream_repo>/releases/latest    → release 信号（tag_name）
 | 信号 | release（fallback 链至 /commits/HEAD）+ doc hash + retry | release（单一端点、无 fallback）+ retry；no-release 是一等公民终态 |
 | 状态拓扑 | restore → outputs 中继 → publish-and-persist 单次保存 | 同构：monitor 只 restore，save-monitor-state 由 outputs 重建状态单次保存（§2.4.3） |
 | result.json `path` | 被测文档 URL | 被测 example 路径（每条一份） |
-| dispatch | 无输入，直测最新 release | `target_repo` / `target_ref` 可指定任意 ref |
+| dispatch | 无输入，直测最新 release | 仅 `target_ref`（默认 main）；仓库恒为 upstream_repo |
 | 并发模型 | caller 持有（schedule 组 + manual 组） | 相同（本设计对齐） |
 | dispatch 写状态 | 否 | 否（相同） |
 | cache key | `quick-start-monitor-state-<project>_<run_id>`（同严格格式） | `examples-monitor-state-<project>_<run_id>`（同严格格式） |
@@ -378,3 +369,4 @@ GET /repos/<upstream_repo>/releases/latest    → release 信号（tag_name）
 | 2026-09-14 | 评审确定扫描模型简化为 files-only（§2.7）：scan 收敛为 root + include_extensions + exclude，废弃 unit: directories/mixed 及 marker/max_depth；对账单位统一为入口文件；exec 语义收窄为「path 是源码、启动的是构建产物」（py/sh 不需要——项目脚本按扩展名分发 bash/python）。实施为独立 PR，不混入本 PR。 | llama.cpp examples/ 下非 example 目录极少且可 exclude（android/swift 目录被扩展名白名单天然滤掉）；目录单元引入的 unit/marker/max_depth/mixed 复杂度不值。 |
 | 2026-09-14 | 修复 publish-result 首跑判红：write_example_result 的 job 名匹配从精确相等改为后缀匹配——可复用 workflow 的 Jobs API 给 job 名加 `<调用方 workflow 名> / ` 前缀（run 34818091939 实测 `peft-examples / run-example (…)`），独立 workflow 时代的精确匹配移植过来即失效；新增 job_matches 单测（精确/带前缀/嵌套前缀/不匹配）。 | 首跑 dispatch（run-example 全绿）暴露：脚本报 could not find completed job → result.json 未写 → upload 级联红。 |
 | 2026-09-14 | peft 清单应用 exclude：34 项非 example 配套物（utils 模块 / __init__ / test_* / 配置 yaml / sft/train.py 实现）从 unsupported 移入 scan.exclude（9 条目录+glob 规则），unsupported 收敛为 84 条真实 example；exclude 语义定为「目录路径（递归剪枝）或 glob」。 | unsupported 是"example 注册表"，配套物登记其中污染对账信号；exclude 是声明"这一类根本不是 example"。扫描工具支持随发现 workflow PR 落地（引擎不扫描，本变更对引擎零影响）。 |
+| 2026-09-14 | 移除 `target_repo` 输入（引擎与薄触发器）：上游仓库唯一来源是薄触发器里的 `upstream_repo`，dispatch 界面只留 `target_ref`（默认 main）；下游 checkout 与 result.json 的 target_repo 均直接取 `inputs.upstream_repo`。 | 评审决策：仓库不该在界面上选择——每项目的上游是固定配置；测 fork 的场景如出现，临时改薄触发器即可。 |
