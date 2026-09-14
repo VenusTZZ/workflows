@@ -8,7 +8,7 @@
 #
 # Engine-fixed behaviours this trigger relies on (declared in the
 # engine, NOT here):
-#   * cache key prefix: monitor-state-timm-  (from inputs.project)
+#   * cache key prefix: quick-start-monitor-state-timm_  (from inputs.project)
 #   * artifact name:    timm-quick-start-<run_id>
 #   * result.json is written by the engine and validated against
 #     schemas/result.schema.json before upload.
@@ -58,7 +58,7 @@ jobs:
   timm-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-timm-*), artifacts
+      # Namespaces cache keys (quick-start-monitor-state-timm_*), artifacts
       # (timm-quick-start-<run_id>) and the test working dir
       # (workflows/projects/timm).
       project: timm
@@ -78,7 +78,7 @@ jobs:
       timeout_minutes: 90
       upstream_repo: huggingface/pytorch-image-models
       # Raw URL the engine's monitor hashes and the test fetches;
-      # doc-hash state lives under the monitor-state-timm- cache prefix.
+      # doc-hash state lives under the quick-start-monitor-state-timm_ cache prefix.
       doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/timm/docs/Quick-start-Ascend.md
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/timm/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/timm; env contract (MONITORED_DOC_URL /

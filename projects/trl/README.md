@@ -54,6 +54,6 @@
 对照 TRL 需求逐项核查了共享引擎 [`.github/workflows/quick-start-template.yml`](../../.github/workflows/quick-start-template.yml) 的输入契约（`project` / `test_runner` / `image` / `container_options` / `timeout_minutes` / `upstream_repo` / `doc_url` / `doc_path` / `test_command`）与引擎固定行为（monitor 信号优先级、cluster pip/uv 镜像 env、cache I/O 在 ubuntu-latest 上的分工）：
 
 - TRL 的差异点（单卡 `linux-aarch64-a2-1`、CANN 9.1.0 镜像、davinci0 设备挂载 + ModelScope 缓存挂载、`huggingface/trl` 上游、本仓文档路径、`python -m unittest tests.test_quick_start_ascend -v 2>&1` 测试入口）**全部可通过现有 inputs 表达**；
-- cache key（`monitor-state-trl-`）、artifact 命名（`trl-quick-start-<run_id>`）与 result.json 校验由引擎按 `inputs.project` 自动派生，无需项目侧干预。
+- cache key（`quick-start-monitor-state-trl-`）、artifact 命名（`trl-quick-start-<run_id>`）与 result.json 校验由引擎按 `inputs.project` 自动派生，无需项目侧干预。
 
 **结论：未修改 `quick-start-template.yml`，共享引擎零改动，不影响现有调用方（peft 等）。**

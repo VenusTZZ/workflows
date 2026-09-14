@@ -8,7 +8,7 @@
 # engine's `workflow_call.inputs` block for the full input contract.
 #
 # This file follows the pattern of ms-swift-quick-start.yml.
-# Cache keys (monitor-state-xllm-*) and artifact names
+# Cache keys (quick-start-monitor-state-xllm_*) and artifact names
 # are derived from project=xllm.
 
 name: xllm-quick-start
@@ -39,7 +39,7 @@ jobs:
   xllm-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-xllm-*), artifacts
+      # Namespaces cache keys (quick-start-monitor-state-xllm_*), artifacts
       # (xllm-quick-start-<run_id>) and the test working dir
       # (workflows/projects/xllm).
       project: xllm
