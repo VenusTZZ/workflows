@@ -76,6 +76,12 @@ npu-smi info
 如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动
 ```
 
+加载 CANN 环境变量：
+
+```shell
+source ~/Ascend/ascend-toolkit/set_env.sh
+```
+
 检查 Python 版本：
 
 ```shell #test id="check-py"
@@ -95,7 +101,7 @@ pip install uv
 uv pip install "torch==2.9.0" "torch_npu==2.9.0.post2" "triton==3.5.*"
 ```
 
-检查 NPU 运行时可用（验证 torch + torch_npu 安装成功）：
+检查 NPU 运行时可用：
 
 ```shell #test id="check-npu-runtime"
 python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
@@ -150,7 +156,7 @@ npu dispatch: npu hccl True
 
 ### 单卡生成
 
-用 [SD3 medium](https://modelscope.cn/models/stabilityai/stable-diffusion-3-medium-diffusers) 生成一张图（约 28 GB，首次运行时自动下载到 ModelScope 默认缓存；单卡、1 步、256×256）：
+用 [SD3 medium](https://modelscope.cn/models/stabilityai/stable-diffusion-3-medium-diffusers) 在单卡上生成一张 256×256 的图。模型约 28 GB，首次运行时自动下载到 ModelScope 默认缓存：
 
 ```shell #test id="xdit-sd3-smoke"
 cat > sd3_npu.py <<'PY'
