@@ -37,7 +37,7 @@ jobs:
   speculators-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-speculators-*), artifacts
+      # Namespaces cache keys (quick-start-monitor-state-speculators_*), artifacts
       # (speculators-quick-start-<run_id>) and the test working dir
       # (workflows/projects/speculators).
       project: speculators
@@ -72,7 +72,7 @@ jobs:
       timeout_minutes: 180
       upstream_repo: vllm-project/speculators
       # speculators is a new project — no legacy workflow to migrate
-      # from. The monitor-state-speculators- cache prefix is owned by
+      # from. The quick-start-monitor-state-speculators_ cache prefix is owned by
       # this workflow alone (first-write wins; subsequent runs read).
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/speculators/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/speculators/docs/Quick-start-Ascend.md

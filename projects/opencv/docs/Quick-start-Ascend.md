@@ -308,9 +308,11 @@ PY
 
 预期：打印 `(h) patched`。
 
-### 4e. CANN 整图执行的宿主缓冲收窄（驱动 ≥ 25.5.x 堆损坏修复）
+### 4e. CANN 整图执行的宿主缓冲收窄（防御性加固）
 
-`CannNet::forward`（`op_cann.cpp`）做输入/输出 H2D/D2H 拷贝时，**把 ACL 报告的 dataset buffer 字节数（`aclmdlGetOutputSizeByIndex`，可能含对齐 padding）当作宿主 `Mat` 的容量上限**。宿主 buffer 是按 shape 推断分配的（如 1×1000×float32 = 4000 字节）；宿主机驱动 ≥ 25.5.x（配 CANN 9.1.0 镜像）时报告的输出 size 大于 shape 字节数，`aclrtMemcpy` 直接把宿主堆写穿 → `corrupted double-linked list` + SIGABRT（实测 910B1/910B4 × 驱动 25.5.2 必崩，驱动 25.3.rc1.2 正常——崩溃跟卡无关、跟驱动版本走）。两个方向都按宿主实际字节数收窄拷贝，并打一行日志暴露 `acl_size` 与 `host_size`。
+`CannNet::forward`（`op_cann.cpp`）做输入/输出 H2D/D2H 拷贝时，把 ACL 报告的 dataset buffer 字节数直接当作宿主 `Mat` 的容量上限使用（输出方向 `aclrtMemcpy` 的目的端 bound 是 `db_size` 而非宿主实际字节数）。实测（驱动 25.5.2 环境，4e 加的日志）`acl_size == host_size == 4000`、无 padding，**此路径并非崩溃根因**；但该写法在 ACL 报告 size 大于 shape 字节数时必然溢出，属结构性隐患，双向 clamp 收窄并打 `acl_size`/`host_size` 日志留证。
+
+> **堆损坏真因（gdb backtrace 实锤）**：宿主机驱动 25.5.2 × 镜像 CANN 9.1.0 **错配**的组合下，堆在运行期被写坏（HAL 层 `libascend_hal.so` 来自 25.5.2 驱动挂载，ACL/DVPP 用户态来自镜像 9.1.0），到进程 `exit()` 的 atexit 阶段 `libacl_dvpp_mpi.so` 的 `DvppWrapperManager::~DvppWrapperManager()` 才 free 到坏块 → `corrupted double-linked list` + SIGABRT（rc=134）。**推理本身完全正确**（top-1/score 与配套环境逐位一致）。修复见下文 DNN 块末尾的 `os._exit(0)`；驱动与 CANN 配套的正常环境（如 25.3.rc1.2）无此问题。
 
 ```shell #test-setup
 python3 - <<'PY'
@@ -622,6 +624,7 @@ NPU target available: xxx
 OPENCV_FORCE_DNN_ENGINE=1 python << 'PY'
 import os
 import shutil
+import sys
 import time
 import urllib.request
 import numpy as np
@@ -649,7 +652,6 @@ if not os.path.exists(MODEL_PATH):
                 if attempt == 4:
                     raise
                 time.sleep(10)
-print('model bytes:', os.path.getsize(MODEL_PATH))
 
 net = cv2.dnn.readNetFromONNX(MODEL_PATH)
 net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CANN)
@@ -671,17 +673,39 @@ logits = out.reshape(-1)
 e = np.exp(logits - logits.max())
 prob = e / e.sum()
 
-print('output shape:', out.shape)
-print('output dtype:', out.dtype)
-print('top class index:', int(np.argmax(prob)))
-print('top class score:', float(np.max(prob)))
-
 img = image.copy()
 cv2.rectangle(img, (10, 10), (500, 500), (0, 255, 0), thickness=2)
 label = 'top-1: #372 patas monkey  %.3f' % float(np.max(prob))
 cv2.putText(img, label, (30, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 cv2.imwrite('/tmp/dnn-result.png', img)
+
+# 结果不经 python 的缓冲 stdout 输出，而是用原始 syscall 写文件：
+# 1) GE 编译会 fork 子进程，子进程 exit(0) 会把继承的 stdout 缓冲冲到
+#    C++ 日志行的中间（实测 "model bytes" 粘在半截 INFO 行上）；
+# 2) 驱动 25.5.2 × CANN 9.1.0 错配环境堆已损坏（见补丁 4e 小节），
+#    os.write 不经过 C 堆最稳。bash 的 `echo; cat` 保证锚点行干净。
+result = (
+    'model bytes: %d\n'
+    'output shape: %s\n'
+    'output dtype: %s\n'
+    'top class index: %d\n'
+    'top class score: %s\n'
+) % (os.path.getsize(MODEL_PATH), out.shape, out.dtype,
+     int(np.argmax(prob)), float(np.max(prob)))
+fd = os.open('/tmp/dnn_result.txt', os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+os.write(fd, result.encode())
+os.close(fd)
+
+# 驱动 25.5.2 × CANN 9.1.0 错配的环境里，进程 exit() 的 atexit 阶段
+# libacl_dvpp_mpi 的 DvppWrapperManager 析构会撞上运行期已被写坏的堆块
+# （"corrupted double-linked list" SIGABRT rc=134，gdb backtrace 实锤；
+# 推理本身正确）。flush 后 _exit(0) 绕过 C 层 atexit；驱动与 CANN 配套
+# 的正常环境（如 25.3.rc1.2）下此举同样无害，NPU 资源由驱动随进程回收。
+sys.stdout.flush()
+os._exit(0)
 PY
+echo
+cat /tmp/dnn_result.txt
 ```
 
 输出结果如下：
@@ -699,4 +723,4 @@ top class score: 0.xxx
 
 ![NPU 推理标注结果](images/dnn-result.png)
 
-> 首次 forward 含 GE 图编译（`converting ge::Graph to OM buffer`），约 0.5~1 分钟出 `Compile success, model size = 9759197`；进程内二次 forward 约 1ms。若 graph check 报 `ret = 4294967295` 且日志有 `No module named 'tbe'`，是 `PYTHONPATH` 被**整体覆盖**（见上文 quickstart 开头的 prepend 说明）。forward 时补丁 4e 会打一行 `DNN/CANN: output[0] acl_size=... host_size=...`——驱动 25.3 两者相等；驱动 ≥ 25.5.x 时 `acl_size` 会大于 `host_size`（对齐 padding），这正是未打 4e 时堆损坏的根源。
+> 首次 forward 含 GE 图编译（`converting ge::Graph to OM buffer`），约 0.5~1 分钟出 `Compile success, model size = 9759197`；进程内二次 forward 约 1ms。若 graph check 报 `ret = 4294967295` 且日志有 `No module named 'tbe'`，是 `PYTHONPATH` 被**整体覆盖**（见上文 quickstart 开头的 prepend 说明）。forward 时补丁 4e 会打一行 `DNN/CANN: output[0] acl_size=... host_size=...` 留证（实测两种驱动下均为 `4000 == 4000`）。块末尾的 `os._exit(0)` 是对驱动/CANN 错配环境 DVPP atexit 堆损坏的规避，详见补丁 4e 小节的真因说明。

@@ -7,7 +7,7 @@
 # I/O, state relay and publishing all live in the engine. See the
 # engine's `workflow_call.inputs` block for the full input contract.
 #
-# Cache keys (monitor-state-xtuner-*) and artifact names are derived
+# Cache keys (quick-start-monitor-state-xtuner_*) and artifact names are derived
 # from project=xtuner, not from the workflow name.
 #
 # No device mounts: the self-hosted NPU runner (`linux-aarch64-a2-2`,
@@ -62,7 +62,7 @@ jobs:
   xtuner-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-xtuner-*), artifacts
+      # Namespaces cache keys (quick-start-monitor-state-xtuner_*), artifacts
       # (xtuner-quick-start-<run_id>) and the test working dir
       # (workflows/projects/xtuner).
       project: xtuner

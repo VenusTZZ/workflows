@@ -7,7 +7,7 @@
 # I/O, state relay and publishing all live in the engine. See the
 # engine's `workflow_call.inputs` block for the full input contract.
 #
-# Cache keys (monitor-state-torchtune-*) and artifact names
+# Cache keys (quick-start-monitor-state-torchtune_*) and artifact names
 # are derived from project=torchtune, not from the workflow name.
 #
 # No device mounts: the self-hosted NPU runner (`linux-aarch64-a2-1`)
@@ -59,7 +59,7 @@ jobs:
   torchtune-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-torchtune-*), artifacts
+      # Namespaces cache keys (quick-start-monitor-state-torchtune_*), artifacts
       # (torchtune-quick-start-<run_id>) and the test working dir
       # (workflows/projects/torchtune).
       project: torchtune

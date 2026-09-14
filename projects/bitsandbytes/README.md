@@ -51,7 +51,7 @@ NPU job 不上传 artifact。`result.json` 由托管 runner 上的 `validate-res
 
 文档在 `docs/Quick-start-Ascend.md`。流水线是 `.github/workflows/bitsandbytes-quick-start.yml`，只是共享模板 `quick-start-template.yml` 的薄触发器。文档方言见 [docs/markdown_doc_test_label.md](../../docs/markdown_doc_test_label.md)：围栏 info 行用 `#test` / `#test-setup` / `#test-result`。无标签的 `shell` 块给用户复制，看护跳过。
 
-Quick Start **不**抄本项目 example 线的「两信号或、无重试」。它走共享模板自己的监控：互斥优先级 `release` > `doc` > `retry`。字面 `retry`，不是 `-retry`。cache 前缀是模板拥有的 `monitor-state-bitsandbytes-`，不要再发明第二套前缀。
+Quick Start **不**抄本项目 example 线的「两信号或、无重试」。它走共享模板自己的监控：互斥优先级 `release` > `doc` > `retry`。字面 `retry`，不是 `-retry`。cache 前缀是模板拥有的 `quick-start-monitor-state-bitsandbytes-`，不要再发明第二套前缀。
 
 这是相对本项目 example 线的**有意偏离**：本仓 Quick Start 触发器统一走共享模板，触发语义以 `quick-start-template.yml` 为准。
 

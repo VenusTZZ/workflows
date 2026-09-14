@@ -117,7 +117,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install modelscope
-          python -c "import os; from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen2.5-1.5B'))" > /tmp/qwen_path
+          python -c "import os; from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen2.5-1.5B-Instruct'))" > /tmp/qwen_path
           printf 'QUICK_START_MODEL=%s\n' "$(cat /tmp/qwen_path)" >> "$GITHUB_ENV"
 
       - name: Install target and run Quick Start

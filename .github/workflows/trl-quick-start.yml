@@ -8,7 +8,7 @@
 #
 # Engine-fixed behaviours this trigger relies on (declared in the
 # engine, NOT here):
-#   * cache key prefix: monitor-state-trl-  (from inputs.project)
+#   * cache key prefix: quick-start-monitor-state-trl_  (from inputs.project)
 #   * artifact name:    trl-quick-start-<run_id>
 #   * result.json is written by the engine and validated against
 #     schemas/result.schema.json before upload.
@@ -44,7 +44,7 @@ jobs:
   trl-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-trl-*), artifacts
+      # Namespaces cache keys (quick-start-monitor-state-trl_*), artifacts
       # (trl-quick-start-<run_id>) and the test working dir
       # (workflows/projects/trl).
       # result.json is uploaded by the engine's publish-and-persist job

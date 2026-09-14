@@ -46,7 +46,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .monitor-state
-          # Must not share a prefix with cache-dit-quick-start's monitor-state- keys
+          # Must not share a prefix with cache-dit-quick-start.s
+          # quick-start-monitor-state-cache-dit_ keys
           key: cache-dit-examples-monitor-state-${{ github.run_id }}
           restore-keys: |
             cache-dit-examples-monitor-state-

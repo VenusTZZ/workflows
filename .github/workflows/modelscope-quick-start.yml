@@ -7,7 +7,7 @@
 # I/O, state relay and publishing all live in the engine. See the
 # engine's `workflow_call.inputs` block for the full input contract.
 #
-# Cache keys (monitor-state-modelscope-*) and artifact names are
+# Cache keys (quick-start-monitor-state-modelscope_*) and artifact names are
 # derived from project=modelscope, not from the workflow name.
 #
 # No device mounts: the self-hosted NPU runner (`linux-aarch64-a2-1`,
@@ -51,7 +51,7 @@ jobs:
   modelscope-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-modelscope-*), artifacts
+      # Namespaces cache keys (quick-start-monitor-state-modelscope_*), artifacts
       # (modelscope-quick-start-<run_id>) and the test working dir
       # (workflows/projects/modelscope).
       project: modelscope

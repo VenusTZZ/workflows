@@ -35,6 +35,7 @@ jobs:
         --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+        --volume=/data/ci-cache/modelscope/wenet:/root/.cache/modelscope
       # Full aishell-1 flow (~15.6 GB download + cmvn + 5 conformer
       # epochs over 120k utts with the upstream-default DataLoader +
       # 4-mode decode of 7176 test utts + jit export) lands in the

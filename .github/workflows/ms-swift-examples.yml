@@ -48,7 +48,8 @@ jobs:
           path: .monitor-state
           # The per-run key always misses; restore-keys picks the latest
           # save. Must not share a prefix with ms-swift-quick-start's
-          # monitor-state-ms-swift- keys (restore-keys matches prefixes).
+          # quick-start-monitor-state-ms-swift_ keys (restore-keys
+          # matches prefixes).
           key: ms-swift-examples-monitor-state-${{ github.run_id }}
           restore-keys: |
             ms-swift-examples-monitor-state-
