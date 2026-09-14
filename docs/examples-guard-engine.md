@@ -325,7 +325,7 @@ GET /repos/<upstream_repo>/releases/latest    → release 信号（tag_name）
 
 - **monitor → manifest-check / run-example / validate-results**：job outputs `need_to_run` / `trigger` / `target_repo` / `target_ref`（`need_to_run`：本周期是否需要执行——新 release、失败重试或手动触发；`reason` 仅存于 monitor 内部日志，不再是 job output）；下游 checkout 目标仓、result.json 记 `trigger` / `target_ref`。
 - **manifest-check → run-example / validate-results**：job outputs `supported_matrix`（JSON 数组，条目含 `device_options` 派生值）/ `has_supported`；空矩阵时两个下游 job 整体跳过。
-- **run-example → validate-results**：不传数据，validate-results 调 `scripts/write_example_result.py`（Job API 按 `run-example (<path>)` job 名查 conclusion，urllib 分页，无 gh/jq 依赖）——NPU runner 不写 artifact，发布统一在 GitHub 托管 runner 上完成。
+- **run-example → validate-results**：不传数据，validate-results 调 `scripts/write_example_result.py`（Job API 按 `run-example (<path>)` job 名查 conclusion——**后缀匹配**：可复用 workflow 的 Jobs API 会给 job 名加 `<调用方名> / ` 前缀，如 `peft-examples / run-example (…)`；urllib 分页，无 gh/jq 依赖）——NPU runner 不写 artifact，发布统一在 GitHub 托管 runner 上完成。
 - **monitor + run-example + manifest-check → save-monitor-state**：被测 tag 取自 `needs.monitor.outputs.target_ref`，成败由 `needs.run-example.result`（矩阵聚合）+ `needs.manifest-check.result` + `has_supported` 映射为 `success` / `failure`；save-monitor-state 不 restore，直接重建单文件状态（tag + outcome）单次保存（§2.4.3）。
 
 ### 4.5 与 quick-start 引擎的对照
@@ -376,3 +376,4 @@ GET /repos/<upstream_repo>/releases/latest    → release 信号（tag_name）
 | 2026-09-11 | record-outcome job 更名 save-monitor-state（职责即“持久化 monitor state，run 内唯一保存点”），并注明与 validate-results 并行是有意设计：发布问题不得门控状态回写或触发 NPU 重跑，且尽早落盘缩小取消丢失窗口。 | 命名评审：record-outcome 像记日志，名不副实；执行顺序评审确认二者无依赖、不应串行。 |
 | 2026-09-14 | 删除容器 `options: --shm-size=64g`（含 TODO）：首轮 NPU run（dispatch, peft examples/sft 全绿）实测 /dev/shm=16G 非 64G——选项未被应用，16G 来自 runner 自身；该负载 shm Used=0，无需配置。 | 实测证据见 run 34818091939 的 df 输出；`df -h /dev/shm` 诊断行保留在 Run example 步骤。 |
 | 2026-09-14 | 评审确定扫描模型简化为 files-only（§2.7）：scan 收敛为 root + include_extensions + exclude，废弃 unit: directories/mixed 及 marker/max_depth；对账单位统一为入口文件；exec 语义收窄为「path 是源码、启动的是构建产物」（py/sh 不需要——项目脚本按扩展名分发 bash/python）。实施为独立 PR，不混入本 PR。 | llama.cpp examples/ 下非 example 目录极少且可 exclude（android/swift 目录被扩展名白名单天然滤掉）；目录单元引入的 unit/marker/max_depth/mixed 复杂度不值。 |
+| 2026-09-14 | 修复 publish-result 首跑判红：write_example_result 的 job 名匹配从精确相等改为后缀匹配——可复用 workflow 的 Jobs API 给 job 名加 `<调用方 workflow 名> / ` 前缀（run 34818091939 实测 `peft-examples / run-example (…)`），独立 workflow 时代的精确匹配移植过来即失效；新增 job_matches 单测（精确/带前缀/嵌套前缀/不匹配）。 | 首跑 dispatch（run-example 全绿）暴露：脚本报 could not find completed job → result.json 未写 → upload 级联红。 |

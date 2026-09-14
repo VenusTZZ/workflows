@@ -27,6 +27,29 @@ ENV = {
 }
 
 
+class JobMatchingTests(unittest.TestCase):
+
+    def test_exact_name_matches(self) -> None:
+        self.assertTrue(write_example_result.job_matches(
+            'run-example (examples/sft/run_peft.sh)',
+            'run-example (examples/sft/run_peft.sh)'))
+
+    def test_called_workflow_prefix_matches(self) -> None:
+        self.assertTrue(write_example_result.job_matches(
+            'peft-examples / run-example (examples/sft/run_peft.sh)',
+            'run-example (examples/sft/run_peft.sh)'))
+
+    def test_nested_prefix_matches(self) -> None:
+        self.assertTrue(write_example_result.job_matches(
+            'outer / peft-examples / run-example (p.sh)',
+            'run-example (p.sh)'))
+
+    def test_other_jobs_do_not_match(self) -> None:
+        self.assertFalse(write_example_result.job_matches(
+            'peft-examples / publish-result (examples/sft/run_peft.sh)',
+            'run-example (examples/sft/run_peft.sh)'))
+
+
 class ConclusionMappingTests(unittest.TestCase):
 
     def test_success_and_cancelled_pass_through(self) -> None:
