@@ -138,7 +138,8 @@ print('npu dispatch:', get_device_name(), get_torch_distributed_backend(), bool(
 "
 ```
 
-```shell #test-result id="xdit-install-verify" fuzzy='xxx' fuzzy='...'
+```shell #test-result id="xdit-install-verify" fuzzy='...' fuzzy='xxx'
+...
 torch: 2.9.xxx
 torch_npu: 2.9.xxx
 xfuser: xxx
