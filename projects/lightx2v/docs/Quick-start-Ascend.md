@@ -87,10 +87,19 @@ npu available: True count: xxx
 
 ```shell #test id="lightx2v-wan-t2v"
 PLATFORM=ascend_npu python - <<'PY'
+import time
 from modelscope import snapshot_download
 from lightx2v import LightX2VPipeline
 
-model_path = snapshot_download('Wan-AI/Wan2.1-T2V-1.3B')
+model_path = None
+for attempt in range(3):
+    try:
+        model_path = snapshot_download('Wan-AI/Wan2.1-T2V-1.3B')
+        break
+    except Exception as exc:
+        print('download attempt %d/3 failed: %s' % (attempt + 1, exc))
+        time.sleep(10)
+assert model_path, 'Wan2.1-T2V-1.3B download failed after 3 attempts'
 
 pipe = LightX2VPipeline(
     model_path=model_path,

@@ -26,7 +26,7 @@ def _e2e_enabled() -> bool:
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
-    DEFAULT_COMMAND_TIMEOUT = 1800
+    DEFAULT_COMMAND_TIMEOUT = 3600
     USER_AGENT = 'cosdt-ci-test/quick-start'
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,
