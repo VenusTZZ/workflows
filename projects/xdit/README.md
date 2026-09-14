@@ -2,15 +2,13 @@
 
 本目录是 [xDiT](https://github.com/xdit-project/xDiT)（PyPI 包名 [xfuser](https://pypi.org/project/xfuser/)）的看护配套数据，不是 xDiT 源码。流水线在 [.github/workflows/xdit-quick-start.yml](../../.github/workflows/xdit-quick-start.yml)。注册信息见根目录 [projects.yaml](../../projects.yaml)（分类：推理加速；支持程度：新兴适配；阶段 A）。
 
-在单卡昇腾 NPU 上跑通 xfuser：文档自装 torch 栈（torch 2.9.0 + torch_npu 2.9.0.post2 + triton 3.5.*）→ PyPI 安装 xfuser（`uv pip install xfuser`）→ 验证 NPU 分发（`xfuser/envs.py` 输出 `npu hccl True`）→ 最小单卡脚本（内嵌 `snapshot_download` 自动拉 SD3 medium，全仓 ~30 GB，走 ModelScope 默认缓存）经 `torchrun --nproc_per_node=1` 生成一张 256×256 单步图片并做 PNG 结构校验。多卡并行（USP / DP / TP）为文档内指引链接，不在看护范围。
+在昇腾 NPU 上跑通 xfuser：文档自装 torch 栈（torch 2.9.0 + torch_npu 2.9.0.post2 + triton 3.5.*）→ PyPI 安装 xfuser（`uv pip install xfuser`）→ 验证 NPU 分发（`npu hccl True`）→ 最小 SD3 脚本（内嵌 `snapshot_download` 自动拉模型，约 28 GB，走 ModelScope 默认缓存）经 `torchrun --nproc_per_node=1` 生成一张 256×256 单步图片并做 PNG 结构校验 → 同脚本加 `--ulysses_degree 2` 展示 2 卡序列并行。多卡高级用法（PipeFusion / CFG / Ring）为文档内指引链接，不在看护范围。
 
 ## 触发
 
 `xdit-quick-start.yml` 接受：
 
-- `schedule`：每 6 小时轮询上游一次，文档 / 上游 release / main HEAD 有变化才在 NPU 上跑 `tests.test_quick_start_ascend`（当前暂时注释，0.6.0 适配跑通后恢复）。
+- `schedule`：每 6 小时轮询上游（当前暂时注释，2 卡改造跑通后恢复）。
 - `workflow_dispatch`：手动 trigger。
 
-cwd 是 `workflows/projects/xdit`（测试类 chdir 到 `/root/xdit-test` 钉文档执行目录，ModelScope 默认缓存 `~/.cache/modelscope` 由宿主卷 `/data/ci-cache/modelscope/xdit` 持久化）。环境契约：`MONITORED_DOC_URL` / `UPSTREAM_REF` / `NPU_READY` 由 engine 注入，测试逻辑都在这个 `tests/` 目录下。
-
-详细 trigger 模式与 cache I/O 流程参见父引擎 [quick-start-template.yml](../../.github/workflows/quick-start-template.yml) 与项目文档说明 [docs/guarding-examples.md](../../docs/guarding-examples.md)。
+cwd 是 `workflows/projects/xdit`（测试类 chdir 到 `/root/xdit-test`，ModelScope 默认缓存 `~/.cache/modelscope` 由宿主卷 `/data/ci-cache/modelscope/xdit` 持久化）。
