@@ -113,6 +113,11 @@ projects:
     dir: projects/peft
     workflows:
       quick_start: .github/workflows/peft-quick-start.yml
+      # Release-only examples guard on the shared engine
+      # examples-template.yml (design: docs/examples-guard-engine.md).
+      # First supported entry: examples/sft/run_peft.sh, LoRA SFT of
+      # ModelScope-predownloaded Qwen2.5-0.5B on 1 card, 1 step.
+      examples: .github/workflows/peft-examples.yml
   - name: diffusers
     category: 训练加速
     support_level: 基础支持
