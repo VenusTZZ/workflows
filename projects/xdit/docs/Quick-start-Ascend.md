@@ -202,6 +202,7 @@ torchrun --nproc_per_node=1 sd3_npu.py --prompt "a tiny test sketch" --height 25
 ```
 
 ```shell #test-result id="xdit-sd3-smoke"
+...
 saved: results/sd3_npu.png
 ```
 
@@ -234,6 +235,7 @@ torchrun --nproc_per_node=2 sd3_npu.py --prompt "a tiny test sketch" --height 25
 ```
 
 ```shell #test-result id="xdit-sd3-2card"
+...
 saved: results/sd3_npu.png
 ```
 
