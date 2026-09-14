@@ -25,14 +25,12 @@ on:
   workflow_dispatch:
     inputs:
       target_repo:
-        description: Target repository to checkout and run
-        required: true
-        default: huggingface/peft
+        description: Target repository to checkout and run (defaults to upstream huggingface/peft)
+        required: false
         type: string
       target_ref:
-        description: Branch, tag, or SHA in the target repository
-        required: true
-        default: main
+        description: Branch, tag, or SHA in the target repository (defaults to main)
+        required: false
         type: string
 
 # Engine jobs query the GitHub Job API (validate-results); called
