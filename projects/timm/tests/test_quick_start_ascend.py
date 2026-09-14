@@ -174,13 +174,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
         os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
-        # 2) uv
-        subprocess.run(
-            ['python', '-m', 'pip', 'install', 'uv'],
-            check=True,
-        )
-
-        # 3) torch stack probe + install
+        # 2) torch stack probe + install
         _PROBE_SCRIPT = (
             'import torch, torch_npu\n'
             "raise SystemExit(0 if "
@@ -215,23 +209,23 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 4) torchvision (pinned to match torch 2.9.0)
+        # 3) torchvision (pinned to match torch 2.9.0)
         subprocess.run(
             ['python', '-m', 'pip', 'install', '--no-deps', 'torchvision==0.24.0'],
             check=True,
         )
 
-        # 5) modelscope
+        # 4) modelscope
         subprocess.run(
             ['python', '-m', 'pip', 'install', 'modelscope'],
             check=True,
         )
 
-        # 6) model cache sanity
+        # 5) model cache sanity
         ensure_safetensors()
         purge_modelscope_corrupt(resolve_modelscope_cache())
 
-        # 7) timm itself is NOT installed here - the doc's
+        # 6) timm itself is NOT installed here - the doc's
         # install-timm block installs timm via uv pip install timm.
 
     @classmethod
