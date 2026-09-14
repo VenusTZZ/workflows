@@ -35,7 +35,13 @@ jobs:
         --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
-      timeout_minutes: 120
+        --volume=/data/ci-cache/modelscope/wenet:/root/.cache/modelscope
+      # Full aishell-1 flow (~15.6 GB download + cmvn + 5 conformer
+      # epochs over 120k utts with the upstream-default DataLoader +
+      # 4-mode decode of 7176 test utts + jit export) lands in the
+      # 6-12 h range on a single 910B4; 120 min was mock-data-era only.
+      # Schedule stays off while a single run eats half a day.
+      timeout_minutes: 720
       upstream_repo: wenet-e2e/wenet
       fixed_ref: main
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/wenet/docs/Quick-start-Ascend.md?ref=${{ github.sha }}

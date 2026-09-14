@@ -41,23 +41,47 @@ def _e2e_enabled() -> bool:
 
 
 def _ensure_torch_npu():
-    """Install torch + torch_npu if not already available."""
-    try:
-        import torch
-        import torch_npu
-        print(f'setup: found torch {torch.__version__}, torch_npu {torch_npu.__version__}')
+    """Ensure torch + torch_npu are importable and match 2.9.0.
+
+    Probe first: the CANN 9.1.0 image ships ``torch==2.9.0+cpu`` +
+    ``torch_npu==2.9.0.post2``; when present, reuse them. Only when the
+    probe fails (missing or version mismatch) reinstall from the
+    cluster cache + Huawei Ascend dual source so torch and torch_npu
+    come from the same compatible build.
+    """
+    _PROBE_SCRIPT = (
+        'import torch, torch_npu\n'
+        "raise SystemExit(0 if "
+        "torch.__version__.startswith('2.9.0') "
+        "and torch_npu.__version__.startswith('2.9.0') "
+        "else 1)"
+    )
+    probe = subprocess.run(
+        [sys.executable, '-c', _PROBE_SCRIPT],
+        capture_output=True,
+        check=False,
+    )
+    if probe.returncode == 0:
+        versions = subprocess.run(
+            [sys.executable, '-c',
+             'import torch, torch_npu; print(torch.__version__, torch_npu.__version__)'],
+            capture_output=True, text=True, check=True,
+        )
+        print(f'setup: reusing image torch stack ({versions.stdout.strip()})')
         return
-    except ImportError:
-        print('setup: installing torch==2.9.0 torch_npu==2.9.0.post2')
-        subprocess.run(
-            [sys.executable, '-m', 'pip', 'install',
-             '--extra-index-url', 'https://repo.huaweicloud.com/ascend/repos/pypi',
-             '--trusted-host', 'repo.huaweicloud.com',
-             'torch==2.9.0', 'torch_npu==2.9.0.post2'],
-            check=True)
-        import torch
-        import torch_npu
-        print(f'setup: installed torch {torch.__version__}, torch_npu {torch_npu.__version__}')
+    print('setup: installing torch==2.9.0 torch_npu==2.9.0.post2')
+    subprocess.run(
+        [
+            sys.executable, '-m', 'pip', 'install',
+            '--index-url', 'http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple',
+            '--extra-index-url', 'https://repo.huaweicloud.com/ascend/repos/pypi',
+            'torch==2.9.0', 'torch_npu==2.9.0.post2',
+        ],
+        check=True,
+    )
+    # Verify ABI after install.
+    subprocess.run([sys.executable, '-c', _PROBE_SCRIPT], check=True)
+    print('setup: installed torch==2.9.0 torch_npu==2.9.0.post2')
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
@@ -84,6 +108,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         Class-level setup: run once per test class, triggered by
         ``setUpClass``. Each labeled fence is a new subprocess, so a
         ``source set_env.sh`` block in the document does not persist.
+
+        Also pins NPU cards 0-1 (2-card runner; the doc's 2-card
+        distributed run needs the launcher to see both devices), chdirs
+        to the project root (``projects/deepspeed/``) so doc relative
+        paths resolve correctly, and installs CI dependencies (MPI;
+        torchvision is pinned in ``setUpClass`` after the torch stack
+        is confirmed) that the user would otherwise have to handle.
         """
         path_dirs = '/usr/local/sbin:/usr/local/bin'
         current_path = os.environ.get('PATH', '')
@@ -105,6 +136,33 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             print(
                 f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
             )
+
+        # ASCEND_RT_VISIBLE_DEVICES=0,1: expose both cards for the
+        # single-card + 2-card distributed smoke (--num_gpus 2 needs
+        # the launcher to see 2 devices).
+        os.environ['ASCEND_RT_VISIBLE_DEVICES'] = '0,1'
+        print('setup: pinned ASCEND_RT_VISIBLE_DEVICES=0,1')
+
+        # Chdir to project root so doc relative paths resolve from
+        # projects/deepspeed/ (the parent of tests/).
+        project_root = Path(__file__).resolve().parent.parent
+        os.chdir(project_root)
+        print(f'setup: cwd -> {project_root}')
+
+        # Install MPI (libopenmpi-dev + mpi4py) for deepspeed command.
+        subprocess.run(['apt-get', 'update'], check=True)
+        subprocess.run(['apt-get', 'install', '-y', 'libopenmpi-dev'], check=True)
+        subprocess.run(
+            [sys.executable, '-m', 'pip', 'install', 'mpi4py'],
+            check=True,
+        )
+        print('setup: installed MPI (libopenmpi-dev + mpi4py)')
+
+        # CIFAR10 download is handled inside the doc's train_cifar10.py
+        # (CN mirror fast path + torchvision official fallback).
+
+        # torchvision (and its runtime deps pillow/numpy) is installed by
+        # the doc's install-torchvision block, pinned to match torch 2.9.0.
 
     @classmethod
     def setUpClass(cls) -> None:

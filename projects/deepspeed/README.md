@@ -28,8 +28,8 @@
 
 ## Quick Start
 
-`deepspeed-quick-start.yml` 看护本仓 [docs/Quick-start-Ascend.md](docs/Quick-start-Ascend.md)。该文档描述了在单卡昇腾 NPU 上安装 DeepSpeed、验证加速器、跑最小化训练脚本的完整流程。
+`deepspeed-quick-start.yml` 看护本仓 [docs/Quick-start-Ascend.md](docs/Quick-start-Ascend.md)。该文档描述了在昇腾 NPU 上安装 DeepSpeed、验证加速器、单卡跑通 CIFAR10 示例并双卡体验分布式训练的完整流程。
 
 - 监控信号：doc 哈希、上游 latest release、master HEAD SHA。按 doc > release > commit 优先级，任一变化触发测试。
-- 测试内容：从上游源码安装 DeepSpeed → `ds_report` 验证 → `get_accelerator()._name == 'npu'` → 内联最小化训练（3 层 Linear 网络，ZeRO-1 + BF16，5 步）。
+- 测试内容：pip 安装 DeepSpeed → 安装配套 torchvision → `get_accelerator()._name == 'npu'` → CIFAR10 内联示例（模块化展示 DeepSpeed 工作流，ZeRO-1 + BF16，1 个 epoch）→ 双卡分布式训练（同一脚本 `--num_gpus 2`，ZeRO-1 分片，HCCL 通信）。
 - **当前为节约 NPU 资源，`schedule` 已注释，只保留手动 `workflow_dispatch`。**

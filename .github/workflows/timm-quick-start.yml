@@ -13,21 +13,16 @@
 #   * result.json is written by the engine and validated against
 #     schemas/result.schema.json before upload.
 #
-# NOTE: only workflow_dispatch is enabled for now (per spec: same
-# onboarding rhythm as llama.cpp / whisper.cpp / trl). Once the
-# pipeline runs green and stable, re-enable the schedule block below
-# (copy the peft-quick-start.yml cron: '45 */3 * * *') to start the
-# periodic monitor loop. Until then, the engine's schedule-only steps
-# (monitor / record-monitor-outcome / cache save) simply never run.
+# Schedule is enabled (same cadence as peft). The engine's
+# schedule-only steps (monitor / record-monitor-outcome / cache save)
+# are active.
 #
 # No device mounts: the self-hosted NPU runner (`linux-aarch64-a2-1`)
 # auto-passes `/dev/davinci*` into the container via the cluster
-# device-plugin, so container_options stays empty (same convention as
-# tensordict). The doc exercises install + the 快速开始 flow's
-# four #test smoke commands (import-torch-npu / timm-train /
-# timm-validate / timm-inference) all with pretrained=False, so
-# no weights are downloaded and no read-only Ascend driver bind-mount
-# is needed. check-torch expects `count: 1`.
+# device-plugin. The doc downloads pretrained weights to the default
+# modelscope cache (`~/.cache/modelscope`), so a shared cache volume
+# is mounted for CI persistence (same convention as trl / peft).
+# check-torch expects `count: 1`.
 
 name: timm-quick-start
 
@@ -46,9 +41,10 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # schedule: deliberately NOT enabled yet - see the header note.
-  # Enable with e.g. `- cron: '45 */3 * * *'` once the pipeline is
-  # proven stable on manual runs.
+  # Run every 3 hours: '45 */3 * * *' fires at minute 45 of every
+  # 3rd hour (00:45, 03:45, 06:45, ..., 21:45). Same cadence as peft.
+  schedule:
+    - cron: '45 */3 * * *'
   workflow_dispatch:
 
 permissions:
@@ -67,15 +63,13 @@ jobs:
       # GitHub-hosted ubuntu-latest.
       test_runner: '["linux-aarch64-a2-1"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      # Doc body does: uv pip install timm + two #test smoke commands
+      # (inference / features). Weights auto-download from modelscope
+      # to the shared cache volume. 120 min covers cold cache + first-time
+      # wheel pulls + the ~45 MB model download + smoke commands.
       container_options: >-
-      # Doc body does: uv pip install timm + four #test smoke commands
-      # (import-torch-npu / timm-train / timm-validate / timm-inference).
-      # All four construct the model with pretrained=False on 'npu:0'
-      # directly; they run after timm install. timm's transitive deps
-      # (torch / torchvision / pyyaml / huggingface_hub / safetensors)
-      # are small enough that 90 min covers cold cache + first-time wheel
-      # pulls + four ~1s smoke commands comfortably.
-      timeout_minutes: 90
+        --volume=/data/ci-cache/modelscope/timm:/root/.cache/modelscope
+      timeout_minutes: 120
       upstream_repo: huggingface/pytorch-image-models
       # Raw URL the engine's monitor hashes and the test fetches;
       # doc-hash state lives under the quick-start-monitor-state-timm_ cache prefix.

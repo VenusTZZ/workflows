@@ -1,27 +1,24 @@
 """Quick-start-Ascend documentation test: end-to-end case built on top
-of the ``MarkdownDocTestBase`` contract.
+of the MarkdownDocTestBase contract.
 
-Document under test: ``projects/timm/docs/Quick-start-Ascend.md``
-(follows the ``docs/markdown_doc_test_label.md`` contract: every
-``shell`` code block carries one of the ``#test`` / ``#test-setup`` /
-``#test-result`` labels plus ``id=`` / ``store=`` / ``load='x>>y'`` /
-``fuzzy='xxx'`` parameters).
+Document under test: projects/timm/docs/Quick-start-Ascend.md
+(follows the docs/markdown_doc_test_label.md contract: every shell
+code block carries one of the #test / #test-setup / #test-result labels
+plus id= / store= / load='x>>y' / fuzzy='xxx' parameters).
 
-Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
+Run: python -m unittest tests.test_quick_start_ascend -v 2>&1
 
-Environment variables (injected by GitHub workflow
-``timm-quick-start.yml``):
-    ``MONITORED_DOC_URL``         Used by the engine's monitor step (ubuntu,
-                                  not the NPU runner) for doc hash checking.
-                                  The test's ``pre_process`` reads the doc
-                                  from the local checkout instead, because
-                                  ``raw.githubusercontent.com`` is not
-                                  reachable from the NPU runner's cluster.
-    ``NPU_READY=true``            Required, otherwise the class is skipped.
-                                  End-to-end tests only run on the NPU runner:
-                                  local dev machines / normal ubuntu runners
-                                  have no ``/dev/davinci*`` device, and the
-                                  hard run would fail on ``import torch_npu``.
+Environment variables (injected by GitHub workflow timm-quick-start.yml):
+    MONITORED_DOC_URL   Used by the engine's monitor step (ubuntu, not the
+                        NPU runner) for doc hash checking. The test's
+                        pre_process reads the doc from the local checkout
+                        instead, because raw.githubusercontent.com is not
+                        reachable from the NPU runner's cluster.
+    NPU_READY=true      Required, otherwise the class is skipped.
+                        End-to-end tests only run on the NPU runner: local
+                        dev machines / normal ubuntu runners have no
+                        /dev/davinci* device, and the hard run would fail
+                        on import torch_npu.
 """
 
 from __future__ import annotations
@@ -32,67 +29,54 @@ import unittest
 from pathlib import Path
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
+from workflows.model_cache import (
+    ensure_safetensors,
+    purge_modelscope_corrupt,
+    resolve_modelscope_cache,
+)
 
 
 def _is_truthy(value: str | None) -> bool:
-    """``'true'`` -> True (case-insensitive); anything else (including unset) -> False."""
+    """'true' -> True (case-insensitive); anything else (including unset) -> False."""
     if not value:
         return False
     return value.strip().lower() == 'true'
 
 
 def _e2e_enabled() -> bool:
-    """Return True when ``NPU_READY=true`` is set, releasing the skip."""
+    """Return True when NPU_READY=true is set."""
     return _is_truthy(os.environ.get('NPU_READY'))
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
-    """``Quick-start-Ascend.md`` end-to-end test: fetch doc -> validate
-    contract -> run ``#test-setup`` / ``#test`` in order -> compare against
-    ``#test-result``.
+    """Quick-start-Ascend.md end-to-end test: fetch doc -> validate
+    contract -> run #test-setup / #test in order -> compare against
+    #test-result.
 
-    Scope: install + the ``快速开始`` flow's ``#test``
-    smoke commands, constructing the model on ``device='npu:0'`` with
-    ``pretrained=False`` (no weight download). Covers the upstream
-    quickstart in order: 导入 torch_npu / 单卡训练 / 模型验证 / 模型推理.
-    The doc body explicitly leaves pretrained weight loading out of scope:
-    the NPU runner's cluster firewall cannot reach HuggingFace Hub / GitHub
-    Releases, so every executable block avoids the network.
+    Scope: install + the quick-start flow's #test smoke commands,
+    constructing the model on device='npu:0' with pretrained weights
+    auto-downloaded to the default modelscope cache (by the doc's own
+    snapshot_download inside the example). Covers the upstream quickstart
+    in order: image classification inference / multi-scale feature
+    extraction.
     """
 
-    # ``uv pip install timm`` + the four 快速开始 #test smoke
-    # commands (import / train / validate / inference). The stack is small
-    # (torch / torchvision / pyyaml / huggingface_hub / safetensors, no
-    # transformers / modelscope / accelerate on the test side), so 20 min
-    # covers cold cache + first-time wheel pulls for the doc's own install
-    # block + the ~1s smoke commands (incl. a single resnet18 fwd/bwd
-    # train step on npu:0) comfortably.
-    DEFAULT_COMMAND_TIMEOUT = 1200
+    # uv pip install timm + the doc's two quick-start #test smoke
+    # commands (inference / features) + modelscope weight download.
+    # The stack is small (torch / torchvision / pyyaml / huggingface_hub /
+    # safetensors / modelscope / timm), so 30 min covers cold cache +
+    # first-time wheel pulls + the 45 MB model download + the ~1s smoke
+    # commands (incl. a single resnet18 fwd pass on npu:0) comfortably.
+    DEFAULT_COMMAND_TIMEOUT = 1800
 
-    # Monitored source is the cosdt-ci-test/workflows fork (this repo):
-    # the doc lives at projects/timm/docs/Quick-start-Ascend.md and the
-    # engine sets MONITORED_DOC_URL to the raw.githubusercontent.com URL
-    # for the same path. Upstream timm's tutorial lives at
-    # huggingface/pytorch-image-models README and is referenced from
-    # inside the doc body, but it is NOT the file under test.
     USER_AGENT = 'cosdt-ci-test/quick-start'
 
-    # Extend the base ERROR_MARKERS with CANN's typo + sentinel so a CANN
-    # failure surfaces a full stderr dump (head/tail by default would hide
-    # the line that names the failure).
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,
-        'applicaiton exception',  # CANN toolkit emits this typo (sic)
-        'ERR99999',  # CANN sentinel for unrecoverable runtime failure
+        'applicaiton exception',
+        'ERR99999',
     )
 
-    # Process-level CUDA exclusion list. Same rationale as the other
-    # projects' tests: write to /tmp and export, so subprocesses
-    # (subprocess.run inherits parent env by default) see it. timm's own
-    # dep tree (torch / torchvision / pyyaml / huggingface_hub /
-    # safetensors) shouldn't pull CUDA, but the source install goes
-    # through `uv pip install -e .` which reads pyproject.toml and could
-    # resolve dev/test extras that drag nvidia-* in via transitive deps.
     _CUDA_CONSTRAINTS = (
         'cuda-toolkit<0',
         'cuda-python<0',
@@ -135,34 +119,12 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     )
     _CONSTRAINTS_FILE = '/tmp/timm_npu_constraints.txt'
 
-    # Cluster-internal nginx PyPI cache + Huawei Cloud ascend dual-source.
     _CLUSTER_INDEX = 'http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple'
     _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
-
-    # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
-    # Path is hard-coded, tied to the container image pinned by the
-    # ``image:`` input of ``timm-quick-start.yml``.
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
-    # ----------------------------------------------------------
-    # pre_process: read doc from local checkout instead of fetching
-    # raw.githubusercontent.com — the NPU runner sits behind a cluster
-    # firewall that cannot reach it (known limitation, see
-    # quick-start-template.yml). The checkout step always has the
-    # latest doc for the branch under test, so there is no stale drift.
-    # ----------------------------------------------------------
-
     def pre_process(self) -> str:
-        """Read ``Quick-start-Ascend.md`` from the local checkout.
-
-        Overrides the base ``MarkdownDocTestBase.pre_process`` which
-        fetches ``MONITORED_DOC_URL`` via ``urllib`` — that endpoint
-        (``raw.githubusercontent.com``) is not reachable from the NPU
-        runner's cluster network. The workflow checkout already places
-        the doc at ``projects/timm/docs/Quick-start-Ascend.md`` relative
-        to this file, so reading it locally is both reliable and always
-        in sync with the branch under test.
-        """
+        """Read Quick-start-Ascend.md from the local checkout."""
         doc_path = (
             Path(__file__).resolve().parent.parent
             / 'docs'
@@ -174,44 +136,22 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             )
         return doc_path.read_text(encoding='utf-8')
 
-    # ----------------------------------------------------------
-    # prepare_environment: CANN env + CUDA constraints + uv + torch stack probe
-    # + torchvision (timm depends on torchvision)
-    # (timm itself is installed by the doc's `## 安装 timm` blocks; no
-    #  model download, so no modelscope cache binding)
-    # ----------------------------------------------------------
-
     @classmethod
     def prepare_environment(cls) -> None:
-        """Source CANN env + write CUDA exclusion list + install uv + torch stack probe
-        + torchvision.
+        """Source CANN env + write CUDA exclusion list + install uv +
+        torch stack + torchvision + modelscope + model cache sanity.
 
-        The doc's ``## 安装 timm`` section is the single source of
-        truth for which timm version gets installed; this class only
-        handles ``torch`` / ``torch_npu`` / ``torchvision`` here (via
-        the cluster cache + Huawei ascend dual-source). ``timm`` itself
-        installs itself in document order via the ``#test`` machinery
-        (``timm-install-binary``).
+        The doc's install-timm section is the single source of truth for
+        which timm version gets installed; this class only handles torch /
+        torch_npu / torchvision here (via the cluster cache + Huawei ascend
+        dual-source). timm itself installs itself in document order via the
+        #test machinery.
 
-        ``torchvision==0.24.0`` is the version paired with
-        ``torch==2.9.0`` (see ``projects/ms-swift/constraints-npu.txt``).
-        It is installed defensively with ``--no-deps`` so the doc's
-        ``uv pip install timm`` finds ``torchvision`` already satisfied
-        and does not try to resolve a torch-mismatched version. Importing
-        torchvision's native lib only needs torch 2.9.0's CPU symbols,
-        which the image's ``torch==2.9.0+cpu`` already provides.
-
-        No modelscope cache bind-mount: the test does not download any
-        model (every executable block uses ``pretrained=False``), so the
-        host cache is not touched.
-
-        Class-level setup: run once per test class, triggered by
-        ``setUpClass``. Not the same as ``unittest.TestCase.setUp`` —
-        that lifecycle hook fires before every test method, which is
-        wrong for a one-shot install.
+        modelscope is installed here because the doc's examples call
+        snapshot_download; the modelscope cache is purged of corrupt shards
+        before the doc's download runs.
         """
-        # 0) CANN env: source set_env.sh and merge the env stream into
-        # os.environ
+        # 0) CANN env
         if os.path.isfile(cls._CANN_SET_ENV):
             merged = subprocess.run(
                 ['bash', '-c', f'source {cls._CANN_SET_ENV} >/dev/null 2>&1; env'],
@@ -221,9 +161,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 if '=' not in line:
                     continue
                 key, _, value = line.partition('=')
-                # Don't overwrite envs explicitly injected by the
-                # workflow (jobs.env / steps.env); only fill in CANN
-                # keys that are missing, to avoid conflicts.
                 os.environ.setdefault(key, value)
             print('setup: sourced CANN env from set_env.sh')
         else:
@@ -231,25 +168,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
             )
 
-        # 1) CUDA exclusion list + process-level env
+        # 1) CUDA exclusion list
         with open(cls._CONSTRAINTS_FILE, 'w', encoding='utf-8') as fh:
             fh.write('\n'.join(cls._CUDA_CONSTRAINTS) + '\n')
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
         os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
-        # 2) uv: the doc's ``timm-install-binary`` block calls
-        # ``uv pip install`` which handles PEP 517 build deps
-        # more reliably than pip. Inherit ``PIP_INDEX_URL`` +
-        # ``PIP_TRUSTED_HOST`` from the yml job-level env (cluster cache
-        # path + trusted-host).
-        subprocess.run(
-            ['python', '-m', 'pip', 'install', 'uv'],
-            check=True,
-        )
-
-        # 3) torch stack probe + install: when version matches the image's
-        # pre-installed wheels, reuse them to avoid the cluster cache
-        # triggering ``+cpu`` resolution.
+        # 2) torch stack probe + install
         _PROBE_SCRIPT = (
             'import torch, torch_npu\n'
             "raise SystemExit(0 if "
@@ -260,7 +185,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         probe = subprocess.run(
             ['python', '-c', _PROBE_SCRIPT],
             capture_output=True,
-            check=False,  # probe's success/failure is the branch signal — don't raise
+            check=False,
         )
         if probe.returncode == 0:
             _VERSIONS_SCRIPT = (
@@ -284,40 +209,28 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 check=True,
             )
 
-        # 4) torchvision: timm depends on torchvision, and
-        # torchvision==0.24.0 is the version paired with torch==2.9.0
-        # (see projects/ms-swift/constraints-npu.txt). --no-deps avoids
-        # pip re-resolving torch into a CUDA build; the image's
-        # torch==2.9.0+cpu already provides the CPU symbols torchvision
-        # needs at import time.
+        # 3) torchvision (pinned to match torch 2.9.0)
         subprocess.run(
             ['python', '-m', 'pip', 'install', '--no-deps', 'torchvision==0.24.0'],
             check=True,
         )
 
-        # 5) timm itself is NOT installed here — the doc's
-        # ``## 安装 timm`` block ``timm-install-binary`` installs timm
-        # via ``uv pip install timm``, so a broken install block
-        # surfaces here as a fuzzy mismatch against ``timm xxx`` rather
-        # than being masked by a pre-installed copy.
+        # 4) modelscope
+        subprocess.run(
+            ['python', '-m', 'pip', 'install', 'modelscope'],
+            check=True,
+        )
 
-    # ----------------------------------------------------------
-    # test entry
-    # ----------------------------------------------------------
+        # 5) model cache sanity
+        ensure_safetensors()
+        purge_modelscope_corrupt(resolve_modelscope_cache())
+
+        # 6) timm itself is NOT installed here - the doc's
+        # install-timm block installs timm via uv pip install timm.
 
     @classmethod
     def setUpClass(cls) -> None:
-        """Run env setup once per test class: CANN env + CUDA constraints + uv +
-        torch stack + torchvision.
-
-        ``timm`` is NOT installed here — see ``prepare_environment``
-        for why.
-
-        ``@unittest.skipIf`` only skips the test *method* — ``setUpClass``
-        itself always runs. The ``if _e2e_enabled()`` body guard below is
-        what actually keeps heavy setup from firing when ``NPU_READY`` is
-        unset.
-        """
+        """Run env setup once per test class."""
         if _e2e_enabled():
             cls.prepare_environment()
 
@@ -326,11 +239,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         'end-to-end requires NPU runner; set NPU_READY=true',
     )
     def test_runs_doc(self) -> None:
-        """Template-method entry point. The base class
-        ``run_template()`` runs the full ``pre_process`` -> ``parse`` ->
-        ``execute`` -> ``post_process`` flow. ``prepare_environment`` is
-        triggered by ``setUpClass`` once, not from ``run_template``."""
-
+        """Template-method entry point."""
         self.run_template()
 
 

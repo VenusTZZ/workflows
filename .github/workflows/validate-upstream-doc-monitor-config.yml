@@ -1,0 +1,27 @@
+# 校验 .github/upstream-doc-monitor.yaml 的配置合法性。
+# 复用检测脚本的 load_config 规则，保证 PR 校验与运行期是同一套口径。
+
+name: validate-upstream-doc-monitor-config
+
+on:
+  pull_request:
+    paths:
+      - '.github/upstream-doc-monitor.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: upstream-doc-monitor config
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PyYAML
+        run: python3 -m pip install -q pyyaml
+
+      - name: Validate config
+        run: python3 scripts/upstream_doc_monitor.py --validate-only --config .github/upstream-doc-monitor.yaml

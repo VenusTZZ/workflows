@@ -14,15 +14,22 @@ Environment variables (injected by GitHub workflow
     ``MONITORED_DOC_URL``         Required; raw URL of the document under test.
     ``NPU_READY=true``            Required, otherwise the class is skipped.
                                   End-to-end tests only run on the NPU runner.
+    ``UPSTREAM_REF``              Latest GitHub Release tag, captured by the
+                                  hidden ``#test-setup store="upstream_ref"``
+                                  block and substituted where
+                                  ``<UPSTREAM_REF>`` appears.
 """
 
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import unittest
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
+
+_CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -37,14 +44,42 @@ def _e2e_enabled() -> bool:
     return _is_truthy(os.environ.get('NPU_READY'))
 
 
+def _merge_sourced_env(*scripts: str) -> None:
+    """Source the scripts in a child bash and adopt the resulting environment.
+
+    Overwrites (not setdefault): container images may pre-set PATH-like vars
+    (e.g. LD_LIBRARY_PATH), and the CANN additions from set_env.sh must win.
+    The child inherits os.environ, so untouched vars are rewritten with their
+    own values — lossless. ``env -0`` keeps multi-line values in one entry.
+    """
+    sourced = ' && '.join(f'source {shlex.quote(script)}' for script in scripts)
+    merged = subprocess.run(
+        ['bash', '-c', f'set +u; {{ {sourced}; }} >/dev/null 2>&1; env -0'],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    for entry in merged.stdout.split('\0'):
+        if not entry or '=' not in entry:
+            continue
+        key, _, value = entry.partition('=')
+        os.environ[key] = value
+
+
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     """``Quick-start-Ascend.md`` end-to-end test: fetch doc -> validate
     contract -> run ``#test-setup`` / ``#test`` in order -> compare against
     ``#test-result``."""
 
-    DEFAULT_COMMAND_TIMEOUT = 1200  # pip wheel + tiny inference, not a compile
+    DEFAULT_COMMAND_TIMEOUT = 10800  # source build of onnxruntime-cann
     USER_AGENT = 'cosdt-ci-test/quick-start'
-    _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
+    ERROR_MARKERS = (
+        *MarkdownDocTestBase.ERROR_MARKERS,
+        'CANN failure',
+        'aclgrphBuildInitialize',
+        'aclopCompileAndExecute',
+        'ACL_ERROR_FAILURE',
+    )
 
     @classmethod
     def prepare_environment(cls) -> None:
@@ -54,26 +89,27 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         ``setUpClass``. Each labeled fence is a new subprocess, so a
         ``source set_env.sh`` block in the document does not persist.
         """
-        path_dirs = '/usr/local/sbin:/usr/local/bin'
-        current_path = os.environ.get('PATH', '')
-        if path_dirs not in current_path:
-            os.environ['PATH'] = f'{path_dirs}:{current_path}'
+        if not os.path.isfile(_CANN_SET_ENV):
+            raise RuntimeError(f'required Ascend env script missing: {_CANN_SET_ENV}')
+        _merge_sourced_env(_CANN_SET_ENV)
 
-        if os.path.isfile(cls._CANN_SET_ENV):
-            merged = subprocess.run(
-                ['bash', '-c', f'source {cls._CANN_SET_ENV} >/dev/null 2>&1; env'],
-                capture_output=True, text=True, check=True,
-            )
-            for line in merged.stdout.splitlines():
-                if '=' not in line:
-                    continue
-                key, _, value = line.partition('=')
-                os.environ.setdefault(key, value)
-            print('setup: sourced CANN env from set_env.sh')
-        else:
-            print(
-                f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
-            )
+        # CANN set_env.sh rewrites PATH. Put the active venv first so later
+        # ``python -m pip`` / ``cmake`` land in that interpreter, not
+        # /usr/local/bin's copy. npu-smi lives under /usr/local/sbin.
+        venv_bin = ''
+        if os.environ.get('VIRTUAL_ENV'):
+            venv_bin = os.path.join(os.environ['VIRTUAL_ENV'], 'bin')
+        prefix_parts = [
+            p for p in (
+                venv_bin,
+                '/usr/local/sbin',
+                '/usr/local/bin',
+                os.path.expanduser('~/.local/bin'),
+            ) if p
+        ]
+        current_path = os.environ.get('PATH', '')
+        os.environ['PATH'] = ':'.join(prefix_parts + [current_path])
+        print('setup: sourced CANN env from set_env.sh')
 
     @classmethod
     def setUpClass(cls) -> None:

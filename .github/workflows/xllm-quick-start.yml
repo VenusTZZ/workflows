@@ -47,10 +47,9 @@ jobs:
       # the cache I/O jobs (restore-cache / publish-and-persist) to
       # GitHub-hosted ubuntu-latest.
       test_runner: '["linux-aarch64-a2-1"]'
-      image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-dev-a2-arm-cann9-20260605
+      image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-0.10.0-release-hb-rc2-arm
       container_options: >-
         --volume=/data/ci-cache/modelscope/xllm:/root/.cache/modelscope
-        --volume=/data/ci-cache/xllm-build:/opt/xllm-build
       timeout_minutes: 180
       upstream_repo: xLLM-AI/xllm
       # Doc URL points to the quick start doc in this repo (cosdt-ci-test/workflows).
