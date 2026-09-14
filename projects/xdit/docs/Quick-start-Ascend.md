@@ -14,7 +14,6 @@ Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需�
 
 - 可用的 Python 环境
 - 可用的 CANN（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
-- 与上面 CANN 匹配的 `torch` + `torch_npu`，且 `torch` 能正常 `import` 并 `torch.npu.is_available() == True`（参考 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch)，按 torch ↔ torch_npu ↔ CANN 三方兼容矩阵选择版本）
 
 ### 本文档示例使用的版本
 
@@ -89,7 +88,14 @@ python --version
 Python 3.12.xxx
 ```
 
-检查 NPU 设备运行时可用：
+### 安装 torch + torch_npu + triton
+
+```shell #test-setup id="xdit-install-torch"
+pip install uv
+uv pip install "torch==2.9.0" "torch_npu==2.9.0.post2" "triton==3.5.*"
+```
+
+检查 NPU 运行时可用（验证 torch + torch_npu 安装成功）：
 
 ```shell #test id="check-npu-runtime"
 python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
@@ -107,13 +113,6 @@ count: 2
 ```{admonition}
 :class: note
 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵
-```
-
-### 安装 torch + torch_npu + triton
-
-```shell #test-setup id="xdit-install-torch"
-pip install uv
-uv pip install "torch==2.9.0" "torch_npu==2.9.0.post2" "triton==3.5.*"
 ```
 
 ### 安装 xDiT
