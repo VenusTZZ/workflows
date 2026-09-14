@@ -8,9 +8,9 @@ import subprocess
 import unittest
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
-from workflows.modelscope_cache import (
+from workflows.model_cache import (
     ensure_safetensors,
-    purge_corrupt_models,
+    purge_modelscope_corrupt,
     resolve_modelscope_cache,
 )
 
@@ -103,7 +103,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         # 7) safetensors + modelscope cache validation
         ensure_safetensors()
         try:
-            purge_corrupt_models(resolve_modelscope_cache())
+            purge_modelscope_corrupt(resolve_modelscope_cache())
         except Exception as e:
             print(f'setup: cache purge skipped ({e})')
 
