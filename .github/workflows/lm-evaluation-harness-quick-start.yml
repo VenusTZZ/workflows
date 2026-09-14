@@ -26,16 +26,13 @@
 # NPU runner (linux-aarch64-a2-1) auto-passes /dev/davinci* into the
 # container via the cluster device-plugin.
 #
-# HF endpoint: the eval run downloads the arc_easy dataset
-# (allenai/ai2_arc) via datasets.load_dataset, and huggingface.co is
-# unreachable from this cluster. The endpoint is injected inside the
-# doc's run block (export HF_ENDPOINT=..., user-facing, cache-dit
-# precedent) and by the test subclass's prepare_environment hook
-# (subprocess inheritance) - NOT here, because a reusable-workflow
-# caller cannot reliably propagate job-level env into the engine.
-# With the HF cache bind-mounted (mount 3), these only hit the
-# network on a cache miss: the first successful run populates it and
-# repeat runs load the dataset from disk.
+# Datasets: the doc's run-eval block downloads both benchmark repos
+# via ModelScope snapshot_download (modelscope/ai2_arc script-style
+# repo + allenai/winogrande parquet mirror), rewrites the official
+# task YAMLs to point dataset_path at the local dirs, and runs
+# arc_easy + winogrande on npu:0. No HF endpoint or Xet path is
+# involved; the HF cache mount (mount 3) only persists the local
+# datasets builder/arrow artifacts across runs.
 
 name: lm-evaluation-harness-quick-start
 
@@ -87,10 +84,9 @@ jobs:
       # 2. pip wheel cache, shared across projects (transformers /
       #    ms-swift / xllm precedent) - repeat runs hit the wheels for
       #    lm_eval[hf] / transformers / modelscope, pip only unpacks;
-      # 3. HF hub + datasets cache (per-project subdir) - the arc_easy
-      #    parquet and the processed arrow cache persist, so repeat runs
-      #    skip the dataset download entirely (removes the run#4 Xet
-      #    CDN timeout flake surface).
+      # 3. HF hub + datasets cache (per-project subdir) - the local
+      #    datasets builder/arrow artifacts for the ModelScope repos
+      #    persist, so repeat runs skip the dataset build entirely.
       timeout_minutes: 120
       upstream_repo: EleutherAI/lm-evaluation-harness
       # Raw URL the engine's monitor hashes and the test fetches;
@@ -100,6 +96,6 @@ jobs:
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/lm-evaluation-harness/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/lm-evaluation-harness; env contract
       # (MONITORED_DOC_URL / NPU_READY) is injected by the engine. All
-      # project env prep (CANN / CUDA constraints / HF_ENDPOINT / torch
+      # project env prep (CANN / CUDA constraints / NPU card pin / torch
       # stack) lives in the test subclass's prepare_environment hook.
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

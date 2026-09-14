@@ -56,8 +56,9 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     contract -> run ``#test-setup`` / ``#test`` in order -> compare against
     ``#test-result``.
 
-    Scope: env check + lm_eval[hf] install + a single-card NPU ``arc_easy``
-    eval run on ``Qwen/Qwen2.5-0.5B-Instruct`` (weights downloaded via
+    Scope: env check + lm_eval[hf] install + single-card NPU smoke runs of
+    the official ``arc_easy`` and ``winogrande`` tasks on
+    ``Qwen/Qwen2.5-0.5B-Instruct`` (weights and both datasets downloaded via
     ModelScope on the first run).
     """
 
@@ -129,12 +130,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     )
     _CONSTRAINTS_FILE = '/tmp/lm_eval_npu_constraints.txt'
 
-    # The doc's ``run-eval`` block also exports this inline (user-facing
-    # requirement: the arc_easy dataset is fetched from the HF hub, which
-    # is unreachable from this cluster). Injecting it here too keeps the
-    # eval subprocess covered even if that export line is edited away.
-    _HF_ENDPOINT = 'https://hf-mirror.com'
-
     # Cluster-internal nginx PyPI cache + Huawei Cloud ascend dual-source.
     _CLUSTER_INDEX = 'http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple'
     _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
@@ -176,13 +171,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         return doc_path.read_text(encoding='utf-8')
 
     # ----------------------------------------------------------
-    # prepare_environment: CANN env + CUDA constraints + HF endpoint +
+    # prepare_environment: CANN env + CUDA constraints + NPU card pin +
     # uv + torch stack probe + safetensors + modelscope cache validation
     # ----------------------------------------------------------
 
     @classmethod
     def prepare_environment(cls) -> None:
-        """Source CANN env + write CUDA exclusion list + HF endpoint +
+        """Source CANN env + write CUDA exclusion list + pin NPU card 0 +
         install uv + torch stack probe + safetensors + modelscope cache
         validation.
 
@@ -224,20 +219,14 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
         os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
-        # 2) HF endpoint for the eval-run dataset download (arc_easy ->
-        #    allenai/ai2_arc via datasets.load_dataset). Same
-        #    subprocess-inheritance rationale as the constraints above;
-        #    setdefault keeps an explicitly injected value winning.
-        #    HF_HUB_DISABLE_XET additionally forces the classic HTTP
-        #    download path: the Xet data plane connects to
-        #    us.aws.cdn.hf.co directly (HF_ENDPOINT does not apply to
-        #    it), which is unreachable from restricted networks.
-        os.environ.setdefault('HF_ENDPOINT', cls._HF_ENDPOINT)
-        os.environ.setdefault('HF_HUB_DISABLE_XET', '1')
+        # 2) Pin the visible NPU card to 0; the doc's run-eval block
+        #    targets --device npu:0 and the runner may expose several
+        #    davinci devices. Same subprocess-inheritance rationale as
+        #    the constraints above.
+        os.environ.setdefault('ASCEND_RT_VISIBLE_DEVICES', '0')
 
-        # 3) uv: the doc's ``install-lmeval`` block calls ``pip``, but keep
-        # uv for parity with the other projects' setup (the workflow may
-        # later switch the install block to ``uv pip install``). Inherit
+        # 3) uv: install the tool up front; the doc's install-lmeval
+        # block already invokes ``uv pip install`` directly. Inherit
         # ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST`` from the yml job-level
         # env (cluster cache path + trusted-host).
         subprocess.run(

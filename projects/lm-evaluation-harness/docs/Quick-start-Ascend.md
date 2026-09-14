@@ -1,8 +1,6 @@
-# Quick Start (Ascend NPU)
+# Quick Start: lm-eval on Ascend NPU
 
-在单卡昇腾 NPU 上安装 lm-evaluation-harness（lm-eval），对 `Qwen/Qwen2.5-0.5B-Instruct` 跑一次真实的 `arc_easy` 评测并输出准确率。
-
-> 单卡昇腾 NPU 上以 HuggingFace 后端（`--model hf --device npu:0`）运行 lm-eval CLI；模型经 **ModelScope** 下载后以本地路径加载，评测数据集经 HF 镜像下载，`--limit 10` 控制规模，全程无需人工交互。
+[lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness)（lm-eval）是统一的大模型评测框架，同一个 CLI 能跑数百个 benchmark 任务并接入多种模型后端。本示例在单卡昇腾 NPU 上安装 lm-eval，用 HuggingFace 后端跑通两个官方任务：`arc_easy`（AI2 推理挑战 Easy 集，0-shot）与 `winogrande`（代词消歧，5-shot）。模型与两个任务的数据集均经 ModelScope 自动下载，最后校验两个任务的准确率都落在 [0,1]。
 
 ## 前置条件
 
@@ -12,11 +10,10 @@ Atlas 900 A2 单卡（Ascend NPU），并按需完成物理机或容器内的设
 
 ### 基础软件
 
-在跑本文档**之前**，你的机器上需要已经装好并可用：
-
+在跑本文档之前，你的机器上需要已经装好并可用：
 - 可用的 Python 环境
 - 可用的 CANN（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
-- 与 CANN 匹配的 `torch` + `torch_npu`，且 `torch` 能正常 `import`、`torch.npu.is_available() == True`（参考 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch)，按 torch ↔ torch_npu ↔ CANN 三方兼容矩阵选择版本）
+- 与 CANN 匹配的 `torch` + `torch_npu`，且 `torch.npu.is_available() == True`（参考 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch)，按 torch ↔ torch_npu ↔ CANN 三方兼容矩阵选择版本）
 
 按上游 README 的方式设置 CANN 环境变量：
 
@@ -26,12 +23,8 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
 ### 本文档示例使用的版本
 
-**配套机器**：
+**配套机器**：Atlas 900 A2（Ascend 910B4，64 GB × 1）。**操作系统**：Ubuntu 22.04。**软件版本**：
 
-- **机器类型**：Atlas 900 A2 单卡
-- **操作系统**：Ubuntu 22.04
-
-**软件版本**：
 
 | 组件 | 版本 |
 | --- | --- |
@@ -39,9 +32,11 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 | CANN | 9.1.0 |
 | torch | 2.9.0+cpu |
 | torch_npu | 2.9.0.post2 |
-| lm-eval | 0.4.12（经 PyPI 安装） |
-| 模型 | `Qwen/Qwen2.5-0.5B-Instruct`（经 ModelScope 下载） |
-| 评测任务 | `arc_easy`（`--limit 10` 功能测试口径） |
+| lm-eval | 0.4.13（PyPI 安装） |
+| transformers | <5.0 |
+| modelscope | 1.37.0 |
+| 模型 | [Qwen/Qwen2.5-0.5B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct)，约 1 GB |
+| 任务 | `arc_easy`、`winogrande` |
 
 ## 环境检查
 
@@ -52,7 +47,6 @@ python --version
 ```
 
 输出结果如下：
-
 ```shell #test-result id="check-py" fuzzy='xxx'
 Python 3.12.xxx
 ```
@@ -64,81 +58,122 @@ python -c "import torch, torch_npu; print('torch=', torch.__version__); print('t
 ```
 
 输出结果如下：
-
-```shell #test-result id="check-torch"
-torch= 2.9.0+cpu
-torch_npu= 2.9.0.post2
+```shell #test-result id="check-torch" fuzzy='xxx'
+torch=xxx
+torch_npu=xxx
 is_available: True
 count: 1
 ```
 
-> 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
+```{admonition}
+:class: note
+如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵
+```
 
 ## 安装 lm-eval
 
+安装 `lm_eval[hf]`（HuggingFace 模型后端）、`transformers<5.0` 与 `modelscope`，装完打印版本验证：
+
 ```shell #test id="install-lmeval"
-python -m pip install "lm_eval[hf]" "transformers<5" modelscope
-python -c "from importlib.metadata import version; print('lm_eval', version('lm_eval')); print('transformers', version('transformers')); print('modelscope', version('modelscope'))"
+uv pip install "lm_eval[hf]" "transformers<5.0" "modelscope==1.37.0"
+python -c "import lm_eval, transformers, modelscope; print('lm_eval', lm_eval.__version__); print('transformers', transformers.__version__); print('modelscope', modelscope.__version__)"
 ```
 
 输出结果如下：
-
-```shell #test-result id="install-lmeval" fuzzy='xxx' fuzzy='...'
-...lm_eval 0.4.xxx
-transformers 4.xxx
-modelscope 1.xxx
+```shell #test-result id="install-lmeval" fuzzy='xxx'
+lm_eval xxx
+transformers xxx
+modelscope 1.37.0
 ```
 
-> - `lm_eval[hf]` 安装 HuggingFace transformers 后端（0.4.x 起 base 包不含 `transformers`/`torch`；本机已装的 torch 栈不会被改动）。
-> - 显式钉住 `transformers<5`：transformers 5.x 与 lm-eval 0.4.x 生态的兼容性未经上游验证。
-> - `modelscope` 为 ModelScope 下载模型所需，需显式安装。
+## 运行评测
 
-## 下载模型
+下面这段脚本一次完成下载与评测。模型约 1 GB，由 `snapshot_download` 首次运行时自动下载到默认缓存；两个任务的定义直接复制安装好的官方 YAML，只把 `dataset_path` 改成 ModelScope 下载目录，winogrande 的镜像仓库没有构建脚本只有 parquet 文件，因此这份 YAML 去掉 `dataset_name` 并指向本地 parquet 目录。`--limit 10` 是跑通口径，不代表真实榜单值。
 
-```shell #test-setup store="model_dir"
-python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen2.5-0.5B-Instruct', revision='master'))" | tail -n 1
+```shell #test id="run-eval"
+python << 'PY'
+import os
+import shutil
+import subprocess
+import sys
+
+import lm_eval
+from modelscope import snapshot_download
+
+model_dir = snapshot_download("Qwen/Qwen2.5-0.5B-Instruct")
+arc_repo = snapshot_download("modelscope/ai2_arc", repo_type="dataset")
+wg_repo = snapshot_download("allenai/winogrande", repo_type="dataset")
+
+tasks_dir = os.path.join(os.path.dirname(lm_eval.__file__), "tasks")
+
+with open(os.path.join(tasks_dir, "arc", "arc_easy.yaml"), encoding="utf-8") as fh:
+    arc_yaml = fh.read().replace("allenai/ai2_arc", arc_repo)
+with open("arc_easy_npu.yaml", "w", encoding="utf-8") as fh:
+    fh.write(arc_yaml)
+
+wg_data = "winogrande_xl_data"
+shutil.rmtree(wg_data, ignore_errors=True)
+os.makedirs(wg_data)
+for name in os.listdir(os.path.join(wg_repo, "winogrande_xl")):
+    if name.endswith(".parquet"):
+        shutil.copy2(os.path.join(wg_repo, "winogrande_xl", name), wg_data)
+with open(os.path.join(tasks_dir, "winogrande", "default.yaml"), encoding="utf-8") as fh:
+    wg_yaml = fh.read().replace("allenai/winogrande", os.path.abspath(wg_data))
+wg_yaml = "\n".join(
+    line for line in wg_yaml.splitlines() if "dataset_name" not in line
+)
+shutil.copy2(
+    os.path.join(tasks_dir, "winogrande", "preprocess_winogrande.py"), "."
+)
+with open("winogrande_npu.yaml", "w", encoding="utf-8") as fh:
+    fh.write(wg_yaml)
+
+shutil.rmtree("output/lm_eval_out", ignore_errors=True)
+run = [sys.executable, "-m", "lm_eval", "run",
+       "--model", "hf", "--model_args", "pretrained=" + model_dir,
+       "--device", "npu:0", "--batch_size", "8", "--limit", "10"]
+subprocess.run(run + ["--tasks", "arc_easy_npu.yaml",
+                      "--output_path", "output/lm_eval_out/arc"], check=True)
+subprocess.run(run + ["--tasks", "winogrande_npu.yaml", "--num_fewshot", "5",
+                      "--output_path", "output/lm_eval_out/winogrande"], check=True)
+print("LM_EVAL_DONE")
+PY
 ```
 
-> `tail -n 1` 过滤下载进度输出，仅保留模型目录路径；Qwen2.5-0.5B-Instruct fp16 约 1GB，首次运行请耐心等待。
+输出结果如下（评测日志较长，此处仅校验末尾标记）：
 
-## 运行评测（单卡 NPU）
-
-```shell #test id="run-eval" load="model_dir>>model"
-export HF_ENDPOINT=https://hf-mirror.com
-export HF_HUB_DISABLE_XET=1
-python -m lm_eval run --model hf \
-    --model_args pretrained=<model> \
-    --tasks arc_easy \
-    --device npu:0 \
-    --batch_size 8 \
-    --limit 10 \
-    --output_path /tmp/lm_eval_out
+```shell #test-result id="run-eval"
+...
+LM_EVAL_DONE
 ```
-
-输出结果如下（评测日志较长，此处仅校验关键锚点）：
-
-```shell #test-result id="run-eval" fuzzy='...'
-...arc_easy...acc...
-```
-
-- `--model hf`：HuggingFace transformers 后端；`pretrained=<本地目录>` 直接加载已下载的模型，评测进程不再联网取模型。
-- `--device npu:0`：lm-eval 的设备白名单以 `npu:<i>` 形式收录 NPU 设备（单卡即 `npu:0`）；裸 `npu` 不在白名单内，勿省略索引。
-- `--tasks arc_easy --limit 10`：AI2 ARC-Easy 小规模功能评测；`--limit 10` 只取前 10 个样本，控制墙钟时间（数值本身不代表模型能力）。
-- `--batch_size 8`：0.5B 模型单卡 batch 8。
-- `--output_path /tmp/lm_eval_out`：结果目录（lm-eval 会把结果 JSON 写入该目录，文件名含模型参数哈希），供下一步校验。
-- `HF_ENDPOINT=https://hf-mirror.com`：评测数据集 `allenai/ai2_arc` 默认从 HuggingFace Hub 下载；机器不可达 HuggingFace 时必须设置镜像。
-- `HF_HUB_DISABLE_XET=1`：禁用 Xet 下载路径——Xet 的数据面直连 `us.aws.cdn.hf.co`（不受 `HF_ENDPOINT` 控制），受限网络不可达；禁用后退回经典 HTTP 下载，文件体经镜像反代获取。
 
 ## 检查评测结果
 
+检查结果 JSON 中两个任务的准确率都在 [0,1] 区间并打印：
+
 ```shell #test id="check-acc"
-python -c "import glob, json; paths = glob.glob('/tmp/lm_eval_out/**/*.json', recursive=True); assert paths, 'no result json'; r = json.load(open(paths[0])); acc = r['results']['arc_easy']['acc,none']; assert 0.0 <= acc <= 1.0, acc; print('acc', round(acc, 4))"
+python << 'PY'
+import glob
+import json
+
+found = {}
+for path in glob.glob("output/lm_eval_out/**/*.json", recursive=True):
+    for task, metrics in json.load(open(path)).get("results", {}).items():
+        if task in ("arc_easy", "winogrande") and "acc" in metrics:
+            value = metrics["acc"]
+            found[task] = value.get("value", value) if isinstance(value, dict) else value
+for task in ("arc_easy", "winogrande"):
+    assert task in found
+    assert 0.0 <= float(found[task]) <= 1.0
+    print(task, "acc=", round(float(found[task]), 4))
+PY
 ```
 
 输出结果如下：
-
 ```shell #test-result id="check-acc" fuzzy='xxx'
-acc xxx
+arc_easy acc=xxx
+winogrande acc=xxx
 ```
 
-> 结果 JSON 的 `results.arc_easy` 下 `acc,none`（原始准确率）与 `acc_norm,none`（长度归一化准确率）均为 [0,1] 区间浮点数。
+更多任务、批量评测与更多后端用法见 [lm-eval 官方文档](https://github.com/EleutherAI/lm-evaluation-harness/blob/main/docs/interface.md)。
+
