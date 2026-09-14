@@ -184,7 +184,8 @@ peft 侧新增（引擎零改动）：
 - 不为引擎另建 result schema，沿用 [schemas/result.schema.json](../schemas/result.schema.json) 与 [manifest_check_result.schema.json](../schemas/manifest_check_result.schema.json)。
 - 不跨 runner 切分单条 example（`max-parallel` 上限语义不变）。
 - 不改写上游 example 本体；看护失败如实标红，修复走上游 PR。
-- **不做上游 example 新增发现**（磁盘有、清单无的 new_paths）：本引擎只对已声明的 supported 条目负责，新增未分类**不阻塞执行**；「上游多了什么该纳入看护」是独立关注点，后续单独设计监控 workflow（定期扫描目标树与清单求差集、报告新增——形态待定）。清单的 `scan.root` 等 scan 配置届时由它消费。
+- **不做上游 example 新增发现**（磁盘有、清单无的 new_paths）：本引擎只对已声明的 supported 条目负责，新增未分类**不阻塞执行**；「上游多了什么该纳入看护」是独立关注点，后续单独设计监控 workflow（定期扫描目标树与清单求差集、报告新增——形态待定）。
+- **扫描模型简化为 files-only**（发现 workflow 采用；legacy 的 `unit: directories / mixed` 连同 marker / max_depth 废弃）：对账单位统一为**入口文件**——`scan` 只有三个键：`root`、`include_extensions`（只扫这几类，`.h`/`.md` 天然不进）、`exclude`（排除少量非 example 目录，如 llama.cpp 的 `examples/llama.android`）。多文件 example 的内部 helper 源文件是一次性 triage 进 unsupported 的噪声单元，成本有界；上游新增 example = 出现新的入口文件，信号不丢。随之 `path` 语义统一为**入口源文件**；`exec` 仅剩一种用途——path 是源码而启动的是构建产物（llama.cpp：`path: examples/simple/simple.cpp` + `exec: build/bin/llama-simple`）；python/shell 例不需要 exec，启动命令由项目脚本按扩展名分发（`.sh` → bash，其余 → python，解释器即 setup 装依赖的那个）。实施为独立 PR（涉及扫描脚本与 llama.cpp / whisper.cpp / trl 三个存量清单迁移），不混入本 PR。
 
 ## 3. 核心数据结构
 
@@ -374,3 +375,4 @@ GET /repos/<upstream_repo>/releases/latest    → release 信号（tag_name）
 | 2026-09-11 | validate-results 的 "Write result JSON" 内联 bash+python 抽出为 `scripts/write_example_result.py`（Job API 查询改 urllib 分页，去掉 gh/jq 依赖；conclusion 归一化与 JSON 写出可单测），新增 5 个单测；引擎步骤收敛为一行调用。 | 与 check_supported_entries.py 同一模式：引擎私有逻辑放 scripts/ 可单测，workflow 里不藏代码。 |
 | 2026-09-11 | record-outcome job 更名 save-monitor-state（职责即“持久化 monitor state，run 内唯一保存点”），并注明与 validate-results 并行是有意设计：发布问题不得门控状态回写或触发 NPU 重跑，且尽早落盘缩小取消丢失窗口。 | 命名评审：record-outcome 像记日志，名不副实；执行顺序评审确认二者无依赖、不应串行。 |
 | 2026-09-14 | 删除容器 `options: --shm-size=64g`（含 TODO）：首轮 NPU run（dispatch, peft examples/sft 全绿）实测 /dev/shm=16G 非 64G——选项未被应用，16G 来自 runner 自身；该负载 shm Used=0，无需配置。 | 实测证据见 run 34818091939 的 df 输出；`df -h /dev/shm` 诊断行保留在 Run example 步骤。 |
+| 2026-09-14 | 评审确定扫描模型简化为 files-only（§2.7）：scan 收敛为 root + include_extensions + exclude，废弃 unit: directories/mixed 及 marker/max_depth；对账单位统一为入口文件；exec 语义收窄为「path 是源码、启动的是构建产物」（py/sh 不需要——项目脚本按扩展名分发 bash/python）。实施为独立 PR，不混入本 PR。 | llama.cpp examples/ 下非 example 目录极少且可 exclude（android/swift 目录被扩展名白名单天然滤掉）；目录单元引入的 unit/marker/max_depth/mixed 复杂度不值。 |
