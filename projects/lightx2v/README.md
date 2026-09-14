@@ -10,10 +10,10 @@
 
 `lightx2v-quick-start.yml` 接受：
 
-- `schedule`：每 6 小时轮询上游一次，文档 / 上游 main HEAD 有变化才在 NPU 上跑 `tests.test_quick_start_ascend`（当前暂时注释，本轮文档改写跑通后恢复）。
+- `schedule`：每 6 小时轮询上游一次，上游新 release / 文档有变化才在 NPU 上跑 `tests.test_quick_start_ascend`（当前暂时注释，跑通后恢复）。
 - `workflow_dispatch`：手动 trigger。
 
-上游无稳定 release tag（只有滚动的 main 和一个 0.5.0 tag），文档跟随 main，故 trigger 钉 `fixed_ref: main`，monitor 轮询 `/commits/main` 作为变化键；`UPSTREAM_REF` 注入但文档体不消费。
+文档跟随上游最新 release tag，clone 块经 store/load 把引擎注入的 `UPSTREAM_REF` 打进 `git clone --branch <ref>`，监视什么就装什么，无需 fixed_ref。
 
 cwd 是 `workflows/projects/lightx2v`（测试类 chdir 到 `/root/lightx2v-test` 钉文档执行目录，ModelScope 默认缓存 `~/.cache/modelscope` 由宿主卷 `/data/ci-cache/modelscope/lightx2v` 持久化）。环境契约：`MONITORED_DOC_URL` / `UPSTREAM_REF` / `NPU_READY` 由 engine 注入；CANN env source、CUDA 排除清单、卡号 pin、torch 栈探针、ModelScope 缓存校验、文档执行目录 chdir 等纯 CI 侧准备都在测试类的 `prepare_environment` 钩子里，文档保持纯用户视角。
 

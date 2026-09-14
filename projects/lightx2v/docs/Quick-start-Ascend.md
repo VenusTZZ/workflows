@@ -15,7 +15,7 @@
 | torch / torch_npu | 2.9.0 / 2.9.0.post2 | 下方安装 |
 | torchvision | 0.24.* | 下方安装 |
 | triton | 3.5.* | 下方安装 |
-| lightx2v | GitHub main 分支 | 下方源码安装 |
+| lightx2v | 最新 release（[GitHub Releases](https://github.com/ModelTC/LightX2V/releases)） | 下方源码安装 |
 | 模型 | [Wan-AI/Wan2.1-T2V-1.3B](https://modelscope.cn/models/Wan-AI/Wan2.1-T2V-1.3B)，约 17.6 GB | 首次运行自动下载 |
 
 **配套机器**：Atlas 900 A2 PODc（Ascend 910B4，32 GB × 1），Ubuntu 22.04。
@@ -43,13 +43,19 @@ uv pip install "torch==2.9.0" "torchvision==0.24.*" "torch_npu==2.9.0.post2" "tr
 
 ## 📦 安装 LightX2V
 
-**克隆项目。** 后续步骤都在当前目录下执行：
+<!--
+```shell #test-setup store="upstream_ref"
+echo "${UPSTREAM_REF}"
+```
+-->
 
-```shell #test-setup id="lightx2v-install-source"
-git clone https://github.com/ModelTC/LightX2V.git
+**克隆项目。** 检出最新 release tag，`<ref>` 填上表 lightx2v 行的版本号。后续步骤都在当前目录下执行：
+
+```shell #test-setup id="lightx2v-install-source" load="upstream_ref>>ref"
+git clone --branch <ref> https://github.com/ModelTC/LightX2V.git
 ```
 
-**安装代码与依赖。** LightX2V 没有发布到 PyPI，从克隆目录源码安装。它的依赖清单里含只在 x86_64 提供预编译包的项，整包解析在 aarch64 上装不上，所以先跳过依赖解析装代码，再按 NPU 推理实际用到的清单补齐：
+**安装代码与依赖。** LightX2V 未发布 PyPI 包，从克隆目录源码安装。依赖清单里含只在 x86_64 提供预编译包的项，aarch64 上整包解析装不上，先跳过依赖解析装代码，再按 NPU 推理实际用到的清单补齐：
 
 ```shell #test-setup id="lightx2v-install-deps"
 uv pip install --no-deps ./LightX2V
