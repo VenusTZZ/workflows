@@ -1,6 +1,6 @@
 # xDiT（Ascend NPU）
 
-xDiT（PyPI 包名 `xfuser`）是一套统一的并行推理框架：同一组 `xFuser*Pipeline` API 配合 `xFuserArgs` CLI 参数系统，切换模型或并行策略只改参数，不换代码。本示例在单卡昇腾 NPU 上生成第一张图，再用同一脚本展示 2 卡序列并行。
+xDiT（PyPI 包名 `xfuser`）是一套统一的并行推理框架：同一组 `xFuser*Pipeline` API 配合 `xFuserArgs` CLI 参数系统，切换模型或并行策略只改参数。本示例在单卡昇腾 NPU 上生成第一张图，再用同一脚本展示 2 卡序列并行。
 
 ## 前置条件
 
@@ -228,10 +228,10 @@ size: xxx
 
 ### 一步到多卡：序列并行
 
-同一个脚本、同一个模型，只加 `--ulysses_degree 2` 即可在 2 卡上做序列并行（Ulysses）：
+同一个脚本、同一个模型，加 `--ulysses_degree 2` 在 2 卡上做序列并行，attention 用 SDPA 后端：
 
 ```shell #test id="xdit-sd3-2card"
-torchrun --nproc_per_node=2 sd3_npu.py --prompt "a tiny test sketch" --height 256 --width 256 --num_inference_steps 1 --seed 42 --ulysses_degree 2
+torchrun --nproc_per_node=2 sd3_npu.py --prompt "a tiny test sketch" --height 256 --width 256 --num_inference_steps 1 --seed 42 --ulysses_degree 2 --attention_backend SDPA
 ```
 
 ```shell #test-result id="xdit-sd3-2card"
