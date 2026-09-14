@@ -49,8 +49,8 @@ concurrency:
 on:
   # Enable after the first successful workflow_dispatch run (same
   # convention as mooncake / tensorflow / most of the repo).
-  # schedule:
-  #   - cron: '45 */6 * * *'
+  schedule:
+    - cron: '45 */6 * * *'
   workflow_dispatch:
 
 permissions:
