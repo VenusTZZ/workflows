@@ -2,6 +2,22 @@ version: 1
 scan:
   root: examples
   include_extensions: ['.sh', '.py', '.yaml']
+  # files-only 模型（docs/examples-guard-engine.md §2.7）。exclude 项为目录
+  # 路径（递归剪枝）或 glob（`**` 跨目录，匹配相对 target root 的路径），
+  # 排除"不是 example 的配套物"：共享 helper 模块、上游自测、运行配置、
+  # 入口脚本背后的实现文件。扫描工具的 exclude 支持随发现 workflow 的
+  # PR 落地；examples 引擎不扫描，本段当前只是声明。
+  exclude:
+    - examples/sft/configs           # deepspeed/fsdp 配置，被 run_peft_*.sh 引用
+    - examples/sft/train.py          # run_peft.sh 背后的实现，入口是 .sh
+    - '**/utils'                    # 各 example 的共享 helper 模块目录
+    - '**/__init__.py'
+    - '**/utils.py'                 # 单文件版 helper
+    - '**/datautils.py'
+    - '**/preprocess.py'            # 数据预处理脚本
+    - '**/test_*'                   # 上游自测（.py / .sh）
+    - '**/*config*.yaml'            # accelerate 等运行配置
+
 supported:
   # Upstream's only fully-parameterized shell training entry (drives
   # train.py: TRL SFTTrainer + LoRA). The script defaults to
@@ -41,45 +57,25 @@ unsupported:
   - examples/adamss_finetuning/glue_adamss_asa_example.py
   - examples/adamss_finetuning/glue_adamss_asa_manual_example.py
   - examples/adamss_finetuning/image_classification_adamss_asa.py
-  - examples/adamss_finetuning/test_adamss_quick.py
   - examples/alora_finetuning/alora_finetuning.py
   - examples/arrow_multitask/arrow_phi3_mini.py
   - examples/bdlora_finetuning/chat.py
   - examples/beft_finetuning/beft_finetuning.py
-  - examples/boft_controlnet/__init__.py
   - examples/boft_controlnet/eval.py
   - examples/boft_controlnet/eval.sh
-  - examples/boft_controlnet/test_controlnet.py
-  - examples/boft_controlnet/test_controlnet.sh
   - examples/boft_controlnet/train_controlnet.py
   - examples/boft_controlnet/train_controlnet.sh
-  - examples/boft_controlnet/utils/__init__.py
-  - examples/boft_controlnet/utils/args_loader.py
-  - examples/boft_controlnet/utils/dataset.py
-  - examples/boft_controlnet/utils/light_controlnet.py
-  - examples/boft_controlnet/utils/pipeline_controlnet.py
-  - examples/boft_controlnet/utils/tracemalloc.py
-  - examples/boft_controlnet/utils/unet_2d_condition.py
-  - examples/boft_dreambooth/__init__.py
   - examples/boft_dreambooth/train_dreambooth.py
   - examples/boft_dreambooth/train_dreambooth.sh
-  - examples/boft_dreambooth/utils/__init__.py
-  - examples/boft_dreambooth/utils/args_loader.py
-  - examples/boft_dreambooth/utils/dataset.py
-  - examples/boft_dreambooth/utils/tracemalloc.py
   - examples/cartridge_self_study/arxiv_synthesize.py
   - examples/cartridge_self_study/arxiv_train.py
   - examples/cartridge_self_study/synthesize.py
   - examples/cartridge_self_study/train_distill.py
-  - examples/causal_language_modeling/accelerate_ds_zero3_cpu_offload_config.yaml
   - examples/causal_language_modeling/peft_lora_clm_accelerate_ds_zero3_offload.py
-  - examples/conditional_generation/accelerate_ds_zero3_cpu_offload_config.yaml
   - examples/conditional_generation/peft_adalora_seq2seq.py
   - examples/conditional_generation/peft_lora_seq2seq_accelerate_ds_zero3_offload.py
   - examples/conditional_generation/peft_lora_seq2seq_accelerate_fsdp.py
   - examples/corda_finetuning/corda_finetuning.py
-  - examples/corda_finetuning/datautils.py
-  - examples/corda_finetuning/preprocess.py
   - examples/deft_dreambooth/train_dreambooth.py
   - examples/deft_finetuning/deft_finetuning.py
   - examples/delora_finetuning/delora_finetuning.py
@@ -88,7 +84,6 @@ unsupported:
   - examples/ephemeral_gpu_offloading/load_with_dora.py
   - examples/eva_finetuning/eva_finetuning.py
   - examples/eva_finetuning/eva_finetuning_multi_accelerator.py
-  - examples/eva_finetuning/utils.py
   - examples/feature_extraction/peft_lora_embedding_semantic_search.py
   - examples/fp4_finetuning/finetune_fp4_opt_bnb_peft.py
   - examples/frod_finetuning/frod_image_classification.py
@@ -98,11 +93,6 @@ unsupported:
   - examples/hira_finetuning/hira_finetuning.py
   - examples/hra_dreambooth/train_dreambooth.py
   - examples/hra_dreambooth/train_dreambooth.sh
-  - examples/hra_dreambooth/utils/__init__.py
-  - examples/hra_dreambooth/utils/args_loader.py
-  - examples/hra_dreambooth/utils/dataset.py
-  - examples/hra_dreambooth/utils/tracemalloc.py
-  - examples/int8_training/config.yaml
   - examples/int8_training/fine_tune_blip2_int8.py
   - examples/int8_training/peft_adalora_whisper_large_training.py
   - examples/int8_training/run_adalora_whisper_int8.sh
@@ -123,20 +113,14 @@ unsupported:
   - examples/oft_dreambooth/train_dreambooth.py
   - examples/olora_finetuning/olora_finetuning.py
   - examples/orthogonal_subspace_learning/osf_continual_learning.py
-  - examples/orthogonal_subspace_learning/utils.py
   - examples/peanut_finetuning/peanut_finetuning.py
   - examples/pissa_finetuning/pissa_finetuning.py
-  - examples/pissa_finetuning/preprocess.py
   - examples/psoft_finetuning/psoft_finetuning.py
   - examples/pvera/confidence_interval_generation.py
   - examples/qalora_finetuning/qalora_gptq_finetuning.py
   - examples/randlora_finetuning/randlora_finetuning.py
   - examples/road_finetuning/road_finetuning.py
   - examples/sequence_classification/peft_no_lora_accelerate.py
-  - examples/sft/configs/deepspeed_config.yaml
-  - examples/sft/configs/deepspeed_config_z3_qlora.yaml
-  - examples/sft/configs/fsdp_config.yaml
-  - examples/sft/configs/fsdp_config_qlora.yaml
   - examples/sft/run_peft_deepspeed.sh
   - examples/sft/run_peft_fsdp.sh
   - examples/sft/run_peft_fsdp_gptq.sh
@@ -144,8 +128,6 @@ unsupported:
   - examples/sft/run_peft_qlora_deepspeed_stage3.sh
   - examples/sft/run_peft_qlora_fsdp.sh
   - examples/sft/run_unsloth_peft.sh
-  - examples/sft/train.py
-  - examples/sft/utils.py
   - examples/shadow_finetuning/shadow_finetuning.py
   - examples/shira_finetuning/shira_finetuning.py
   - examples/stable_diffusion/convert_sd_adapter_to_peft.py

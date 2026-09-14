@@ -40,7 +40,6 @@ else
 fi
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
-export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
 python -c "import torch, torch_npu; print('NPU available:', torch.npu.is_available(), 'devices:', torch.npu.device_count())"
 
 expand_overlay() {

@@ -39,6 +39,17 @@ def conclusion_to_status(conclusion: str) -> str:
     return 'failure'
 
 
+def job_matches(name: str, expected: str) -> bool:
+    """Exact match, or suffix match for called-workflow name prefixes.
+
+    Inside a reusable workflow github.job is unprefixed
+    ('run-example (<path>)'), but the Jobs API prefixes every job name
+    with the caller's workflow name ('peft-examples / run-example
+    (<path>)'); chained reusable workflows nest further prefixes.
+    """
+    return name == expected or name.endswith(f' / {expected}')
+
+
 def fetch_conclusion(repo: str, run_id: str, job_name: str,
                      token: str) -> str | None:
     """Find the job by display name; return its conclusion or None."""
@@ -54,7 +65,7 @@ def fetch_conclusion(repo: str, run_id: str, job_name: str,
             data = json.load(response)
         jobs = data.get('jobs') or []
         for job in jobs:
-            if job.get('name') == job_name:
+            if job_matches(job.get('name') or '', job_name):
                 return job.get('conclusion')
         if len(jobs) < 100:
             return None

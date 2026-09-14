@@ -184,7 +184,8 @@ peft 侧新增（引擎零改动）：
 - 不为引擎另建 result schema，沿用 [schemas/result.schema.json](../schemas/result.schema.json) 与 [manifest_check_result.schema.json](../schemas/manifest_check_result.schema.json)。
 - 不跨 runner 切分单条 example（`max-parallel` 上限语义不变）。
 - 不改写上游 example 本体；看护失败如实标红，修复走上游 PR。
-- **不做上游 example 新增发现**（磁盘有、清单无的 new_paths）：本引擎只对已声明的 supported 条目负责，新增未分类**不阻塞执行**；「上游多了什么该纳入看护」是独立关注点，后续单独设计监控 workflow（定期扫描目标树与清单求差集、报告新增——形态待定）。清单的 `scan.root` 等 scan 配置届时由它消费。
+- **不做上游 example 新增发现**（磁盘有、清单无的 new_paths）：本引擎只对已声明的 supported 条目负责，新增未分类**不阻塞执行**；「上游多了什么该纳入看护」是独立关注点，后续单独设计监控 workflow（定期扫描目标树与清单求差集、报告新增——形态待定）。
+- **扫描模型简化为 files-only**（发现 workflow 采用；legacy 的 `unit: directories / mixed` 连同 marker / max_depth 废弃）：对账单位统一为**入口文件**——`scan` 只有三个键：`root`、`include_extensions`（只扫这几类，`.h`/`.md` 天然不进）、`exclude`（排除"不是 example 的配套物"——项为目录路径（递归剪枝）或 glob（`**` 跨目录）：llama.cpp 用于非 example 目录（`examples/llama.android`），peft 用于 helper 模块（`**/utils`、`**/__init__.py`）、上游自测（`**/test_*`）、运行配置（`**/*config*.yaml`）、入口背后的实现（`examples/sft/train.py`））。多文件 example 的内部 helper 源文件是一次性 triage 进 unsupported 的噪声单元，成本有界；上游新增 example = 出现新的入口文件，信号不丢。随之 `path` 语义统一为**入口源文件**；`exec` 仅剩一种用途——path 是源码而启动的是构建产物（llama.cpp：`path: examples/simple/simple.cpp` + `exec: build/bin/llama-simple`）；python/shell 例不需要 exec，启动命令由项目脚本按扩展名分发（`.sh` → bash，其余 → python，解释器即 setup 装依赖的那个）。实施为独立 PR（涉及扫描脚本与 llama.cpp / whisper.cpp / trl 三个存量清单迁移），不混入本 PR。
 
 ## 3. 核心数据结构
 
@@ -198,7 +199,7 @@ peft 侧新增（引擎零改动）：
 | `target_ref` | string | `''` | dispatch 专用：覆盖被测 ref（空则 `main`） |
 | `max_parallel` | number | `4` | run-example 矩阵并行上限 |
 
-容器零挂载：该 CI 的 runner 无法提供 host 路径挂载（`/data/ci-cache`、Ascend driver 等），自托管 runner 的容器默认可见 NPU 设备（与 quick-start 引擎同一假设）。卡数由 runner 标签钉死（`linux-aarch64-a2-N` 即 N 卡，选对 runner 即选对卡），本设计无任何卡配置字段——schema 已删除 `npu_devices`，peft 清单不含它。legacy 清单里的 `npu_devices` 是旧设计遗留，共享脚本检测到时仍为其派生设备挂载（兼容，不属于本设计）。容器 options 暂留 `--shm-size=64g`，**待首轮 NPU run 验证**（当前 overlay 未开多 worker，/dev/shm 用量应极小；确认无用即删）。模型缓存无需挂载：ModelScope 走容器内默认缓存目录（`~/.cache/modelscope`），容器销毁即丢，但 release 触发频率低，重下载可接受。镜像、runner、超时逐条目来自矩阵——引擎 YAML 不出现任何调度参数。
+容器零挂载：该 CI 的 runner 无法提供 host 路径挂载（`/data/ci-cache`、Ascend driver 等），自托管 runner 的容器默认可见 NPU 设备（与 quick-start 引擎同一假设）。卡数由 runner 标签钉死（`linux-aarch64-a2-N` 即 N 卡，选对 runner 即选对卡），本设计无任何卡配置字段——schema 已删除 `npu_devices`，peft 清单不含它。legacy 清单里的 `npu_devices` 是旧设计遗留，共享脚本检测到时仍为其派生设备挂载（兼容，不属于本设计）。容器零 options：首轮 run 实测 `/dev/shm` 为 16G（runner 自带，非 docker 默认 64MB），`--shm-size=64g` 未被应用且该负载 shm 用量为 0——已删。Run example 步骤保留一行 `df -h /dev/shm` 诊断。模型缓存无需挂载：ModelScope 走容器内默认缓存目录（`~/.cache/modelscope`），容器销毁即丢，但 release 触发频率低，重下载可接受。镜像、runner、超时逐条目来自矩阵——引擎 YAML 不出现任何调度参数。
 
 ### 3.2 薄触发器 `peft-examples.yml`（全文骨架）
 
@@ -324,7 +325,7 @@ GET /repos/<upstream_repo>/releases/latest    → release 信号（tag_name）
 
 - **monitor → manifest-check / run-example / validate-results**：job outputs `need_to_run` / `trigger` / `target_repo` / `target_ref`（`need_to_run`：本周期是否需要执行——新 release、失败重试或手动触发；`reason` 仅存于 monitor 内部日志，不再是 job output）；下游 checkout 目标仓、result.json 记 `trigger` / `target_ref`。
 - **manifest-check → run-example / validate-results**：job outputs `supported_matrix`（JSON 数组，条目含 `device_options` 派生值）/ `has_supported`；空矩阵时两个下游 job 整体跳过。
-- **run-example → validate-results**：不传数据，validate-results 调 `scripts/write_example_result.py`（Job API 按 `run-example (<path>)` job 名查 conclusion，urllib 分页，无 gh/jq 依赖）——NPU runner 不写 artifact，发布统一在 GitHub 托管 runner 上完成。
+- **run-example → validate-results**：不传数据，validate-results 调 `scripts/write_example_result.py`（Job API 按 `run-example (<path>)` job 名查 conclusion——**后缀匹配**：可复用 workflow 的 Jobs API 会给 job 名加 `<调用方名> / ` 前缀，如 `peft-examples / run-example (…)`；urllib 分页，无 gh/jq 依赖）——NPU runner 不写 artifact，发布统一在 GitHub 托管 runner 上完成。
 - **monitor + run-example + manifest-check → save-monitor-state**：被测 tag 取自 `needs.monitor.outputs.target_ref`，成败由 `needs.run-example.result`（矩阵聚合）+ `needs.manifest-check.result` + `has_supported` 映射为 `success` / `failure`；save-monitor-state 不 restore，直接重建单文件状态（tag + outcome）单次保存（§2.4.3）。
 
 ### 4.5 与 quick-start 引擎的对照
@@ -373,3 +374,7 @@ GET /repos/<upstream_repo>/releases/latest    → release 信号（tag_name）
 | 2026-09-11 | manifest-check 的内联校验抽出为脚本 `scripts/check_supported_entries.py`（CLI 与同目录脚本一致：`--target-root` / `--manifest`，GITHUB_OUTPUT 产出矩阵），引擎恢复 `python3 workflows/scripts/...` 调用形态；新增 5 个单测（tests/test_check_supported_entries.py）。 | 引擎私有逻辑也应放全仓共用脚本目录并可单测——内联 heredoc 验证时需从 YAML 里抠代码，不可维护。 |
 | 2026-09-11 | validate-results 的 "Write result JSON" 内联 bash+python 抽出为 `scripts/write_example_result.py`（Job API 查询改 urllib 分页，去掉 gh/jq 依赖；conclusion 归一化与 JSON 写出可单测），新增 5 个单测；引擎步骤收敛为一行调用。 | 与 check_supported_entries.py 同一模式：引擎私有逻辑放 scripts/ 可单测，workflow 里不藏代码。 |
 | 2026-09-11 | record-outcome job 更名 save-monitor-state（职责即“持久化 monitor state，run 内唯一保存点”），并注明与 validate-results 并行是有意设计：发布问题不得门控状态回写或触发 NPU 重跑，且尽早落盘缩小取消丢失窗口。 | 命名评审：record-outcome 像记日志，名不副实；执行顺序评审确认二者无依赖、不应串行。 |
+| 2026-09-14 | 删除容器 `options: --shm-size=64g`（含 TODO）：首轮 NPU run（dispatch, peft examples/sft 全绿）实测 /dev/shm=16G 非 64G——选项未被应用，16G 来自 runner 自身；该负载 shm Used=0，无需配置。 | 实测证据见 run 34818091939 的 df 输出；`df -h /dev/shm` 诊断行保留在 Run example 步骤。 |
+| 2026-09-14 | 评审确定扫描模型简化为 files-only（§2.7）：scan 收敛为 root + include_extensions + exclude，废弃 unit: directories/mixed 及 marker/max_depth；对账单位统一为入口文件；exec 语义收窄为「path 是源码、启动的是构建产物」（py/sh 不需要——项目脚本按扩展名分发 bash/python）。实施为独立 PR，不混入本 PR。 | llama.cpp examples/ 下非 example 目录极少且可 exclude（android/swift 目录被扩展名白名单天然滤掉）；目录单元引入的 unit/marker/max_depth/mixed 复杂度不值。 |
+| 2026-09-14 | 修复 publish-result 首跑判红：write_example_result 的 job 名匹配从精确相等改为后缀匹配——可复用 workflow 的 Jobs API 给 job 名加 `<调用方 workflow 名> / ` 前缀（run 34818091939 实测 `peft-examples / run-example (…)`），独立 workflow 时代的精确匹配移植过来即失效；新增 job_matches 单测（精确/带前缀/嵌套前缀/不匹配）。 | 首跑 dispatch（run-example 全绿）暴露：脚本报 could not find completed job → result.json 未写 → upload 级联红。 |
+| 2026-09-14 | peft 清单应用 exclude：34 项非 example 配套物（utils 模块 / __init__ / test_* / 配置 yaml / sft/train.py 实现）从 unsupported 移入 scan.exclude（9 条目录+glob 规则），unsupported 收敛为 84 条真实 example；exclude 语义定为「目录路径（递归剪枝）或 glob」。 | unsupported 是"example 注册表"，配套物登记其中污染对账信号；exclude 是声明"这一类根本不是 example"。扫描工具支持随发现 workflow PR 落地（引擎不扫描，本变更对引擎零影响）。 |
