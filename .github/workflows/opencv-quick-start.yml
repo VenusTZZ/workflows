@@ -38,7 +38,7 @@ jobs:
   opencv-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-opencv-*), artifacts
+      # Namespaces cache keys (quick-start-monitor-state-opencv_*), artifacts
       # (opencv-quick-start-<run_id>) and the test working dir
       # (workflows/projects/opencv).
       project: opencv
@@ -65,9 +65,10 @@ jobs:
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
       # Doc body does: apt-get install build deps (aliyun mirror) +
       # git clone opencv + opencv_contrib + source patches (MatShape
-      # + all_ops.h narrowing + op_cann.cpp host-buffer-clamped
-      # memcpy: driver >= 25.5.x reports padded dataset sizes that
-      # overflow the shape-sized host Mat = heap corruption)
+      # + all_ops.h narrowing + op_cann.cpp host-buffer-clamped memcpy
+      # as defensive hardening; the CI-runner heap corruption is a
+      # driver-25.5.2-x-CANN-9.1.0 mismatch tripped in libacl_dvpp_mpi's
+      # atexit teardown - the DNN block works around it via os._exit(0))
       # + cmake -DWITH_CANN=ON configure
       # (BUILD_LIST scoped to 8 modules) + make -j2 (Debug -O0;
       # ~50-70 min with the narrow-header patch) + make install
