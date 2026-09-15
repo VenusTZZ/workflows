@@ -43,7 +43,6 @@ jobs:
       # Schedule stays off while a single run eats half a day.
       timeout_minutes: 720
       upstream_repo: wenet-e2e/wenet
-      fixed_ref: main
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/wenet/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/wenet/docs/Quick-start-Ascend.md
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

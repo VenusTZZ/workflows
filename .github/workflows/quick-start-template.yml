@@ -77,10 +77,6 @@ on:
         description: Upstream repo (owner/name) polled for releases; recorded as target_repo in result.json
         type: string
         required: true
-      fixed_ref:
-        description: Optional upstream tag/branch/SHA to test instead of auto-resolving the latest release; its commit SHA is still monitored for changes
-        type: string
-        default: ''
       doc_url:
         description: URL of the monitored quick-start doc; the monitor hashes it and the test fetches the same URL
         type: string
@@ -197,7 +193,6 @@ jobs:
       # Engine-fixed env: upstream repo + monitored doc come from the
       # caller's inputs (caller env does not cross the `uses:` boundary).
       UPSTREAM_REPO: ${{ inputs.upstream_repo }}
-      FIXED_REF: ${{ inputs.fixed_ref }}
       MONITORED_DOC_URL: ${{ inputs.doc_url }}
       GH_TOKEN: ${{ github.token }}
       GH_API: https://api.github.com
@@ -319,10 +314,7 @@ jobs:
           echo "monitor cache: release(id=$last_release_id) doc(hash=$doc_hash) test(result=$test_result error=$test_error)"
 
           # ----- release signal -----
-          # When FIXED_REF is set, resolve that tag/branch/SHA directly.
-          # Its commit SHA remains the change-detection key, so a mutable
-          # fixed branch can still fire the release signal. Otherwise use
-          # the automatic fallback chain:
+          # Automatic fallback chain — no caller input needed:
           #   1. /releases/latest          (default path; most upstreams)
           #   2. /releases?per_page=20     (covers prerelease-only repos, e.g.
           #                                 torchtitan pre-stable where
@@ -358,29 +350,22 @@ jobs:
           #                                 of monitoring tagless upstreams
           #                                 uniformly with the release/tag
           #                                 path.)
+          #   5. main                     (last-resort: if even /commits/HEAD
+          #                                 fails (GitHub API unreachable, repo
+          #                                 private/deleted), default to the
+          #                                 literal branch name `main`. The
+          #                                 doc's <ref> stays non-empty so
+          #                                 store/load chains don't break;
+          #                                 change detection pauses until the
+          #                                 API recovers — at which point
+          #                                 the chain re-resolves.)
           # Each step normalizes to {id, tag_name} so the downstream .id /
           # .tag_name reads are uniform across sources. `set -e` is masked
           # via `|| true` + jq presence checks so a 404 (or an empty body)
           # at one step falls through cleanly to the next instead of
           # aborting the whole monitor cycle.
           : > /tmp/release.json  # start empty; each step either writes or leaves empty
-          if [ -n "$FIXED_REF" ]; then
-            if curl -fsSL --retry 3 --max-time 30 \
-                "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/$FIXED_REF" \
-                -o /tmp/fixed-ref.json 2>/dev/null; then
-              jq --arg ref "$FIXED_REF" \
-                '{id: (.sha // ""), tag_name: $ref}' \
-                /tmp/fixed-ref.json > /tmp/release.json
-              echo "monitor: release source=/commits/$FIXED_REF (caller-fixed ref)"
-            else
-              # Preserve the requested ref so a doc/retry signal can still
-              # test it; the decide step's final commit lookup will fail
-              # explicitly if the GitHub API remains unavailable.
-              jq -n --arg ref "$FIXED_REF" \
-                '{id: "", tag_name: $ref}' > /tmp/release.json
-              echo "monitor: failed to resolve fixed ref $FIXED_REF; release signal unavailable"
-            fi
-          elif curl -fsSL --retry 3 --max-time 30 \
+          if curl -fsSL --retry 3 --max-time 30 \
               "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/r1.json 2>/dev/null \
               && jq -e '.tag_name // empty' /tmp/r1.json > /dev/null 2>&1; then
             mv /tmp/r1.json /tmp/release.json
@@ -402,7 +387,13 @@ jobs:
               /tmp/r4.json > /tmp/release.json
             echo "monitor: release source=/commits/HEAD (tagless upstream, default-branch HEAD sha)"
           else
-            echo "monitor: all four release sources failed; treating as no signal"
+            # Last-resort fallback when even /commits/HEAD fails (API
+            # unreachable, repo private/deleted). Use the literal branch
+            # name `main` so the doc's <ref> stays non-empty and
+            # store/load chains don't break. id="" means change detection
+            # pauses until the API recovers and the chain re-resolves.
+            jq -n '{id: "", tag_name: "main"}' > /tmp/release.json
+            echo "monitor: release source=fallback/main (all four API tiers failed)"
           fi
           CURRENT_RELEASE_ID=$(jq -r '.id // empty' /tmp/release.json)
           CURRENT_RELEASE_TAG=$(jq -r '.tag_name // empty' /tmp/release.json)
@@ -511,11 +502,7 @@ jobs:
             # output, so this collapses to four jq expressions over
             # /tmp/r{1,2,3,4}.json.
             ref=""
-            if [ -n "$FIXED_REF" ]; then
-              ref="$FIXED_REF"
-              echo "monitor: ref source=caller-fixed ref ($ref)"
-            fi
-            if [ -z "$ref" ] && curl -fsSL --retry 3 --max-time 30 \
+            if curl -fsSL --retry 3 --max-time 30 \
                 "$GH_API/repos/${{ env.UPSTREAM_REPO }}/releases/latest" -o /tmp/r1.json 2>/dev/null; then
               ref=$(jq -r '.tag_name // empty' /tmp/r1.json)
             fi
@@ -534,13 +521,22 @@ jobs:
             # default branch (no hardcoded branch name — works for `main`,
             # `master`, or any custom default). The test code uses the SHA
             # as the <ref> in `git clone --branch <ref>`, so a commit SHA
-            # works as a clone ref. 
+            # works as a clone ref.
             if [ -z "$ref" ] && curl -fsSL --retry 3 --max-time 30 \
                 "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/HEAD" -o /tmp/r4.json 2>/dev/null; then
               ref=$(jq -r '.sha // empty' /tmp/r4.json)
               echo "monitor: ref source=/commits/HEAD (tagless upstream, default-branch HEAD sha)"
             fi
-            [ -n "$ref" ] || { echo "ERROR: failed to resolve latest upstream ref (auto-fallback chain exhausted)"; exit 1; }
+            # 5th last-resort fallback: if even /commits/HEAD fails (API
+            # unreachable, repo gone), use the literal branch name `main`.
+            # The doc's <ref> stays non-empty so store/load chains don't
+            # break; manual dispatch then runs against main as a smoke
+            # test, change-detection resumes on the next scheduled run
+            # when the API recovers.
+            if [ -z "$ref" ]; then
+              ref="main"
+              echo "monitor: ref source=fallback/main (all four API tiers failed)"
+            fi
             echo "monitor decision (manual override): ref=$ref need_to_test=true reason=manual"
           elif [ -f $DECISION_FILE ]; then
             . $DECISION_FILE
