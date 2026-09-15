@@ -79,13 +79,6 @@ supported:
     overlay_args: []
     timeout_minutes: 15
 
-  - path: examples/by_feature/gradient_accumulation_for_autoregressive_models.py
-    profile: accelerate-nlp
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args: []
-    timeout_minutes: 15
-
   - path: examples/by_feature/checkpointing.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-1
@@ -184,6 +177,16 @@ unsupported:
   # （coder 实跑：ImportError: This example requires the `schedulefree` library，
   # rc=2；即使装上 schedulefree，torch_npu 也未验证 schedulefree._C × NPU）
   - examples/by_feature/schedule_free.py
+
+  # gradient_accumulation_for_autoregressive_models：GPT-2 类 autoregressive +
+  # grad accumulation + ELI5 数据集（36718 train），NPU HBM 不够被 devmm 强 OOM
+  # kill。脚本侧无解（model + dataset + grad_accum 是上游 example 写死的），
+  # 除非改上游 examples。910B4 32GB HBM 装不下 54GB 分配
+  # （coder 实跑 NPU 端到端：dmesg 报
+  # `[ascend] [devmm] Heap_size is invalid. (heap_size=54760833024;
+  # total_ddr=34359738368, total_hbm=34359738368)`，devmm 拒绝分配并 SIGKILL
+  # python；NPU 端没跑完一个 epoch，verify 脚本的 .rc 由外层 timeout 兜底写 124）
+  - examples/by_feature/gradient_accumulation_for_autoregressive_models.py
 
   # torch.profiler 报告：prof.key_averages().table() 在 _build_table 阶段
   # 调 self_npu_time_total，但 torch_npu 2.9.0 的 FunctionEventAvg 只有
