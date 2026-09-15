@@ -67,7 +67,7 @@ supported:
       - --eval_strategy no
       - --dtype bfloat16
     timeout_minutes: 120
-  # GOLD 在线 logit 蒸馏（教师 logits 蒸进学生，支持跨 tokenizer 增量对齐）：学生 / 教师 / 数据集全 CLI 可覆盖，use_vllm 默认关、纯本地双模型前向无 NCCL 依赖；上游默认 Llama 学生 + Qwen 教师跨词表，数据集仅 0.04 GB；push_to_hub 默认即为 false，无需额外参数。
+  # GOLD 在线 logit 蒸馏（教师 logits 蒸进学生，支持跨 tokenizer 增量对齐）：学生 / 教师全 CLI 可覆盖，use_vllm 默认关、纯本地双模型前向无 NCCL 依赖；保留上游 messages 对话 schema，用 8 行本地 fixture 避免 trl-lib 数据集的 Xet/CAS 下载超时；push_to_hub 默认即为 false，无需额外参数。
   - path: examples/gold_chatbot_arena/gold_chatbot_arena.py
     profile: gold_distill
     runner: linux-aarch64-a2-1
@@ -75,7 +75,7 @@ supported:
     overlay_args:
       - --model_name_or_path ${GOLD_STUDENT_PATH}
       - --teacher_model_name_or_path ${GOLD_TEACHER_PATH}
-      - --dataset_name trl-lib/chatbot_arena_completions
+      - --dataset_name ${TARGET_ROOT}/fixtures/ci_gold_8.jsonl
       - --max_completion_length 64
       - --learning_rate 2e-4
       - --use_peft

@@ -1,0 +1,8 @@
+{"question_id":"ci-gold-001","messages":[{"role":"user","content":"What is the capital of France?"},{"role":"assistant","content":"The capital of France is Paris."}]}
+{"question_id":"ci-gold-002","messages":[{"role":"user","content":"What is 7 multiplied by 8?"},{"role":"assistant","content":"Seven multiplied by eight is 56."}]}
+{"question_id":"ci-gold-003","messages":[{"role":"user","content":"Name one benefit of regular exercise."},{"role":"assistant","content":"Regular exercise can improve cardiovascular health."}]}
+{"question_id":"ci-gold-004","messages":[{"role":"user","content":"Write a short greeting for a new teammate."},{"role":"assistant","content":"Welcome to the team! We are glad to have you here."}]}
+{"question_id":"ci-gold-005","messages":[{"role":"user","content":"What does CPU stand for?"},{"role":"assistant","content":"CPU stands for central processing unit."}]}
+{"question_id":"ci-gold-006","messages":[{"role":"user","content":"Give one reason plants need sunlight."},{"role":"assistant","content":"Plants use sunlight to produce energy through photosynthesis."}]}
+{"question_id":"ci-gold-007","messages":[{"role":"user","content":"Convert two hours to minutes."},{"role":"assistant","content":"Two hours is 120 minutes."}]}
+{"question_id":"ci-gold-008","messages":[{"role":"user","content":"What is the opposite of hot?"},{"role":"assistant","content":"The opposite of hot is cold."}]}
