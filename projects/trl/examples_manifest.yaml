@@ -1,130 +1,291 @@
 version: 1
+# files-only 扫描模型（docs/examples-guard-engine.md 2.7）：对账单位是入口文件。
+# .ipynb 一并纳入，因为上游 examples 索引把 notebook 当一等 example（带 Colab 徽章）。
+# exclude 声明「这一类根本不是 example」的配套物（目录路径递归剪枝），不进 supported /
+# unsupported。扫描工具的 exclude 支持随发现 workflow 的 PR 落地；本仓 examples 流水线
+# 当前只校验 supported 条目，本段是声明性配置（与 peft 清单同一写法）。
+#
+# unsupported 的语义是「本看护体系当前不跑它」，不等于「昇腾原理上跑不了」：
+# 注释里区分了绑死 GPU / NCCL / CUDA 算子的硬不支持，与待上卡实测后再升级的项。
 scan:
   root: examples
-  unit: mixed
-  max_depth: 1
   include_extensions: ['.py', '.ipynb']
+  exclude:
+    # accelerate 多卡 / DeepSpeed / FSDP / 上下文并行启动配置，被多个 example 共用，不是 example 本身
+    - examples/accelerate_configs
+    # 生成 trl-lib 数据集并 push_to_hub 的一次性数据制作脚本，不是可跑的训练 example
+    - examples/datasets
+    # grpo_harbor.py 背后的 bash / jupyter / terminal_notes harness 实现与包 __init__
+    - examples/grpo_harbor/harnesses
+    # 该 example 专属的 8 卡上下文并行启动配置
+    - examples/sft_qwen3_8b_1m_context/context_parallel_8gpu.yaml
 supported:
-  # DPO LoRA on a small VLM. The upstream docstring targets
-  # Qwen/Qwen2.5-VL-3B-Instruct from HuggingFace; runners cannot reach
-  # HuggingFace, so setup_example.sh downloads the same model from
-  # ModelScope and exports DPO_MODEL_PATH. The HF dataset is replaced by
-  # an 8-row fixture in TRL's conversational prompt/chosen/rejected format.
-  - path: examples/dpo_reduce_hallucinations
+  # DPO LoRA 微调 VLM 降低幻觉（上游用 Qwen2.5-VL-3B + RLAIF-V 图文偏好集）：已在 CI 跑通，模型改走 ModelScope、图文数据集换 8 行本地纯文本 fixture（DPOTrainer 无图也能跑），overlay 压到 2 步。
+  - path: examples/dpo_reduce_hallucinations/dpo_reduce_hallucinations.py
     profile: peft_lora
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    exec: examples/dpo_reduce_hallucinations/dpo_reduce_hallucinations.py
     overlay_args:
       - --model_name_or_path ${DPO_MODEL_PATH}
       - --dataset_name ${TARGET_ROOT}/fixtures/ci_dpo_8.jsonl
+      - --max_length 256
+      - --use_peft
+      - --lora_target_modules all-linear
+      - --output_dir ${CI_OUTPUT_DIR}
       - --dataset_num_proc 1
       - --per_device_train_batch_size 1
       - --gradient_accumulation_steps 1
       - --max_steps 2
-      - --max_length 256
       - --logging_steps 1
       - --report_to none
       - --save_strategy no
+      - --eval_strategy no
       - --dtype bfloat16
-      - --use_peft
-      - --lora_target_modules all-linear
-      - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 120
-  # TPO LoRA on Qwen3-0.6B. The script is fully CLI-driven
-  # (HfArgumentParser over ScriptArguments/TPOConfig/ModelConfig); the
-  # model comes from ModelScope via TPO_MODEL_PATH and the ultrafeedback
-  # dataset is replaced by an 8-row triple-preference fixture. TPO needs
-  # --no_remove_unused_columns to keep the reference column.
-  - path: examples/tpo_ultrafeedback
+  # TPO 三元偏好优化（chosen / rejected / reference 三路对比，比 DPO 多一个 gold 参考）：已在 CI 跑通，Qwen3-0.6B 走 ModelScope、8 行三元 fixture，overlay 压到 2 步（--no_remove_unused_columns 保住 reference 列不被裁掉）。
+  - path: examples/tpo_ultrafeedback/tpo.py
     profile: peft_lora
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    exec: examples/tpo_ultrafeedback/tpo.py
     overlay_args:
       - --model_name_or_path ${TPO_MODEL_PATH}
       - --dataset_name ${TARGET_ROOT}/fixtures/ci_tpo_8.jsonl
-      - --dataset_num_proc 1
-      - --per_device_train_batch_size 1
-      - --gradient_accumulation_steps 1
-      - --max_steps 2
       - --max_length 256
       - --learning_rate 5e-6
-      - --logging_steps 1
-      - --report_to none
-      - --save_strategy no
-      - --dtype bfloat16
       - --use_peft
       - --lora_r 8
       - --lora_alpha 16
       - --no_remove_unused_columns
       - --output_dir ${CI_OUTPUT_DIR}
+      - --dataset_num_proc 1
+      - --per_device_train_batch_size 1
+      - --gradient_accumulation_steps 1
+      - --max_steps 2
+      - --logging_steps 1
+      - --report_to none
+      - --save_strategy no
+      - --eval_strategy no
+      - --dtype bfloat16
     timeout_minutes: 120
+  # GOLD 在线 logit 蒸馏（教师 logits 蒸进学生，支持跨 tokenizer 增量对齐）：学生 / 教师 / 数据集全 CLI 可覆盖，use_vllm 默认关、纯本地双模型前向无 NCCL 依赖；上游默认 Llama 学生 + Qwen 教师跨词表，数据集仅 0.04 GB；上游命令带 push_to_hub，overlay 显式关掉。
+  - path: examples/gold_chatbot_arena/gold_chatbot_arena.py
+    profile: gold_distill
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${GOLD_STUDENT_PATH}
+      - --teacher_model_name_or_path ${GOLD_TEACHER_PATH}
+      - --dataset_name trl-lib/chatbot_arena_completions
+      - --max_completion_length 64
+      - --learning_rate 2e-4
+      - --use_peft
+      - --lora_r 8
+      - --lora_alpha 16
+      - --no_push_to_hub
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --dataset_num_proc 1
+      - --per_device_train_batch_size 1
+      - --gradient_accumulation_steps 1
+      - --max_steps 2
+      - --logging_steps 1
+      - --report_to none
+      - --save_strategy no
+      - --eval_strategy no
+      - --dtype bfloat16
+    timeout_minutes: 180
+  # SSD 简单自蒸馏提升代码生成（用训练期温度采样模型自身 completion，再按普通交叉熵微调，不需奖励模型 / 教师 / RL）：全 CLI，数据集只需 prompt 列故可用 8 行本地 jsonl fixture，use_vllm 默认关、生成走 transformers。
+  - path: examples/ssd_codegen/ssd_codegen.py
+    profile: self_distill
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${SSD_MODEL_PATH}
+      - --dataset_name ${TARGET_ROOT}/fixtures/ci_prompt_8.jsonl
+      - --max_prompt_length 128
+      - --max_completion_length 64
+      - --temperature 1.0
+      - --top_k 20
+      - --top_p 0.8
+      - --learning_rate 5e-6
+      - --use_peft
+      - --lora_target_modules all-linear
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --dataset_num_proc 1
+      - --per_device_train_batch_size 1
+      - --gradient_accumulation_steps 1
+      - --max_steps 2
+      - --logging_steps 1
+      - --report_to none
+      - --save_strategy no
+      - --eval_strategy no
+      - --dtype bfloat16
+    timeout_minutes: 150
+  # SDFT 特权上下文自蒸馏（把仅教师可见的 privileged_context 蒸进学生，教师取同一模型的 EMA）：teacher_model_kind=ema 时教师是同网络副本不需外部服务，全 CLI + 本地数据集入口，use_vllm 默认关。
+  - path: examples/sdft_privileged_context/sdft_privileged_context.py
+    profile: self_distill
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${SSD_MODEL_PATH}
+      - --dataset_name ${TARGET_ROOT}/fixtures/ci_sdft_8.jsonl
+      - --max_prompt_length 128
+      - --max_completion_length 64
+      - --num_generations 1
+      - --teacher_model_kind ema
+      - --teacher_sync_steps 1
+      - --teacher_update_rate 0.05
+      - --learning_rate 2e-5
+      - --eval_num_prompts 0
+      - --use_peft
+      - --lora_target_modules all-linear
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --dataset_num_proc 1
+      - --per_device_train_batch_size 1
+      - --gradient_accumulation_steps 1
+      - --max_steps 2
+      - --logging_steps 1
+      - --report_to none
+      - --save_strategy no
+      - --eval_strategy no
+      - --dtype bfloat16
+    timeout_minutes: 150
+  # SDPO 可验证数学奖励 + 环境反馈重提示蒸馏（gsm8k 上做自蒸馏，奖励是可验证的答案正确性）：全 CLI 且自带 --max_train_examples 截断，奖励函数是脚本内的纯 Python 正则（不依赖 math_verify / CUDA），use_vllm 默认关；gsm8k 仅 2.7 MB。
+  - path: examples/sdpo_math/sdpo_math.py
+    profile: self_distill
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${SDPO_MODEL_PATH}
+      - --dataset_name openai/gsm8k
+      - --dataset_config main
+      - --max_prompt_length 256
+      - --max_completion_length 64
+      - --num_generations 2
+      - --generation_batch_size 2
+      - --distillation_alpha 1.0
+      - --distillation_mode sampled_token
+      - --distillation_weight 0.5
+      - --learning_rate 5e-5
+      - --max_train_examples 8
+      - --feedback_from_solution final_answer
+      - --eval_num_prompts 0
+      - --use_peft
+      - --lora_target_modules all-linear
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --dataset_num_proc 1
+      - --per_device_train_batch_size 1
+      - --gradient_accumulation_steps 1
+      - --max_steps 2
+      - --logging_steps 1
+      - --report_to none
+      - --save_strategy no
+      - --eval_strategy no
+      - --dtype bfloat16
+    timeout_minutes: 180
 unsupported:
-  # Shared accelerate launch configs, not runnable examples.
-  - examples/accelerate_configs
-  - examples/async_distillation_math
-  - examples/async_grpo_math
-  - examples/async_grpo_opencode
-  # Dataset conversion scripts, not runnable examples.
-  - examples/datasets
-  - examples/gold_chatbot_arena
-  - examples/gold_qwen3_vl
-  - examples/grpo_2048
-  - examples/grpo_browsergym
-  - examples/grpo_carla
-  # Needs OpenEnv docker/space environment and vLLM.
-  - examples/grpo_catch
-  - examples/grpo_continuous_batching
-  # Needs a remote OpenEnv HF Space server.
-  - examples/grpo_echo
-  # Needs docker harness environments.
-  - examples/grpo_harbor
-  # Notebook-only, targets Colab GPU.
-  - examples/grpo_ministral3_vl
-  - examples/grpo_multi_env
-  # Notebook-only, targets Colab GPU.
-  - examples/grpo_qlora
-  # Notebook-only, targets Colab GPU.
-  - examples/grpo_qwen3_vl
-  # Notebook-only, targets Colab GPU.
-  - examples/grpo_rnj_1_instruct
-  - examples/grpo_seta
-  - examples/grpo_sql_agent
-  - examples/grpo_sudoku
-  - examples/grpo_visual_math
-  - examples/grpo_wordle
-  # GRPO with vLLM generation; not CI-scale yet.
-  - examples/gspo_math
-  - examples/gspo_visual_math
-  - examples/mpo_visual_preferences
-  - examples/online_dpo_visual_math
-  # Experimental PPO; needs reward model + large batch.
-  - examples/ppo_sentiment
-  - examples/ppo_tldr
-  # RLOO with vLLM generation.
-  - examples/rloo_math
-  - examples/rloo_visual_math
-  # Experimental SDFT with teacher generation loop.
-  - examples/sdft_privileged_context
-  - examples/sdpo_math
-  - examples/sft_diffusion_gemma
-  # Hardcodes gemma-3-12b-it and push_to_hub; no CLI overrides.
-  - examples/sft_gemma3
-  - examples/sft_gemma3_vision
-  # 20B MoE with deepspeed zero3.
-  - examples/sft_gpt_oss
-  # Notebook-only, targets Colab GPU.
-  - examples/sft_ministral3_vl
-  # 30B model with mamba_ssm/causal_conv1d CUDA-only deps.
-  - examples/sft_nemotron_3
-  # Notebook-only (Colab); hardcodes HF login, trackio and push_to_hub.
-  - examples/sft_qlora
-  # Notebook-only, targets Colab GPU.
-  - examples/sft_qwen3_vl
-  # Hardcodes model/dataset and push_to_hub; bitsandbytes 4-bit.
-  - examples/sft_tool_calling
-  - examples/sft_visual_chat
-  - examples/ssd_codegen
+  # 异步在线蒸馏（GSM8K，教师经 HTTP 提供，rollout 与梯度更新解耦）；不支持：需外部 vLLM 教师服务，且模型 / 数据集 / 训练规模全部硬编码、脚本无 CLI，参数无从覆盖。
+  - examples/async_distillation_math/async_distillation_math.py
+  # MOPD 多教师异步在线蒸馏（数学与代码双教师按 teacher_id 路由）；不支持：同上，需两个外部 vLLM 教师服务且脚本无 CLI 入口。
+  - examples/async_distillation_math/async_distillation_mopd.py
+  # AsyncGRPO LoRA（8B 策略，vLLM 与训练分卡，只同步 adapter）；不支持：权重同步显式指定 vLLM 的 --weight-transfer-config backend=nccl，昇腾无 NCCL 后端，且需 2 卡分工。
+  - examples/async_grpo_math/async_grpo_lora_math.py
+  # AsyncGRPO 数学推理（生成与训练解耦的异步 GRPO）；不支持：依赖外部 vLLM server 且权重传输走 NCCL，模型与数据集硬编码、无 CLI。
+  - examples/async_grpo_math/async_grpo_math.py
+  # AsyncGRPO 训练真实 opencode 编码智能体（本地子进程沙箱，loop-owning）；不支持：依赖 OpenEnv + 外部 vLLM server，rollout 侧绑 CUDA 环境。
+  - examples/async_grpo_opencode/async_grpo_opencode.py
+  # 同上变体，rollout 跑在远端 HuggingFace 沙箱；不支持：需 HF 沙箱服务 + vLLM，且默认 push_to_hub / hf login，runner 无法出网访问。
+  - examples/async_grpo_opencode/opencode_hf_sandbox.py
+  # GOLD 把 Qwen3-VL-8B 蒸到小 VLM 学生（同族 JSD / 跨族 ULD）；不支持：数据集硬编码 GEOQA_R1V_Train_8K 无 CLI 可换，8B 教师 + 默认 vLLM 生成远超单卡 CI 规模。
+  - examples/gold_qwen3_vl/gold_qwen3_vl.py
+  # GRPO + 工具调用学玩 2048（游戏环境内置，不需外部服务）；不支持：模型 Qwen3-4B、report_to=trackio、max_completion_length=2048 等全硬编码且脚本无任何 CLI，无法只靠参数压到 CI 规模。
+  - examples/grpo_2048/grpo_2048.py
+  # GRPO + BrowserGym 网页环境（LLM 变体，读可访问性树文本）；不支持：需 OpenEnv BrowserGym 的 HF Space 远端环境，依赖声明为 trl[vllm]。
+  - examples/grpo_browsergym/browsergym_llm.py
+  # GRPO + BrowserGym 网页环境（VLM 变体，工具响应带页面截图）；不支持：同上，需远端 HF Space 环境与 vLLM 生成。
+  - examples/grpo_browsergym/grpo_browsergym.py
+  # GRPO + CARLA 自动驾驶环境（VLM，相机图像随工具返回）；不支持：需 CARLA 模拟器 / OpenEnv HF Space，昇腾 runner 无该仿真环境。
+  - examples/grpo_carla/carla_vlm.py
+  # CARLA VLM 的 Gemma 变体（含 LoRA，视觉编码器排除在 adapter 外）；不支持：同上，需 CARLA / OpenEnv 远端环境。
+  - examples/grpo_carla/carla_vlm_gemma.py
+  # GRPO + CARLA 紧急驾驶场景（行人避让，LLM 变体）；不支持：需 CARLA 模拟器 / OpenEnv HF Space。
+  - examples/grpo_carla/grpo_carla.py
+  # GRPO + OpenSpiel Catch 接球游戏环境；不支持：需 OpenEnv openspiel 的 HF Space 远端环境，依赖声明为 trl[vllm]。
+  - examples/grpo_catch/grpo_catch.py
+  # GRPO 改用 transformers 连续批处理引擎加速变长生成；不支持：该引擎要求 transformers>=5.8 且实现基于 CUDA graph 与 paged KV cache（use_cuda_graph / disable_nccl_graph_mixing），昇腾无对应实现。
+  - examples/grpo_continuous_batching/grpo_continuous_batching.py
+  # 最小 GRPO + Echo 回显环境（教学用最小可跑示例）；不支持：需从 HF Space 安装 openenv-echo-env 并连远端环境服务，runner 出网受限。
+  - examples/grpo_echo/grpo_echo.py
+  # GRPO 对接 Harbor 任务套件（bash / jupyter / terminal_notes 可插拔 harness）；不支持：依赖 harbor + e2b docker 沙箱与 trl[vllm]，昇腾 runner 无法起容器沙箱。
+  - examples/grpo_harbor/grpo_harbor.py
+  # GRPO + QLoRA 微调 Ministral 3 VLM；不支持：仅 notebook 形态，绑死 Colab GPU、bitsandbytes 4bit、unsloth 与 hf login / push_to_hub。
+  - examples/grpo_ministral3_vl/grpo_ministral3_vl.ipynb
+  # 多环境 GRPO（Wordle + Catch 同一训练轮，按 env 列路由）；不支持：需两个 OpenEnv HF Space 远端环境，且模型 Qwen3-1.7B 硬编码无 CLI。
+  - examples/grpo_multi_env/grpo_multi_env.py
+  # GRPO + QLoRA 数学推理；不支持：仅 notebook，绑死 Colab GPU、bnb 4bit、vLLM、liger-kernel 与 hf login / push_to_hub。
+  - examples/grpo_qlora/grpo_qlora.ipynb
+  # GRPO Qwen3-VL 多模态推理；不支持：仅 notebook，绑死 Colab GPU 与 bnb 4bit 量化。
+  - examples/grpo_qwen3_vl/grpo_qwen3_vl.ipynb
+  # GRPO 给 rnj-1-instruct 注入推理能力；不支持：仅 notebook，绑死 Colab GPU、bnb 4bit 与 push_to_hub。
+  - examples/grpo_rnj_1_instruct/grpo_rnj_1_instruct.ipynb
+  # GRPO 对接 openreward.ai 目录上的 SETA ORS 环境；不支持：需 OPENREWARD_API_KEY 与远端环境服务，依赖声明为 trl[vllm]。
+  - examples/grpo_seta/grpo_seta.py
+  # GRPO 训练 SQL 查询智能体（notebook 变体）；不支持：仅 notebook，绑死 Colab GPU 与 hf login / push_to_hub，上游自述免费 Colab 会 OOM。
+  - examples/grpo_sql_agent/grpo_sql_agent.ipynb
+  # GRPO 训练 SQL 智能体查询 BioGRID 库（含查询质量奖励与工具调用）；不支持：数据集 qgallouedec/biogrid(_qa) 硬编码（234 MB）并在 cwd 落 biogrid.db，无 CLI 可替换，上游默认 --use_vllm colocate。
+  - examples/grpo_sql_agent/grpo_sql_agent.py
+  # GRPO 玩数独（notebook 变体）；不支持：仅 notebook，绑死 Colab GPU 与 OpenEnv 远端环境。
+  - examples/grpo_sudoku/grpo_sudoku.ipynb
+  # GRPO + TextArena 数独环境（脚本版，含难度与轮次控制）；不支持：需 OpenEnv sudoku 的 HF Space 远端环境，依赖声明为 trl[vllm]。
+  - examples/grpo_sudoku/grpo_sudoku.py
+  # GRPO 多模态数学推理（SmolVLM2 有单卡变体，数据集仅 0.38 GB）；当前不纳入：GRPO 在昇腾的 backward 兼容性尚未实测（上游 issue #5495 记录过 GRPO backward 报错），且 num_generations 与 generation_batch_size 的整除关系需上卡调参，属待验证而非已验证。
+  - examples/grpo_visual_math/grpo_visual_math.py
+  # GRPO 玩 Wordle（notebook 变体）；不支持：仅 notebook，绑死 Colab GPU 与 OpenEnv 远端环境。
+  - examples/grpo_wordle/grpo_wordle.ipynb
+  # GRPO + TextArena Wordle 环境（脚本版）；不支持：需 OpenEnv wordle 的 HF Space 远端环境，依赖 trl[vllm]。
+  - examples/grpo_wordle/grpo_wordle.py
+  # GSPO 序列级重要性采样做数学推理（文本，数据集 0.148 GB，全 CLI）；当前不纳入：依赖 math_verify + latex2sympy2 的符号验证奖励未在昇腾实测，且与 grpo_visual_math 同属 GRPO 族 backward 待验证项，上游运行方式为 deepspeed zero3 多卡。
+  - examples/gspo_math/gspo_math.py
+  # GSPO 多模态数学推理；当前不纳入：同属 GRPO 族（backward 与整除关系待实测），奖励依赖 math_verify 符号验证，上游运行方式为 deepspeed zero3 多卡。
+  - examples/gspo_visual_math/gspo_visual_math.py
+  # MPO 多损失加权 DPO 对齐多模态模型（sigmoid + bco_pair + sft 按 loss_weights 加权，模型 / 数据集全 CLI）；不支持：脚本对数据集做 .map(ensure_rgb, num_proc=...)，与 --dataset_streaming 互斥（IterableDataset.map 不接受 num_proc），而 RLAIF-V 图文集非流式全量下载约 6.9 GB，无法只靠参数压到 CI 规模。
+  - examples/mpo_visual_preferences/mpo_visual_preferences.py
+  # Online DPO 微调 VLM（策略在线生成、奖励模型打分构造偏好）；当前不纳入：数据集硬编码 lmms-lab 图文集（0.38 GB）无 CLI 可换、需同时驻留策略与 reward 两个 VLM、奖励依赖 math_verify 符号验证，与 grpo/rloo 多模态 RL 族同属昇腾单卡在线生成待实测项。
+  - examples/online_dpo_visual_math/online_dpo_visual_math.py
+  # RLOO 数学推理（vLLM 生成）；不支持：脚本无 TrlParser / CLI，模型、数据集与 RLOOConfig 全硬编码，上游运行方式绑定 vLLM + deepspeed zero3。
+  - examples/rloo_math/rloo_math.py
+  # RLOO 多模态数学推理（模型全 CLI、数据集 0.38 GB）；当前不纳入：RLOO 族在昇腾的生成 + backward 路径尚未实测，奖励依赖 math_verify 符号验证，上游运行方式为 deepspeed zero3 多卡。
+  - examples/rloo_visual_math/rloo_visual_math.py
+  # DiffusionGemma 块扩散语言模型 SFT（扩展 SFTTrainer 实现扩散去噪目标）；不支持：绑定 26B MoE 底座、需 >=2 卡 ZeRO-3 分片，并强制安装 transformers git main（gradient checkpointing offload 尚未发版）。
+  - examples/sft_diffusion_gemma/sft_diffusion_gemma.py
+  # Gemma 3 在 Codeforces COTS 数据集上 SFT；不支持：脚本无 CLI（模型、数据集、SFTConfig 全硬编码），强制 use_liger_kernel=True（triton CUDA 内核，昇腾不可用）并无条件 push_to_hub。
+  - examples/sft_gemma3/sft_gemma3.py
+  # Gemma 3 视觉-文本 SFT（单图 / 多图两条路径，模型与数据集全 CLI）；不支持：脚本在解析参数后强制 training_args.max_length = None（长度无法收紧），llava-instruct-mix-vsft 图文集约 11.4 GB 且脚本不支持流式取数，MMIU 分支还要 hf_hub_download 拉 zip 解包。
+  - examples/sft_gemma3_vision/sft_gemma3_vision.py
+  # openai/gpt-oss-20b 的 SFT；不支持：20B MoE 需 ZeRO-3 多卡，且强制 Mxfp4Config 量化与 kernels-community/vllm-flash-attn3 CUDA 注意力内核。
+  - examples/sft_gpt_oss/sft_gpt_oss.py
+  # Ministral 3 VLM 的 QLoRA SFT；不支持：仅 notebook，绑死 Colab GPU、bnb 4bit、unsloth 与 hf login / push_to_hub。
+  - examples/sft_ministral3_vl/sft_ministral3_vl.ipynb
+  # NVIDIA Nemotron 3 的 LoRA SFT（notebook 变体）；不支持：仅 notebook，绑死 Colab GPU 与 Mamba 混合架构依赖。
+  - examples/sft_nemotron_3/sft_nemotron_3.ipynb
+  # Nemotron 3（30B A3B MoE + Mamba 混合层）SFT；不支持：强制 mamba_ssm==2.2.5 与 causal_conv1d==1.5.2（CUDA 专用、需 --no-build-isolation 现场编译），昇腾无对应算子，且 30B 需 ZeRO-3 多卡。
+  - examples/sft_nemotron_3/sft_nemotron_3.py
+  # QLoRA SFT；不支持：仅 notebook，绑死 Colab GPU、bnb 4bit、liger-kernel、vLLM 与 hf login / trackio / push_to_hub。
+  - examples/sft_qlora/sft_qlora.ipynb
+  # Qwen3-8B 在 1,048,576 token 序列上做上下文并行 SFT；不支持：明确面向单机 8xH100 环形注意力上下文并行（单卡 56.2 GB），强制 transformers git main，且脚本无 CLI。
+  - examples/sft_qwen3_8b_1m_context/sft_qwen3_8b_1m_context.py
+  # Qwen3-VL 的 QLoRA SFT；不支持：仅 notebook，绑死 Colab GPU 与 bnb 4bit。
+  - examples/sft_qwen3_vl/sft_qwen3_vl.ipynb
+  # 给无原生工具调用能力的 tiny-aya 模型教会工具调用（QLoRA SFT + 改写 chat template）；不支持：脚本无 CLI，硬编码 BitsAndBytesConfig(load_in_4bit=True)、use_liger_kernel=True 与 push_to_hub=True，三者都无法用参数关闭。
+  - examples/sft_tool_calling/sft_tiny_aya_tool_calling.py
+  # 同上的 notebook 变体（含 chat template 改写讲解）；不支持：仅 notebook，绑死 Colab GPU、bnb 4bit 与 hf login / push_to_hub。
+  - examples/sft_tool_calling/sft_tool_calling.ipynb
+  # VLM 对话式 SFT（上游覆盖 LLaVA 1.5 / 1.6 与 Llama-3.2-Vision，模型与数据集全 CLI）；不支持：脚本在解析参数后强制 training_args.max_length = None（长度无法收紧），且 llava-instruct-mix-vsft 图文集约 11.4 GB、脚本的 load_dataset 不支持流式，无法只靠参数压到 CI 规模。
+  - examples/sft_visual_chat/sft_visual_chat.py
+  # SSD 配套评测：用 vLLM 生成并以 LiveCodeBench 官方 codegen_metrics 算 pass@k；不支持：硬依赖 vllm 与 LiveCodeBench git 包，且评测要在沙箱内执行生成代码，属评测脚本而非可训练 example。
+  - examples/ssd_codegen/ssd_eval.py

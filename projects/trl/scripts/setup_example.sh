@@ -132,6 +132,56 @@ for env_name, model_id in mapping.items():
 PY
 }
 
+# Shared ModelScope downloader: takes "ENV=model_id" pairs and writes each
+# resolved local snapshot dir into GITHUB_ENV so overlay_args can reference it.
+# Runners cannot reach HuggingFace; ModelScope is China-reachable.
+# Cache lands in the shared /data/ci-cache/modelscope volume, so the second
+# job that needs the same weights reuses the first download.
+ms_download_models() {
+  python -m pip install -q modelscope
+  TQDM_MININTERVAL="${TQDM_MININTERVAL:-15}" python - "$@" <<'PY'
+import os, sys
+os.environ.setdefault("TQDM_MININTERVAL", os.environ.get("TQDM_MININTERVAL", "15"))
+from modelscope import snapshot_download
+MODEL_CACHE = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
+for pair in sys.argv[1:]:
+    env_name, model_id = pair.split("=", 1)
+    local = snapshot_download(model_id, cache_dir=MODEL_CACHE)
+    with open(os.environ["GITHUB_ENV"], "a") as fh:
+        fh.write(f"{env_name}={local}\n")
+PY
+}
+
+setup_gold_distill() {
+  # GOLD cross-tokenizer online logit distillation (gold_chatbot_arena):
+  # a Llama-3.2-1B student learns from a Qwen2-1.5B teacher. Text-only,
+  # so installs TRL[peft] and pre-downloads both weights from ModelScope.
+  # The dataset trl-lib/chatbot_arena_completions is a HuggingFace id the
+  # script loads itself; run_example.sh points HF at hf-mirror, so no
+  # fixture is needed. No vLLM (use_vllm defaults off), pure local forward.
+  echo "installing TRL from source at ${TARGET_ROOT} with peft extra"
+  python -m pip install -e "${TARGET_ROOT}[peft]"
+  python -c "import trl; print('TRL version:', trl.__version__)"
+  ms_download_models \
+    "GOLD_STUDENT_PATH=LLM-Research/Llama-3.2-1B-Instruct" \
+    "GOLD_TEACHER_PATH=Qwen/Qwen2-1.5B-Instruct"
+}
+
+setup_self_distill() {
+  # SSD / SDFT / SDPO self-distillation (ssd_codegen, sdft_privileged_context,
+  # sdpo_math). All three accept --model_name_or_path, so they share the same
+  # small Qwen2.5-0.5B-Instruct base (green = exit code, not loss/reward).
+  # SSD and SDFT read local jsonl fixtures (copied by prepare_fixtures);
+  # SDPO reads openai/gsm8k over hf-mirror. None import vLLM or math_verify
+  # (SDPO/SSD rewards are in-script regex), so no CUDA-only deps are pulled.
+  echo "installing TRL from source at ${TARGET_ROOT} with peft extra"
+  python -m pip install -e "${TARGET_ROOT}[peft]"
+  python -c "import trl; print('TRL version:', trl.__version__)"
+  ms_download_models \
+    "SSD_MODEL_PATH=Qwen/Qwen2.5-0.5B-Instruct" \
+    "SDPO_MODEL_PATH=Qwen/Qwen2.5-0.5B-Instruct"
+}
+
 supported_profiles() {
   declare -F | awk '/^declare -f setup_/ { sub(/^declare -f setup_/, ""); print }' | paste -sd' ' -
 }

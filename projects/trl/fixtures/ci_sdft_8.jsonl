@@ -1,0 +1,8 @@
+{"prompt": [{"role": "user", "content": "What is the capital of France?"}], "privileged_context": "Example response: The capital of France is Paris."}
+{"prompt": [{"role": "user", "content": "How many days are there in a week?"}], "privileged_context": "Example response: There are seven days in a week."}
+{"prompt": [{"role": "user", "content": "What is 2 plus 2?"}], "privileged_context": "Example response: 2 plus 2 equals 4."}
+{"prompt": [{"role": "user", "content": "Which planet is closest to the Sun?"}], "privileged_context": "Example response: Mercury is the closest planet to the Sun."}
+{"prompt": [{"role": "user", "content": "Name the largest ocean on Earth."}], "privileged_context": "Example response: The Pacific Ocean is the largest ocean on Earth."}
+{"prompt": [{"role": "user", "content": "What color is the sky on a clear day?"}], "privileged_context": "Example response: The sky looks blue on a clear day."}
+{"prompt": [{"role": "user", "content": "How many sides does a triangle have?"}], "privileged_context": "Example response: A triangle has three sides."}
+{"prompt": [{"role": "user", "content": "What language is primarily spoken in Brazil?"}], "privileged_context": "Example response: Portuguese is primarily spoken in Brazil."}
