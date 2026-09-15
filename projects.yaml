@@ -112,9 +112,9 @@ projects:
       # bert-base-cased + GLUE MRPC (pre-cached via HF mirror). 12
       # entries × default 2-3 epochs; total wallclock per run ~25 min
       # on a single 910B4. profiler.py was on the supported list but
-      # moved to unsupported (torch_npu 2.9 lacks self_npu_time_total
-      # for prof.key_averages().table()) — see
-      # docs/case-accelerate-examples-on-npu.md.
+      # moved to unsupported — torch_npu 2.9 lacks self_npu_time_total
+      # for prof.key_averages().table(), so the report step crashes
+      # even though training completes.
       examples: .github/workflows/accelerate-examples.yml
   - name: peft
     category: 训练加速
