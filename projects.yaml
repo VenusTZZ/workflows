@@ -215,6 +215,7 @@ projects:
     runner: linux-aarch64-a2-1
     dir: projects/speculators
     workflows:
+      examples: .github/workflows/speculators-examples.yml
       quick_start: .github/workflows/speculators-quick-start.yml
   - name: slime
     category: 训练加速
