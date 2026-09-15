@@ -82,13 +82,17 @@ prepare_fixtures() {
 }
 
 setup_peft() {
-  # peft from the guarded release checkout, plus the minimal stack the
-  # sft example needs (train.py: trl.SFTTrainer; utils.py: datasets,
-  # transformers, accelerate - the latter two come with peft's own
-  # install_requires). PIP_CONSTRAINT keeps CUDA metapackages out.
+  # peft from the guarded release checkout, plus the verified dependency
+  # line (2026-09-14, coder npu-3 逐例验证结论):
+  #   transformers 4.57.1 + datasets 3.6.0 + hub<1.0 + trl 1.12.0
+  # - transformers 4.57.1: 5.x 移除 send_example_telemetry 等旧 API
+  # - datasets 3.6.0 + hub<1.0: hub 1.x 拒绝 imdb 等无命名空间数据集
+  # - trl 1.12.0: 1.13 与 peft 的 partial lm_head 冲突（chunked_nll patch）
+  # PIP_CONSTRAINT keeps CUDA metapackages out.
   echo "installing peft from $TARGET_ROOT"
   python -m pip install -e "$TARGET_ROOT"
-  python -m pip install trl datasets
+  python -m pip install "transformers==4.57.1" "datasets==3.6.0" \
+    "huggingface_hub<1.0" "trl==1.12.0" evaluate torchvision==0.24.0
   python -c "import peft, trl, transformers, datasets, accelerate; print('peft', peft.__version__, '/ trl', trl.__version__, '/ transformers', transformers.__version__)"
 
   # Pre-download the example model from ModelScope (China-reachable)
