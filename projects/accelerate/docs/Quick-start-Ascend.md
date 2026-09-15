@@ -59,10 +59,14 @@ python --version
 Python 3.12.xxx
 ```
 
-检查 torch / torch_npu 是否装好且 NPU 设备可用：
+检查 torch / torch_npu 是否装好且 NPU 设备可用，下面用 **python** 跑：
 
-```shell #test id="check-torch"
-python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+```python #test id="check-torch"
+import torch, torch_npu
+print('torch=', torch.__version__)
+print('torch_npu=', torch_npu.__version__)
+print('is_available:', torch.npu.is_available())
+print('count:', torch.npu.device_count())
 ```
 
 输出结果如下：
@@ -256,10 +260,9 @@ device=npu final_loss=xxx
 
 ### 单卡训练
 
- `Accelerator()` + 完整训练循环（forward + `accelerator.backward` + `optim.step`），验证单卡 NPU 上完整训练链路：
+ `Accelerator()` + 完整训练循环（forward + `accelerator.backward` + `optim.step`），验证单卡 NPU 上完整训练链路。下面用 **python** 跑：
 
-```shell #test id="acc-train-single"
-python -c "
+```python #test id="acc-train-single"
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
@@ -284,7 +287,6 @@ for step, (xb, yb) in enumerate(loader):
     if step == 2:
         break
 print(f'device={accelerator.device.type} final_loss={loss.item():.4f}')
-"
 ```
 
 输出结果如下：
@@ -301,8 +303,9 @@ device=npu final_loss=xxx
 2. **NPU 放置**：`accelerator.prepare(model)` 在非 distributed 上下文只做 `model.to(self.device)`，权重真在 NPU 上分配；
 3. **真 kernel 跑**：`prepared(x)` 在 `npu:0` 上跑一次 1×1 matmul + bias add，**不是只 alloc**——NPU kernel 真跑了一次。
 
-```shell #test id="acc-prepare"
-python -c "
+下面用 **python** 跑：
+
+```python #test id="acc-prepare"
 import torch
 from torch import nn
 from accelerate import Accelerator
@@ -315,7 +318,7 @@ prepared = accelerator.prepare(model)
 x = torch.tensor([[0.5]], device=accelerator.device)
 y = prepared(x)
 print(f'device={y.device.type}')
-print(f'shape={list(y.shape)}')"
+print(f'shape={list(y.shape)}')
 ```
 
 输出结果如下：
@@ -395,8 +398,9 @@ Accelerate 的大模型推理分两半：先用 [`init_empty_weights`](https://h
 
 ### init_empty_weights
 
-```shell #test id="acc-empty-weights"
-python -c "
+下面用 **python** 跑：
+
+```python #test id="acc-empty-weights"
 from transformers import LlamaConfig, LlamaForCausalLM
 from accelerate import init_empty_weights
 
@@ -415,7 +419,6 @@ n_params = sum(p.numel() for p in model.state_dict().values())
 first_dev = next(model.parameters()).device
 print(f'empty_model_params={n_params}')
 print(f'device={first_dev}')
-"
 ```
 
 输出结果如下（参数数固定、device 固定为 meta —— 用 `fuzzy='xxx'` 让版本无关的字段差异不会挂）：
@@ -429,10 +432,11 @@ device=meta
 
 ### load_checkpoint_and_dispatch
 
-在 `init_empty_weights` 建好的空骨架上跑 `load_checkpoint_and_dispatch`，验证 Accelerate 在 NPU 上真的把权重分到不同卡——前 10 层放 `npu:0`、后 10 层放 `npu:1`。CI 上不依赖 HF Hub / ModelScope 下载，自建 toy checkpoint：
+在 `init_empty_weights` 建好的空骨架上跑 `load_checkpoint_and_dispatch`，验证 Accelerate 在 NPU 上真的把权重分到不同卡——前 10 层放 `npu:0`、后 10 层放 `npu:1`。CI 上不依赖 HF Hub / ModelScope 下载，自建 toy checkpoint。
 
-```shell #test-setup store="dispatch_ckpt"
-python -c "
+先用一个 **python** setup 块造出 toy checkpoint，路径写到 `dispatch_ckpt` 供下面 `acc-dispatch` 用 `load='dispatch_ckpt>>ckpt'` 引用：
+
+```python #test-setup store="dispatch_ckpt"
 import os, torch, gc
 from transformers import LlamaConfig, LlamaForCausalLM
 from accelerate import init_empty_weights
@@ -454,11 +458,11 @@ model.save_pretrained('/tmp/fake-llama-dispatch', safe_serialization=True)
 del model
 gc.collect()
 print('/tmp/fake-llama-dispatch')
-"
 ```
 
-```shell #test id="acc-dispatch" load="dispatch_ckpt>>ckpt"
-python -c "
+下面用 **python** 跑，`checkpoint='<ckpt>'` 里的 `<ckpt>` 由上面 `dispatch_ckpt` setup 块通过 `load='dispatch_ckpt>>ckpt'` 注入（替换后是合法 python 字符串字面）：
+
+```python #test id="acc-dispatch" load="dispatch_ckpt>>ckpt"
 import torch
 from transformers import LlamaConfig, LlamaForCausalLM
 from accelerate import init_empty_weights, load_checkpoint_and_dispatch
@@ -494,7 +498,6 @@ print(f'first_layer_device={dev_first}')
 print(f'last_layer_device={dev_last}')
 print(f'out_device={out.device.type}')
 print(f'out_shape={list(out.shape)}')
-"
 ```
 
 输出结果如下：
