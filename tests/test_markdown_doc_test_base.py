@@ -58,7 +58,7 @@ class _Bare(MarkdownDocTestBase):
 # 跑当前 unittest 的同一个解释器），让 python 镜像测试在 macOS 上也能跑通。
 # 重写方式用类属性覆盖，不污染基类其它子类的语义。
 _PYTHON_BIN = shutil.which('python') or sys.executable
-_Bare._LANG_RUNNER = {**_Bare._LANG_RUNNER, 'python': [_PYTHON_BIN, '-c']}
+_Bare._LANG_RUNNER = {**_Bare._LANG_RUNNER, 'python': (_PYTHON_BIN, '-c')}
 
 
 def _parse(text: str) -> tuple[list, dict]:
@@ -748,7 +748,7 @@ class TestPythonRunCommandDispatch(unittest.TestCase):
             MarkdownDocTestBase.run_command = real_run
 
         self.assertEqual(captured['argv_prefix'][0], _PYTHON_BIN)
-        self.assertEqual(captured['argv_prefix'][1:], ['-c'])
+        self.assertEqual(captured['argv_prefix'][1:], ('-c',))
         self.assertEqual(out, 'mocked')
 
     def test_unknown_language_raises(self):
