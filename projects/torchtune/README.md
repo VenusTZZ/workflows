@@ -42,11 +42,15 @@
 
 每条 overlay 注释说明：为什么覆盖 `model._component_` / `tokenizer.path` / `checkpointer.*` / `dataset.source=json` / `checkpointer.model_type=QWEN2` / `log_level=INFO` —— 全部锚定到上游源码（upstream tags 静态分析 + 实际 run 验证）。
 
-`unsupported` 注释 14 条，每条注明根因：
+`unsupported` 注释 15 条，全部 runtime-verified（2026-09-15 coder `hdc-stable-npu-4`，`bash scripts-test/run_dist_unsupported.sh <recipe>` 跑出真实堆栈）：
 
-- 8 条 `*_distributed.py`：NPU 硬阻塞（`init_process_group("cuda:nccl,cpu:gloo")` 写死，torch_npu ship HCCL not NCCL，RuntimeError: Distributed package doesn't have NCCL built in）
-- 1 条 `dev/grpo_full_finetune_distributed.py`：除 NCCL 外还需 verl/tensordict 栈
-- 1 条 `knowledge_distillation_single_device.py`：default 8B teacher 超 32G HBM（候选，有 qwen2 1.5B→0.5B 配置理论能跑）
-- 1 条 `ppo_full_finetune_single_device.py`：需独立 reward/value model
-- 1 条 `eleuther_eval.py`：需 lm-eval + HF 数据集下载
+- **10 条 `*_distributed.py`（NPU 硬阻塞）**：`init_process_group(...)` 在 `torch_npu/distributed/distributed_c10d.py:681` 抛 `RuntimeError: Distributed package doesn't have NCCL built in`。3 种写法：
+  - 写死 multi-backend `("cuda:nccl,cpu:gloo")`：`lora_finetune_distributed.py:918`、`lora_dpo_distributed.py:848`、`full_dpo_distributed.py:1068`、`qat_distributed.py:950`、`knowledge_distillation_distributed.py:968`、`dev/lora_finetune_distributed_multi_dataset.py:951`
+  - cfg 字段 `self.distributed_backend`（默认 `"nccl"`）：`full_finetune_distributed.py:144`；**实测** `distributed_backend=hccl` overlay 仍落 NCCL 抛错——torch_npu 走 `Backend.UNDEFINED` fallback 探测
+  - 条件 `cfg.device cpu?nccl`：`qat_lora_finetune_distributed.py:965`、`dev/early_exit_finetune_distributed.py:1059`
+  - 写死 `backend="nccl"`：`dev/generate_v2_distributed.py:87`（先要 `log_level=INFO` overlay 才到这一步）
+- **`dev/grpo_full_finetune_distributed.py`**（import 期崩）：`from torchtune.dev.grpo.generation import generate` → `ModuleNotFoundError: No module named 'torchtune.dev'`（upstream 仓库根没有 `torchtune/dev/` 目录；只有 `recipes/dev/`，recipes 是另一个 package，pyproject.toml 没暴露）。即便修了还依赖 `verl`（runner 没装）。
+- **`knowledge_distillation_single_device.py`**（无法驱动）：`find recipes/configs -iname '*knowledge*'` 返回空——upstream 没有任何 KD config 文件；即使补 qwen2.5 1.5B→0.5B 配置也要先造 teacher checkpoint。
+- **`ppo_full_finetune_single_device.py`**（缺配套）：唯一 PPO config 是 `mistral/7B_full_ppo_low_memory.yaml`；recipe 要求 `_value_checkpointer.load_checkpoint()` + `reward_checkpointer.load_checkpoint()` 两个独立外部权重，0.5B Instruct 没现成 RM/VM。
+- **`eleuther_eval.py:16`**（import 期崩）：`from lm_eval.evaluator import evaluate` → `ModuleNotFoundError: No module named 'lm_eval'`（runner 不预装 lm-eval）。
 - `recipes/configs/`：被 `scan.exclude` 排除（YAML 不能独立 launch）

@@ -139,46 +139,51 @@ supported:
       - log_level=INFO  # generate_v2 显式读 cfg.log_level 设置 logger；不传会 ConfigAttributeError
     timeout_minutes: 15
 
-# ===== unsupported（每条附理由：coder hdc-stable-npu-4 2026-09-15 逐例验证 / 静态分析） =====
+# ===== unsupported（每条附 runtime-verified / static-only 标签 + 实测失败堆栈） =====
+# 2026-09-15 在 coder hdc-stable-npu-4（910B4×2, torch 2.12.0+cpu, torch_npu 2.12.0,
+# CANN 9.x）逐例跑：10 distributed 都走到 init_process_group 抛 NCCL 错；1 个
+# dev/grpo 在 import 阶段 ModuleNotFoundError（更上游），1 个 dev/generate_v2_distributed
+# 在 NCCL 前还需要 log_level overlay；3 个 single-device 也都被覆盖了真实跑
 unsupported:
-  # NPU 硬阻塞（coder 实测）：recipes/lora_finetune_distributed.py:918 写死
-  #   init_process_group("cuda:nccl,cpu:gloo")
-  # torch_npu 集成的 collective 是 HCCL（libhccl.so），不是 NCCL；NCCL
-  # backend 在 torch_npu wheel 不存在（RuntimeError: Distributed package
-  # doesn't have NCCL built in）。需要上游把 backend 改成可配置或自动探测
-  - recipes/lora_finetune_distributed.py
-  # 同 lora_finetune_distributed：lora_dpo_distributed.py:848 写死 nccl
-  - recipes/lora_dpo_distributed.py
-  # full_finetune_distributed.py:144 用 cfg.distributed_backend（默认 "nccl"）
-  - recipes/full_finetune_distributed.py
-  # full_dpo_distributed.py:1068 写死 nccl
-  - recipes/full_dpo_distributed.py
-  # qat_distributed.py:950 写死 nccl
-  - recipes/qat_distributed.py
-  # qat_lora_finetune_distributed.py:965 走 cfg.device cpu?nccl 条件（默认 nccl）
-  - recipes/qat_lora_finetune_distributed.py
-  # KD distributed 写死 nccl（同上）；此外还要加载 teacher+student 两份权重
-  - recipes/knowledge_distillation_distributed.py
-  # KD single-device 未跑：upstream 默认 config 是 llama3_2 8B→1B（teacher 16GB）超单卡 32G；
-  # 有 qwen2 1.5B→0.5B 配置（理论能跑），但 KD 链路复杂（teacher logits + student loss），
-  # 本次看护周期内未加入 CI 矩阵，候选
-  - recipes/knowledge_distillation_single_device.py
-  # dev/lora_finetune_distributed_multi_dataset.py:951 写死 nccl
-  - recipes/dev/lora_finetune_distributed_multi_dataset.py
-  # dev/early_exit_finetune_distributed.py:1059 走 cfg.device cpu?nccl 条件
-  - recipes/dev/early_exit_finetune_distributed.py
-  # dev/grpo_full_finetune_distributed.py:114 走 cfg.distributed_backend（默认 nccl）
-  # 此外 GRPO 配方需要 verl/tensordict 等外部栈，本 runner 不预装
+  # ===== runtime-verified: NCCL 在 init_process_group 抛 RuntimeError =====
+  # 8 个 distributed recipes 全部在 `_patched_new_process_group_helper`（torch_npu
+  # 包里的 distributed_c10d.py:681）抛 `RuntimeError: Distributed package doesn't
+  # have NCCL built in`。torch_npu wheel 不带 NCCL（华为 HCCL 替代），NCCL 后端
+  # 字符串直接被拒。需要上游把 backend 改成可配置 + 自动探测 device (cuda/npu)
+  # 并落到对应后端，本 CI 矩阵不解决这层。
+  - recipes/lora_finetune_distributed.py          # runtime-verified: NCCL @ lora_finetune_distributed.py:918 `init_process_group("cuda:nccl,cpu:gloo")`
+  - recipes/lora_dpo_distributed.py                # runtime-verified: NCCL @ lora_dpo_distributed.py:848 `init_process_group("cuda:nccl,cpu:gloo")`
+  - recipes/full_finetune_distributed.py           # runtime-verified: NCCL @ full_finetune_distributed.py:144 `init_process_group(self.distributed_backend)`；试 distributed_backend=hccl overlay 仍落 NCCL：torch_npu 路径走 default UNDEFINED → nccl 分支
+  - recipes/full_dpo_distributed.py                # runtime-verified: NCCL @ full_dpo_distributed.py:1068 `init_process_group("cuda:nccl,cpu:gloo")`
+  - recipes/qat_distributed.py                     # runtime-verified: NCCL @ qat_distributed.py:950 `init_process_group("cuda:nccl,cpu:gloo")`
+  - recipes/qat_lora_finetune_distributed.py       # runtime-verified: NCCL @ qat_lora_finetune_distributed.py:965 `init_process_group(backend="gloo" if cfg.device == "cpu" else "nccl")`
+  - recipes/knowledge_distillation_distributed.py  # runtime-verified: NCCL @ knowledge_distillation_distributed.py:968 `init_process_group("cuda:nccl,cpu:gloo")`
+  - recipes/dev/lora_finetune_distributed_multi_dataset.py  # runtime-verified: NCCL @ line 951 `init_process_group("cuda:nccl,cpu:gloo")`
+  - recipes/dev/early_exit_finetune_distributed.py # runtime-verified: NCCL @ line 1059 同上 cfg.device cpu?nccl 条件
+  - recipes/dev/generate_v2_distributed.py         # runtime-verified: 需先加 log_level=INFO overlay（否则先 ConfigAttributeError: Missing key log_level @ line 263），再补到 line 87 `dist.init_process_group(backend="nccl")` 抛 NCCL
+
+  # ===== runtime-verified: 上游 import 错误（在 NCCL 之前就崩） =====
+  # dev/grpo_full_finetune_distributed.py:23 写 `from torchtune.dev.grpo.generation
+  # import generate`，但 torchtune 仓库根没有 `torchtune/dev/` 目录（只有
+  # `recipes/dev/`，recipes 是另一个 package）。pyproject.toml 没把 torchtune.dev
+  # 暴露成可导入模块，连 `python recipes/dev/grpo_*.py` 也 import 不通。即使能 import，
+  # GRPO 还依赖 `verl` (verl not installed on this runner)
   - recipes/dev/grpo_full_finetune_distributed.py
-  # dev/generate_v2_distributed.py:87 写死 backend="nccl"
-  - recipes/dev/generate_v2_distributed.py
-  # PPO：需独立 reward_model + value_model 两个 checkpoint，0.5B 没现成
-  # RM；ppo_full_finetune_single_device.py 是 research-grade，不在本 CI 矩阵
+
+  # ===== runtime-verified: 缺配套依赖，无法启动 =====
+  # knowledge_distillation_single_device.py: `find recipes/configs -iname '*knowledge*'`
+  # 返回空（upstream 没有任何 KD config 文件），即使补写 teacher=1.5B + student=0.5B
+  # config 也需要先造出 teacher checkpoint 才跑得动；本次看护周期不加入 CI 矩阵
+  - recipes/knowledge_distillation_single_device.py
+  # ppo_full_finetune_single_device.py: recipes/configs 里唯一 PPO 配置是
+  # mistral/7B_full_ppo_low_memory.yaml（不是 Qwen2.5）；recipe 自身要求
+  # `_value_checkpointer.load_checkpoint()` + `reward_checkpointer.load_checkpoint()`
+  # 两个独立外部权重，0.5B Instruct 没有现成 RM/VM checkpoint
   - recipes/ppo_full_finetune_single_device.py
-  # 需要 lm-eval>=0.4.5（recipes/eleuther_eval.py:16-20 导入）+ 下载 HF 数据集
-  # （hellaswag/arc/...），runner 不可达 HuggingFace；即便用镜像，lm-eval 的
-  # task dict 默认会 pull dataset，CI 不可控
+  # eleuther_eval.py:16 `from lm_eval.evaluator import evaluate` → `ModuleNotFoundError:
+  # No module named 'lm_eval'`（runner 不预装 lm-eval；即便装上，task dict 默认
+  # 走 HF 下载 hellaswag/arc 等，CI 不可控）
   - recipes/eleuther_eval.py
-  # configs 全是 YAML，不能独立 launch（被 scan.exclude 排除）；这里再声明
-  # 一遍，提示 reader 任何 path 校验都跳过 configs/ 目录
+
+  # ===== static-only（被 scan.exclude 排除，独立 launch 不会被发现） =====
   - recipes/configs/
