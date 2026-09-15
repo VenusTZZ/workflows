@@ -43,8 +43,6 @@ supported:
       - --max_steps 1                   # 默认整 epoch：1 步压到 CI 规模
       - --logging_steps 1               # 默认 5：确保 1 步内也有日志
       - --dataset_num_proc 1            # 避免 datasets 多进程在 CI 容器的不稳定
-      - --eval_strategy no              # 默认 epoch：跳过评估省时
-      - --save_strategy no              # 默认 epoch：不落 checkpoint
       - --report_to none                # 关闭 wandb 等外部上报（未装会报错）
       - --output_dir ${CI_OUTPUT_DIR}   # 默认仓内相对路径：输出必须进 CI 输出目录
     timeout_minutes: 90
@@ -63,8 +61,8 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --base_model_name_or_path ${SFT_MODEL_PATH}   # HfArgumentParser 必填：注入 setup 预下载的 0.5B
-      - --dataset_field text label   # 默认 None 会崩（example 自身缺陷）：imdb 的输入/输出列名
-      - --loss_type nll   # trl 1.12 默认 chunked_nll：与 peft 预包装模型的 partial lm_head 冲突（coder 实测）
+      - --dataset_field text label   # upstream bug：ScriptArguments(SFTConfig) dataclass 默认 None，但 miss_finetuning.py:89 直接 dataset_field[0]/[1] 取下标，CUDA 也一样 TypeError（纯 Python 逻辑与硬件无关）。text=imdb 评论, label=0/1 情感
+      - --loss_type nll   # 绕开 trl 1.12+ 默认 chunked_nll：trl sft_trainer.py:1331 用 isinstance(output_embeddings, BaseTunerLayer) 检测到 peft 包了 lm_head 直接 raise ValueError（纯 PyTorch patch，CUDA 同问题，NPU 是首跑通这条路径的环境）；nll 走标准 cross-entropy 跳过整个 chunked patch 路径，与 peft partial head 共存
     timeout_minutes: 30
 
   # MiCA：同上配方（Qwen2.5-0.5B + imdb 1% + nll）

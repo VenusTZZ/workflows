@@ -83,15 +83,22 @@ prepare_fixtures() {
 
 setup_peft() {
   # peft from the guarded release checkout, plus the verified dependency
-  # line (2026-09-14, coder npu-3 逐例验证结论):
-  #   transformers 4.57.1 + datasets 3.6.0 + hub<1.0 + trl 1.12.0
+  # line (2026-09-15, coder npu-1 端到端验证结论):
+  #   transformers 4.57.1 + datasets>=4.7.0,<6 + hub<1.0 + trl 1.12.0
   # - transformers 4.57.1: 5.x 移除 send_example_telemetry 等旧 API
-  # - datasets 3.6.0 + hub<1.0: hub 1.x 拒绝 imdb 等无命名空间数据集
-  # - trl 1.12.0: 1.13 与 peft 的 partial lm_head 冲突（chunked_nll patch）
+  # - datasets>=4.7.0,<6: trl 1.12+ 在 wheel metadata 声明 datasets>=4.7.0
+  #   (pyproject.toml 自 v1.0.0 起 commit ac5421b4 引入，datasets<4 会
+  #   ResolutionImpossible)，<6 留出口避开未来 6.x breaking
+  # - hub<1.0: hub 1.x 拒绝 imdb 等无命名空间数据集
+  # - trl 1.12.0: trl ≥ 1.12 都默认 chunked_nll，与 peft partial lm_head
+  #   冲突（纯 PyTorch patch，sft_trainer.py:1331 检测到 peft 包了 head
+  #   就 raise；CUDA 同问题，NPU 是首个端到端跑这条路径的环境）。
+  #   overlay 在 examples_manifest.yaml 的 miss/mica 例里显式 --loss_type nll
+  #   跳过 chunked patch 走标准 cross-entropy。
   # PIP_CONSTRAINT keeps CUDA metapackages out.
   echo "installing peft from $TARGET_ROOT"
   python -m pip install -e "$TARGET_ROOT"
-  python -m pip install "transformers==4.57.1" "datasets==3.6.0" \
+  python -m pip install "transformers==4.57.1" "datasets>=4.7.0,<6" \
     "huggingface_hub<1.0" "trl==1.12.0" evaluate torchvision==0.24.0
   python -c "import peft, trl, transformers, datasets, accelerate; print('peft', peft.__version__, '/ trl', trl.__version__, '/ transformers', transformers.__version__)"
 
