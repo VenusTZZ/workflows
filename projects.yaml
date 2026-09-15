@@ -208,6 +208,18 @@ projects:
     dir: projects/torchtune
     workflows:
       quick_start: .github/workflows/torchtune-quick-start.yml
+      # Release-only examples guard on the shared engine
+      # examples-template.yml (design: docs/examples-guard-engine.md).
+      # First supported entries: 5 single-device recipes on
+      # Qwen2.5-0.5B-Instruct (ModelScope-predownloaded, ~1 GB single
+      # shard) — lora_finetune_single_device / full_finetune_single_device
+      # / lora_dpo_single_device / generate / quantize — plus the
+      # dev/generate_v2 research recipe. All 6 use 1 card, 1 step, < 2
+      # GB NPU HBM, exit 0. All *distributed.py recipes are NPU 硬阻塞
+      # (NCCL hardcode, torch_npu ships HCCL not NCCL); eleuther_eval
+      # needs lm-eval + HF dataset downloads; knowledge_distillation
+      # needs 8B teacher that does not fit single 32 GB card.
+      examples: .github/workflows/torchtune-examples.yml
   - name: xtuner
     category: 训练加速
     support_level: 基础支持
@@ -272,6 +284,23 @@ projects:
     dir: projects/torchtitan
     workflows:
       quick_start: .github/workflows/torchtitan-quick-start.yml
+      # Release-only examples guard on the shared engine
+      # example-template.yml (design: docs/examples-guard-engine.md).
+      # First supported entries (4) all run on debugmodel / sft_debugmodel
+      # (dim=256 / 6L / 16H / vocab 2048, ~6 M params — fits single 30 GB
+      # card, FSDP shard=2 splits cleanly on 2-card): 1-card debugmodel,
+      # 1-card debugmodel_ce_loss (drift signal for patch 4 vs upstream
+      # CE config), 2-card full_dtensor + bf16 (HCCL + DTensor), 1-card
+      # sft_debugmodel. Smoke = 2 steps, ~5 min each. unsupported covers
+      # 8B/70B/405B (CPU-offload 活锁 + OOM), all float8/MXFP8/NVFP4
+      # variants (no NPU backend), torch 2.13+ deps (dist_gemm /
+      # varlen_attn / spmd_types default), every other model family
+      # (qwen3 / qwen35 / gpt_oss / deepseek_v3 / kimi / flux /
+      # muse_glimmer — flex + custom kernels unverified), RL
+      # (vllm-ascend ABI mismatch torch 2.12), and forge / graph_trainer
+      # / torchft / transformers_modeling_backend (CUDA-only cudagraph /
+      # torchft NCCL / HF AutoModel untested).
+      examples: .github/workflows/torchtitan-examples.yml
   - name: colossalai
     category: 推理加速
     support_level: 新兴适配

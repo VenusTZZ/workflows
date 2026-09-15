@@ -1,0 +1,55 @@
+# torchtitan examples guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/example-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, upstream repo, dispatch input forwarding, and matrix
+# parallelism. The guard loop (release-only monitor / manifest-check /
+# run-example matrix / validate-results / save-monitor-state) lives in
+# the engine. See docs/examples-guard-engine.md for the design.
+#
+# Bring-up phase: schedule is disabled until a few manual rounds are
+# green. Re-enable by uncommenting the schedule block, mirroring the
+# peft / accelerate / trl bring-up policy.
+
+name: torchtitan-examples
+
+concurrency:
+  # schedule runs serialize; each manual run gets its own group so a
+  # dispatch is never blocked behind a scheduled run.
+  group: ${{ github.event_name == 'schedule' && 'torchtitan-examples-schedule' || format('manual-{0}', github.run_id) }}
+  # false: a run cancelled mid-way loses its outcome writeback, and the
+  # outcome is what drives the next cycle's retry.
+  cancel-in-progress: false
+
+on:
+  # Bring-up phase: keep the schedule disabled until a few manual
+  # rounds are green. Re-enable:
+  # schedule:
+  #   - cron: '30 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Branch, tag, or SHA to test (defaults to main)
+        required: false
+        default: main
+        type: string
+
+# Engine jobs query the GitHub Job API (validate-results); called
+# workflows run with the caller's GITHUB_TOKEN permissions.
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  torchtitan-examples:
+    uses: ./.github/workflows/example-template.yml
+    with:
+      # Namespaces cache keys (examples-monitor-state-torchtitan_*),
+      # artifact names and the scheduling paths under projects/torchtitan.
+      project: torchtitan
+      upstream_repo: pytorch/torchtitan
+      target_ref: ${{ inputs.target_ref }}
+      # 4 supported entries, 2 unique runner types (a2-1 + a2-2); max
+      # 4 keeps the matrix from thrashing the 2-card runner when both
+      # 1-card and 2-card legs queue up simultaneously.
+      max_parallel: 4
