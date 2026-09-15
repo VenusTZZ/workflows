@@ -39,7 +39,7 @@ import urllib.request
 from abc import ABC
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import mistune
 
@@ -83,11 +83,8 @@ class SetupCommand:
                 'SetupCommand.store must be None or a non-empty string'
             )
         if not self.language:
-            # parse 路径 rule 7 已经强制非空，这里是给直接构造 SetupCommand
-            # 的代码（目前只有 tests/）留的防御。允许默认值会让"漏传"
-            # 静默落到 bash 解释 python 脚本，所以宁可 fail-fast。
             raise LabelSpecError(
-                'SetupCommand.language must be non-empty (rule 7 invariant)'
+                'SetupCommand.language must be non-empty'
             )
         for i, item in enumerate(self.load):
             if (
@@ -289,10 +286,6 @@ class MarkdownDocTestBase(ABC):
     # Default non-greedy placeholder: when fuzzy= is not specified, this placeholder is always in effect.
     # _parse_block auto-injects this item into the fuzzy field when fuzzies is empty.
     _DEFAULT_FUZZY_PLACEHOLDER = '...'
-    # Languages the executor can dispatch on. To add a new language: (1) add an entry to
-    # ``_LANG_RUNNER`` (subprocess argv prefix), (2) append the language token here. Parse-time
-    # rule 7 reads this tuple; runner-time ``run_command`` reads ``_LANG_RUNNER``. Both must move
-    # together — otherwise a `#test python` block would parse-OK then crash on dispatch.
     _KNOWN_LANGUAGES = ('shell', 'python')
 
     # Value-less flag arguments (no ``=value``). After recognition, the value is ``['1']`` as a placeholder,
@@ -607,16 +600,15 @@ class MarkdownDocTestBase(ABC):
     # ============================================================
     # Private: per-step execution details
     # ============================================================
-
-    # Language → subprocess argv prefix. Mirrors ``_KNOWN_LANGUAGES``; ``run_command`` looks up
-    # the runner by language. Pass argv list (not shell=True) so ``$var`` / heredoc / shell
-    # metacharacters in the block body are interpreted by the **selected** interpreter only —
-    # e.g. ``python`` blocks with ``$x`` reach python as a SyntaxError instead of being
-    # silently expanded by bash. That's the intended boundary: each block declares its language
-    # and the runner respects it; cross-language leakage is a doc bug, not a framework bug.
-    _LANG_RUNNER: dict[str, list[str]] = {
-        'shell':  ['bash', '-c'],
-        'python': ['python', '-c'],
+    # ClassVar (not bare type annotation) silences ruff RUF012: this is a class-level
+    # constant the runner reads by language, not a default value for an instance attr.
+    # Subclasses override via ``_LANG_RUNNER = {**_LANG_RUNNER, ...}`` (e.g. tests
+    # redirect ``python`` to ``sys.executable`` on macOS where ``python`` is absent).
+    # tuple (not list) — argv passed to ``subprocess.run`` is spread, so no in-place
+    # mutation ever happens.
+    _LANG_RUNNER: ClassVar[dict[str, tuple[str, ...]]] = {
+        'shell':  ('bash', '-c'),
+        'python': ('python', '-c'),
     }
 
     def _run_one(self, cmd, results, env, cwd, timeout, idx):
@@ -815,7 +807,7 @@ class MarkdownDocTestBase(ABC):
         t0 = time.time()
         try:
             proc = subprocess.run(
-                runner + [cmd],
+                [*runner, cmd],
                 env=env,
                 cwd=cwd,
                 capture_output=True,
