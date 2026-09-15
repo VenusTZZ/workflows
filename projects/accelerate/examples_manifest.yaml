@@ -16,29 +16,28 @@ scan:
     - '**/README.md'
 
 supported:
-  # 顶层 NLP/CV 四个 example：单卡 BERT on MRPC / ResNet50d on Pets。
   # overlay_args 约定：
-  #   --mixed_precision no   ← accelerate 默认 None；fp16 在 torch_npu 2.9 走
-  #     npu.amp.autocast + GradScaler，但 bring-up 阶段 fp32 是最稳的 baseline，
-  #     避免 fp16 早期 step overflow。注释每条都写一次，避免误删。
-  #   --cpu / --with_tracking / --use_stateful_dataloader 都是 store_true flag，
-  #     默认即"Accelerator 自动检 NPU / 不打 tracker / 普通 dataloader"，不传。
+  #   只写真值与默认不同的项。accelerate argparse 大量默认值已合理：
+  #     --mixed_precision default=None   → fp32（accelerate 内部 None 规约成 "no"）
+  #     --cpu default=False（store_true）→ Accelerator 自动检 NPU
+  #     --use_stateful_dataloader=False  → 普通 dataloader
+  #   写进去的只有：
+  #     - argparse required=True 必填（cv/complete_cv 的 --data_dir）
+  #     - 显式 override 默认的（checkpointing_steps / output_dir / with_tracking / project_dir）
   #   profile=accelerate-nlp 装 base 栈，accelerate-cv 多装 timm+torchvision+预下 Pets。
 
   - path: examples/nlp_example.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --mixed_precision no   # fp32 baseline（torch_npu 2.9 fp16 autocast bring-up 阶段不稳）
+    overlay_args: []
     timeout_minutes: 15
 
   - path: examples/complete_nlp_example.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --mixed_precision no   # fp32 baseline（同 nlp_example）
+    overlay_args: []
     timeout_minutes: 20
 
   - path: examples/cv_example.py
@@ -46,11 +45,10 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --mixed_precision no   # fp32 baseline（同 nlp_example）
-      # cv_example.py 用 os.listdir(data_dir) + ".jpg" 过滤，data_dir 必须
-      # 直接含 .jpg；setup_example.sh 把 timm/oxford-iiit-pet 解到
+      # argparse required=True，不传直接 argparse 报错。cv_example.py 用
+      # os.listdir(data_dir) + ".jpg" 过滤，data_dir 必须直接含 .jpg；
+      # setup_example.sh 把 timm/oxford-iiit-pet 解到
       # ${TARGET_ROOT}/fixtures/pets/images/，所以这里指向 images/ 子目录。
-      # 默认值是 required=True，不传直接 argparse 报错。
       - --data_dir ${TARGET_ROOT}/fixtures/pets/images
     timeout_minutes: 20
 
@@ -59,36 +57,33 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --mixed_precision no   # fp32 baseline（同 nlp_example）
-      - --data_dir ${TARGET_ROOT}/fixtures/pets/images   # argparse 必填 + 同 cv_example.py 布局
+      # argparse required=True + 同 cv_example.py 布局：images/ 子目录
+      - --data_dir ${TARGET_ROOT}/fixtures/pets/images
     timeout_minutes: 20
 
   # by_feature/* 8 条：基于 nlp_example.py 的最小修改，每个叠加一个 Accelerate
-  # 特性。BERT + MRPC + 默认 3 epochs。
-  # 统一规则：所有 by_feature 例都强制 fp32（--mixed_precision no）走 NPU baseline。
+  # 特性。BERT + MRPC + 默认 3 epochs。默认 fp32 / NPU / 普通 dataloader 都
+  # 是 argparse 默认值，nlp_example.py 这条路径不需要任何 overlay。
 
   - path: examples/by_feature/gradient_accumulation.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --mixed_precision no   # fp32 baseline
+    overlay_args: []
     timeout_minutes: 15
 
   - path: examples/by_feature/automatic_gradient_accumulation.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --mixed_precision no   # fp32 baseline
+    overlay_args: []
     timeout_minutes: 15
 
   - path: examples/by_feature/gradient_accumulation_for_autoregressive_models.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --mixed_precision no   # fp32 baseline；GPT-2 + wikitext-2，单 epoch ~150s 已偏慢
+    overlay_args: []
     timeout_minutes: 15
 
   - path: examples/by_feature/checkpointing.py
@@ -96,11 +91,10 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --mixed_precision no   # fp32 baseline
-      # argparse 默认 "epoch"：保留默认行为，但显式声明出来避免上游改默认值。
-      # 落盘路径用 CI_OUTPUT_DIR（peft 同语义），让 runner 把 checkpoint 收进
-      # artifacts，CI 完成后统一清理。
+      # argparse default=None → 不做 checkpoint；显式开 epoch 级落盘
       - --checkpointing_steps epoch
+      # argparse default="."（cwd）；改到 CI_OUTPUT_DIR 让 runner 收进
+      # artifacts，CI 完成后统一清理（peft 同语义）
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 15
 
@@ -108,8 +102,7 @@ supported:
     profile: accelerate-nlp
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --mixed_precision no   # fp32 baseline
+    overlay_args: []
     timeout_minutes: 15
 
   - path: examples/by_feature/tracking.py
@@ -117,11 +110,10 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --mixed_precision no   # fp32 baseline
-      # argparse 是 store_true：默认不打 tracker；显式开启让 example 走通 tracker
-      # 路径（默认 TensorBoard addon，env 已配 WANDB_DISABLED 避免 wandb 拉远端）。
+      # argparse store_true：默认不打 tracker；显式开启走通 tracker 路径
+      # （默认 TensorBoard addon，env 已配 WANDB_DISABLED 避免 wandb 拉远端）
       - --with_tracking
-      # argparse 必填（开了 tracking 就要写盘路径）：同 checkpointing 用 CI_OUTPUT_DIR。
+      # argparse default="logs"（相对路径）；改到 CI_OUTPUT_DIR 收 artifacts
       - --project_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 15
 
@@ -129,16 +121,14 @@ supported:
     profile: accelerate-nlp
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --mixed_precision no   # fp32 baseline
+    overlay_args: []
     timeout_minutes: 15
 
   - path: examples/by_feature/cross_validation.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --mixed_precision no   # fp32 baseline
+    overlay_args: []
     timeout_minutes: 15
 
 unsupported:
