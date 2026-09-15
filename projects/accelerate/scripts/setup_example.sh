@@ -68,23 +68,23 @@ raise SystemExit(
 }
 
 # Pre-download NLP assets used by every NLP / by_feature supported entry.
-# - bert-base-chinese from ModelScope (China-reachable; bert-base-cased
-#   on HF has been unreliable on runners).
+# - bert-base-cased from HF mirror (the model all accelerate NLP
+#   examples hardcode via AutoTokenizer/AutoModelForSequenceClassification.
+#   `bert-base-cased` exists on HF and is reachable via hf-mirror.com from
+#   China runners; pre-downloading here makes the run deterministic
+#   instead of relying on per-example on-demand fetch.
 # - GLUE MRPC from HF via HF_ENDPOINT=https://hf-mirror.com, cached into
 #   $HF_HOME so each NLP example does not re-download.
 prepare_nlp_assets() {
-  python -m pip install modelscope
-
   python - <<'PY'
 import os
-os.environ.setdefault("TQDM_MININTERVAL", "15")
-from modelscope import snapshot_download
-
-MODEL_CACHE = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
-local = snapshot_download("bert-base-chinese", cache_dir=MODEL_CACHE)
-with open(os.environ["GITHUB_ENV"], "a") as fh:
-    fh.write(f"NLP_MODEL_PATH={local}\n")
-print("NLP_MODEL_PATH=", local)
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+tok = AutoTokenizer.from_pretrained("bert-base-cased")
+print("bert-base-cased tokenizer OK, vocab_size:", tok.vocab_size)
+model = AutoModelForSequenceClassification.from_pretrained("bert-base-cased", num_labels=2)
+print("bert-base-cased model OK, params:", sum(p.numel() for p in model.parameters()) / 1e6, "M")
 PY
 
   # Trigger MRPC download once into the shared HF cache. The by_feature
@@ -93,6 +93,7 @@ PY
   python - <<'PY'
 import os
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
 from datasets import load_dataset
 ds = load_dataset("nyu-mll/glue", "mrpc")
 print("mrpc splits:", {k: len(v) for k, v in ds.items()})
@@ -145,8 +146,11 @@ setup_accelerate-nlp() {
   # `pip install -e` re-resolves all deps, so repeat the torch pin here
   # in the same command (constraints-npu.txt is already exported).
   python -m pip install -e "$TARGET_ROOT" "torch==2.9.0" "torch_npu==2.9.0.post2"
-  python -m pip install transformers datasets evaluate safetensors "torch==2.9.0"
-  python -c "import torch, torch_npu; assert torch.__version__.startswith('2.9.0'), f'torch drifted to {torch.__version__}'; import accelerate, transformers, datasets, evaluate; print('accelerate', accelerate.__version__, '/ transformers', transformers.__version__, '/ datasets', datasets.__version__, '/ torch', torch.__version__)"
+  # scikit-learn is needed by the `evaluate` library's glue metric (sklearn's
+  # f1_score, matthews_corrcoef); not a direct dep of evaluate or transformers
+  # so it must be listed explicitly.
+  python -m pip install transformers datasets evaluate safetensors scikit-learn "torch==2.9.0"
+  python -c "import torch, torch_npu; assert torch.__version__.startswith('2.9.0'), f'torch drifted to {torch.__version__}'; import accelerate, transformers, datasets, evaluate, sklearn; print('accelerate', accelerate.__version__, '/ transformers', transformers.__version__, '/ datasets', datasets.__version__, '/ torch', torch.__version__, '/ sklearn', sklearn.__version__)"
   prepare_nlp_assets
 }
 
