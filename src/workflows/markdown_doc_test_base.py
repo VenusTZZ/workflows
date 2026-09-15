@@ -70,6 +70,7 @@ class SetupCommand:
     cmd: str
     store: str | None
     hidden: bool
+    language: str  # parse 路径经 _validate rule 7 校验保证非空且在白名单内
     load: tuple = ()  # ((store_var, local_name), ...)
 
     def __post_init__(self) -> None:
@@ -80,6 +81,13 @@ class SetupCommand:
         if self.store is not None and not self.store:
             raise LabelSpecError(
                 'SetupCommand.store must be None or a non-empty string'
+            )
+        if not self.language:
+            # parse 路径 rule 7 已经强制非空，这里是给直接构造 SetupCommand
+            # 的代码（目前只有 tests/）留的防御。允许默认值会让"漏传"
+            # 静默落到 bash 解释 python 脚本，所以宁可 fail-fast。
+            raise LabelSpecError(
+                'SetupCommand.language must be non-empty (rule 7 invariant)'
             )
         for i, item in enumerate(self.load):
             if (
@@ -281,9 +289,11 @@ class MarkdownDocTestBase(ABC):
     # Default non-greedy placeholder: when fuzzy= is not specified, this placeholder is always in effect.
     # _parse_block auto-injects this item into the fuzzy field when fuzzies is empty.
     _DEFAULT_FUZZY_PLACEHOLDER = '...'
-    # The contract currently supports shell only. Other languages (text / console / python / etc.) directly trigger
-    # rule 7 violation. To add a new language, land the selector on the executor side first, then add to the tuple.
-    _KNOWN_LANGUAGES = ('shell',)
+    # Languages the executor can dispatch on. To add a new language: (1) add an entry to
+    # ``_LANG_RUNNER`` (subprocess argv prefix), (2) append the language token here. Parse-time
+    # rule 7 reads this tuple; runner-time ``run_command`` reads ``_LANG_RUNNER``. Both must move
+    # together — otherwise a `#test python` block would parse-OK then crash on dispatch.
+    _KNOWN_LANGUAGES = ('shell', 'python')
 
     # Value-less flag arguments (no ``=value``). After recognition, the value is ``['1']`` as a placeholder,
     # actual semantics are decided by key name in _parse_block / compare_output.
@@ -570,6 +580,7 @@ class MarkdownDocTestBase(ABC):
                     store=p['store'],
                     hidden=p['hidden'],
                     load=p['load'],
+                    language=p['language'],
                 ))
             elif p['label'] == self._LABEL_TEST:
                 commands.append(TestCommand(
@@ -597,6 +608,17 @@ class MarkdownDocTestBase(ABC):
     # Private: per-step execution details
     # ============================================================
 
+    # Language → subprocess argv prefix. Mirrors ``_KNOWN_LANGUAGES``; ``run_command`` looks up
+    # the runner by language. Pass argv list (not shell=True) so ``$var`` / heredoc / shell
+    # metacharacters in the block body are interpreted by the **selected** interpreter only —
+    # e.g. ``python`` blocks with ``$x`` reach python as a SyntaxError instead of being
+    # silently expanded by bash. That's the intended boundary: each block declares its language
+    # and the runner respects it; cross-language leakage is a doc bug, not a framework bug.
+    _LANG_RUNNER: dict[str, list[str]] = {
+        'shell':  ['bash', '-c'],
+        'python': ['python', '-c'],
+    }
+
     def _run_one(self, cmd, results, env, cwd, timeout, idx):
         if isinstance(cmd, SetupCommand):
             # Substitute ``<placeholder>`` from earlier captures BEFORE bash sees the
@@ -608,7 +630,9 @@ class MarkdownDocTestBase(ABC):
             actual_cmd = self.substitute_placeholders(
                 cmd.cmd, cmd.load, self._captures
             )
-            rc, out, err = self.run_command(actual_cmd, env, cwd, timeout)
+            rc, out, err = self.run_command(
+                actual_cmd, env, cwd, timeout, language=cmd.language,
+            )
             if rc != 0:
                 raise AssertionError(
                     f'setup command failed (rc={rc}); CMD stderr:\n{err.rstrip() or "(empty)"}'
@@ -644,7 +668,9 @@ class MarkdownDocTestBase(ABC):
             expected_body = self.substitute_placeholders(
                 expected_obj.body, expected_obj.load, self._captures
             )
-            rc, actual, err = self.run_command(actual_cmd, env, cwd, timeout)
+            rc, actual, err = self.run_command(
+                actual_cmd, env, cwd, timeout, language=cmd.language,
+            )
             if rc != 0:
                 raise AssertionError(
                     f'test command failed (rc={rc}); CMD stderr:\n{err.rstrip() or "(empty)"}'
@@ -761,9 +787,14 @@ class MarkdownDocTestBase(ABC):
             self.post_process()
 
     def run_command(
-        self, cmd: str, env: dict, cwd, timeout: int
+        self, cmd: str, env: dict, cwd, timeout: int, language: str = 'shell',
     ) -> tuple[int, str, str]:
-        """``bash -c`` + forced flush + on error dump all stderr (<= 256 KB).
+        """Dispatch by ``language`` via ``_LANG_RUNNER`` (default shell → ``bash -c``).
+
+        Subprocess argv list form (not ``shell=True``) — quoted bodies don't get re-interpreted
+        by an outer shell, so a python block with ``$x`` reaches python verbatim and surfaces as
+        a SyntaxError instead of being silently expanded. That's the intended boundary: each
+        block declares its language, the runner respects it.
 
         On stdout error path dump first 2000 + last 2000 chars; stderr matching any substring in
         ``self.ERROR_MARKERS`` dumps everything (<= 256 KB), since error markers often sit in the
@@ -772,11 +803,19 @@ class MarkdownDocTestBase(ABC):
         On ``subprocess.TimeoutExpired`` the partial stdout/stderr carried on ``e`` is dumped using the same
         rule before re-raising, so a timeout doesn't strand the reader with only a bare traceback.
         """
-        self.log(f'CMD start (timeout={timeout}s): {cmd[:2000]}')
+        runner = self._LANG_RUNNER.get(language)
+        if runner is None:
+            # _validate already blocks this; defensive here so an unknown language
+            # doesn't fall through to a default runner and silently mask the bug.
+            raise AssertionError(
+                f'unsupported language {language!r}; '
+                f'known={sorted(self._LANG_RUNNER)}'
+            )
+        self.log(f'CMD start (lang={language} timeout={timeout}s): {cmd[:2000]}')
         t0 = time.time()
         try:
             proc = subprocess.run(
-                ['bash', '-c', cmd],
+                runner + [cmd],
                 env=env,
                 cwd=cwd,
                 capture_output=True,
