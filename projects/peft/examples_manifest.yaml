@@ -28,25 +28,25 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --model_name_or_path ${SFT_MODEL_PATH}
-      - --dataset_name ${TARGET_ROOT}/fixtures/ci_sft_8.jsonl
-      - --use_4bit_quantization False
-      - --use_flash_attn False
-      - --gradient_checkpointing False
-      - --use_reentrant False
-      - --push_to_hub False
-      - --packing False
-      - --max_length 512
-      - --per_device_train_batch_size 1
-      - --per_device_eval_batch_size 1
-      - --gradient_accumulation_steps 1
-      - --max_steps 1
-      - --logging_steps 1
-      - --dataset_num_proc 1
-      - --eval_strategy no
-      - --save_strategy no
-      - --report_to none
-      - --output_dir ${CI_OUTPUT_DIR}
+      - --model_name_or_path ${SFT_MODEL_PATH}   # 脚本默认 Mistral-7B：换 setup 预下载的 0.5B（CI 规模 + 避 HF 下载）
+      - --dataset_name ${TARGET_ROOT}/fixtures/ci_sft_8.jsonl   # 默认拉 HF hub：换仓内 8 行 fixture
+      - --use_4bit_quantization False   # bnb 4bit 无 NPU 后端
+      - --use_flash_attn False          # flash-attn 仅 CUDA
+      - --gradient_checkpointing False  # 0.5B 无需省显存；关掉避免 NPU reentrant 兼容问题
+      - --use_reentrant False           # 同上（checkpointing 已关，双保险）
+      - --push_to_hub False             # 默认 True：CI 不推模型仓
+      - --packing False                 # 8 行样本无需打包，行为更可预期
+      - --max_length 512                # 默认 2048：压序列长度
+      - --per_device_train_batch_size 1 # 默认 8：压批
+      - --per_device_eval_batch_size 1  # 同上
+      - --gradient_accumulation_steps 1 # 默认 8：1 step 即可验证
+      - --max_steps 1                   # 默认整 epoch：1 步压到 CI 规模
+      - --logging_steps 1               # 默认 5：确保 1 步内也有日志
+      - --dataset_num_proc 1            # 避免 datasets 多进程在 CI 容器的不稳定
+      - --eval_strategy no              # 默认 epoch：跳过评估省时
+      - --save_strategy no              # 默认 epoch：不落 checkpoint
+      - --report_to none                # 关闭 wandb 等外部上报（未装会报错）
+      - --output_dir ${CI_OUTPUT_DIR}   # 默认仓内相对路径：输出必须进 CI 输出目录
     timeout_minutes: 90
 
   # BEFT：mt0-small + financial_phrasebank，原样跑通（两套环境均 exit 0）
@@ -62,9 +62,9 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --base_model_name_or_path ${SFT_MODEL_PATH}
-      - --dataset_field text label
-      - --loss_type nll
+      - --base_model_name_or_path ${SFT_MODEL_PATH}   # HfArgumentParser 必填：注入 setup 预下载的 0.5B
+      - --dataset_field text label   # 默认 None 会崩（example 自身缺陷）：imdb 的输入/输出列名
+      - --loss_type nll   # trl 1.12 默认 chunked_nll：与 peft 预包装模型的 partial lm_head 冲突（coder 实测）
     timeout_minutes: 30
 
   # MiCA：同上配方（Qwen2.5-0.5B + imdb 1% + nll）
@@ -73,8 +73,8 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --base_model_name_or_path ${SFT_MODEL_PATH}
-      - --loss_type nll
+      - --base_model_name_or_path ${SFT_MODEL_PATH}   # HfArgumentParser 必填：注入 0.5B
+      - --loss_type nll   # 同 miss：绕开 trl chunked_nll 与 peft partial 的冲突
     timeout_minutes: 30
 
   # PVeRa：dinov2-base + beans，原样跑通
@@ -90,8 +90,8 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --model_name_or_path bert-base-uncased
-      - --output_dir ${CI_OUTPUT_DIR}
+      - --model_name_or_path bert-base-uncased   # argparse 必填：小模型，HF 经 hf-mirror 可达
+      - --output_dir ${CI_OUTPUT_DIR}   # argparse 断言必填（脚本硬校验）
     timeout_minutes: 45
 
   # AdaMSS GLUE：roberta-base + mrpc 单 epoch
@@ -100,9 +100,9 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --dataset_name mrpc
-      - --model_name_or_path roberta-base
-      - --num_epochs 1
+      - --dataset_name mrpc   # 默认 cola；mrpc 数据量小跑得快（docstring 推荐用法）
+      - --model_name_or_path roberta-base   # 默认即 roberta-base，显式声明（也可 roberta-large，太大）
+      - --num_epochs 1   # 默认 100：压到单 epoch（mrpc 3.7k 样本几分钟）
     timeout_minutes: 45
 
   # AdaMSS manual：手动 API 演示，roberta-base 单 epoch
@@ -111,7 +111,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --num_epochs 1
+      - --num_epochs 1   # 默认 100：压到单 epoch
     timeout_minutes: 45
 
   # Supertuning：Qwen2.5-0.5B + guanaco 完整 1 epoch（308 步 exit 0）
@@ -120,8 +120,8 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --base_model ${SFT_MODEL_PATH}
-      - --batch_size 2
+      - --base_model ${SFT_MODEL_PATH}   # 默认 meta-llama/Llama-3.2-1B（gated + 大）：换 0.5B
+      - --batch_size 2   # 默认 1：guanaco 全 epoch 308 步，batch 2 控制时长（coder 实测 ~13 分钟）
     timeout_minutes: 45
 
 # ===== unsupported（每条附理由：coder npu-3 2026-09-14 逐例验证 / 静态分析） =====
