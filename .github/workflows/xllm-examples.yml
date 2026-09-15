@@ -258,9 +258,9 @@ jobs:
       TRIGGER: ${{ needs.monitor.outputs.trigger }}
       TARGET_REPO: ${{ needs.monitor.outputs.target_repo }}
       TARGET_REF: ${{ needs.monitor.outputs.target_ref }}
-      IMAGE: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-dev-a2-arm-cann9-20260605
+      IMAGE: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-0.10.0-release-hb-rc2-arm
     container:
-      image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-dev-a2-arm-cann9-20260605
+      image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-0.10.0-release-hb-rc2-arm
       options: >-
         --shm-size=64g
         --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
@@ -268,7 +268,6 @@ jobs:
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
         --volume=/data/ci-cache/modelscope/xllm:/root/.cache/modelscope
-        --volume=/data/ci-cache/xllm-build:/opt/xllm-build
     steps:
       - name: Checkout workflows
         uses: actions/checkout@v4
@@ -291,7 +290,7 @@ jobs:
           python -c "import torch, torch_npu; print('torch:', torch.__version__, 'torch_npu:', torch_npu.__version__, 'npu_count:', torch.npu.device_count())"
 
       - name: Verify xllm import
-        run: python -c "import xllm; print('xllm version:', xllm.__version__)"
+        run: python -c "import xllm; print('xllm import ok:', xllm.__file__)"
 
       # Run every supported example sequentially; isolate each with `timeout`
       # and keep going on failure. Writes one result JSON per example.

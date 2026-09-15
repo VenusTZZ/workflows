@@ -10,7 +10,7 @@
 #
 # This file replaced the legacy monolithic workflow of the same name
 # (hard cutover; the old implementation lives in git history around
-# 4ee7f63). Cache keys (monitor-state-cache-dit-*) and artifact names
+# 4ee7f63). Cache keys (quick-start-monitor-state-cache-dit_*) and artifact names
 # are derived from project=cache-dit, not from the workflow name, so
 # monitor state carried over unchanged.
 
@@ -41,7 +41,7 @@ jobs:
   cache-dit-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-cache-dit-*), artifacts
+      # Namespaces cache keys (quick-start-monitor-state-cache-dit_*), artifacts
       # (cache-dit-quick-start-<run_id>) and the test working dir
       # (workflows/projects/cache-dit).
       project: cache-dit
@@ -63,8 +63,9 @@ jobs:
         --volume=/data/ci-cache/modelscope/cache-dit:/root/.cache/modelscope
       timeout_minutes: 180
       upstream_repo: vipshop/cache-dit
-      # Same URL the legacy workflow monitors: doc-hash state carries
-      # over via the shared monitor-state-cache-dit- cache prefix.
+      # Same URL the legacy workflow monitored. Cache keys were hardened to
+      # the strict quick-start-monitor-state-cache-dit_* format (2026-09-11);
+      # old-prefix state was intentionally dropped (one cold round).
       doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/cache-dit/docs/Quick-start-Ascend.md
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/cache-dit/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/cache-dit; env contract (MONITORED_DOC_URL /

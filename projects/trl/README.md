@@ -6,9 +6,9 @@
 
 ## 看护范围
 
-- **Quick-start 文档测试**：[`docs/Quick-start-Ascend.md`](docs/Quick-start-Ascend.md) 遵循 [`docs/markdown_doc_test_label.md`](../../docs/markdown_doc_test_label.md) 标签契约（`#test` / `#test-setup` / `#test-result` 配对、id 唯一），覆盖单卡昇腾 NPU 完整流程：环境与 NPU 检查、安装 TRL（pip 二进制 + 源码）、经 ModelScope 获取 Qwen2.5-0.5B-Instruct（runner 无法访问 HuggingFace）、用 4 条内联极小样本跑通最小 SFT LoRA、验证 LoRA 适配器产物。`tests/test_quick_start_ascend.py` 基于 `src/workflows/markdown_doc_test_base.py` 端到端执行文档。文档含版本矩阵，与 CI 镜像 `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12` 对齐。
+- **Quick-start 文档测试**：[`docs/Quick-start-Ascend.md`](docs/Quick-start-Ascend.md) 遵循 [`docs/markdown_doc_test_label.md`](../../docs/markdown_doc_test_label.md) 标签契约（`#test` / `#test-setup` / `#test-result` 配对、id 唯一），覆盖单卡昇腾 NPU 完整流程：环境与 NPU 检查、安装 TRL（PyPI 二进制）、经 ModelScope 自动下载 Qwen2.5-0.5B-Instruct（网络环境无法直连 HuggingFace 时经 ModelScope 获取模型）、用 ModelScope 数据集 `HuggingFaceH4/ultrafeedback_binarized` 跑通最小 SFT LoRA 与偏好优化 DPO LoRA 双方法、验证两份 LoRA 适配器产物。`tests/test_quick_start_ascend.py` 基于 `src/workflows/markdown_doc_test_base.py` 端到端执行文档。文档含版本矩阵，与 CI 镜像 `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12` 对齐。
 - **Examples 清单看护**：[`examples_manifest.yaml`](examples_manifest.yaml) 由 `scripts/bootstrap_manifest.py` 扫描上游 `examples/` 生成（TRL 新布局为目录式 example，`scan.unit: mixed`）。当前 supported 为 2 条单卡（`linux-aarch64-a2-1`、`npu_devices: '0'`、profile `peft_lora`）小规模 example：`examples/dpo_reduce_hallucinations`（DPO LoRA）与 `examples/tpo_ultrafeedback`（TPO LoRA），均用 `overlay_args` 压到 CI 规模（8 条 fixture、`max_steps 2`、输出到 `${CI_OUTPUT_DIR}`），其余全部列入 unsupported 并注明原因。`scripts/setup_example.sh` / `run_example.sh` 遵循「项目运行脚本契约」，只修改 CI 工作区内的目标仓副本，绝不向上游写操作。
-- **触发方式**：两条流水线初期**仅开 `workflow_dispatch` 手动触发**（与 llama.cpp / whisper.cpp 的接入节奏一致）；跑绿稳定后再开启 schedule 轮询（quick-start 参考 peft 的 `cron: '0 */3 * * *'`，examples 为 `cron: '30 */6 * * *'`，已在 YAML 中留好注释）。开启 schedule 后，monitor 对比上游信号（examples 树 commit / latest release tag / main HEAD，或文档 hash），有变化才占用 NPU；上次失败时下个周期自动重试。
+- **触发方式**：quick-start 已开启 schedule 轮询（`cron: '0 */3 * * *'`）并保留 `workflow_dispatch` 手动触发；examples 维持 `workflow_dispatch`（schedule 注释保留在 YAML 中）。开启 schedule 后，monitor 对比上游信号（examples 树 commit / latest release tag / main HEAD，或文档 hash），有变化才占用 NPU；上次失败时下个周期自动重试。
 
 ## 能力覆盖矩阵
 
@@ -62,6 +62,6 @@
 对照 TRL 需求逐项核查了共享引擎 [`.github/workflows/quick-start-template.yml`](../../.github/workflows/quick-start-template.yml) 的输入契约（`project` / `test_runner` / `image` / `container_options` / `timeout_minutes` / `upstream_repo` / `doc_url` / `doc_path` / `test_command`）与引擎固定行为（monitor 信号优先级、cluster pip/uv 镜像 env、cache I/O 在 ubuntu-latest 上的分工）：
 
 - TRL 的差异点（单卡 `linux-aarch64-a2-1`、CANN 9.1.0 镜像、davinci0 设备挂载 + ModelScope 缓存挂载、`huggingface/trl` 上游、本仓文档路径、`python -m unittest tests.test_quick_start_ascend -v 2>&1` 测试入口）**全部可通过现有 inputs 表达**；
-- cache key（`monitor-state-trl-`）、artifact 命名（`trl-quick-start-<run_id>`）与 result.json 校验由引擎按 `inputs.project` 自动派生，无需项目侧干预。
+- cache key（`quick-start-monitor-state-trl-`）、artifact 命名（`trl-quick-start-<run_id>`）与 result.json 校验由引擎按 `inputs.project` 自动派生，无需项目侧干预。
 
 **结论：未修改 `quick-start-template.yml`，共享引擎零改动，不影响现有调用方（peft 等）。**

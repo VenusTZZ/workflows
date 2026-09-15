@@ -7,9 +7,9 @@ import subprocess
 import unittest
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
-from workflows.modelscope_cache import (
+from workflows.model_cache import (
     ensure_safetensors,
-    purge_corrupt_models,
+    purge_modelscope_corrupt,
     resolve_modelscope_cache,
 )
 
@@ -61,7 +61,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         print("setup: sourced CANN environment")
 
         ensure_safetensors()
-        purge_corrupt_models(resolve_modelscope_cache())
+        purge_modelscope_corrupt(resolve_modelscope_cache())
 
     @classmethod
     def setUpClass(cls) -> None:

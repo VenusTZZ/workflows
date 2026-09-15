@@ -1,0 +1,48 @@
+# peft examples guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/examples-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, upstream repo, dispatch input forwarding, and matrix
+# parallelism. The guard loop (release-only monitor / manifest-check /
+# run-example matrix / validate-results / save-monitor-state) lives in the
+# engine. See docs/examples-guard-engine.md for the design.
+
+name: peft-examples
+
+concurrency:
+  # schedule runs serialize; each manual run gets its own group so a
+  # dispatch is never blocked behind a scheduled run.
+  group: ${{ github.event_name == 'schedule' && 'peft-examples-schedule' || format('manual-{0}', github.run_id) }}
+  # false: a run cancelled mid-way loses its outcome writeback, and the
+  # outcome is what drives the next cycle's retry.
+  cancel-in-progress: false
+
+on:
+  # Bring-up phase: keep the schedule disabled until a few manual
+  # rounds are green (same policy as trl-examples.yml). Re-enable:
+  # schedule:
+  #   - cron: '30 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Branch, tag, or SHA to test (defaults to main)
+        required: false
+        default: main
+        type: string
+
+# Engine jobs query the GitHub Job API (validate-results); called
+# workflows run with the caller's GITHUB_TOKEN permissions.
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  peft-examples:
+    uses: ./.github/workflows/examples-template.yml
+    with:
+      # Namespaces cache keys (examples-monitor-state-peft_*), artifact
+      # names and the scheduling paths under projects/peft.
+      project: peft
+      upstream_repo: huggingface/peft
+      target_ref: ${{ inputs.target_ref }}
+      max_parallel: 4

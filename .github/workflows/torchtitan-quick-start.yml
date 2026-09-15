@@ -1,59 +1,13 @@
 # torchtitan quick start guard - project thin trigger.
-#
-# Calls the common engine .github/workflows/quick-start-template.yml;
-# this file only declares what varies per project: schedule,
-# concurrency, runner, container image + options, upstream repo,
-# monitored doc, and the test entry command. The guard loop, cache
-# I/O, state relay and publishing all live in the engine. See the
-# engine's `workflow_call.inputs` block for the full input contract.
-#
-# Cache keys (monitor-state-torchtitan-*) and artifact names are
-# derived from project=torchtitan, not from the workflow name.
-#
-# No device mounts: the self-hosted NPU runner (`linux-aarch64-a2-1`)
-# auto-passes `/dev/davinci*` into the container via the cluster
-# device-plugin, so container_options stays empty. Same convention
-# used by torchtune / xtuner / slime / tensordict / pytorch.vision /
-# accelerate / ray. The 8 projects that still ship a full
-# `--device=/dev/davinci0` block (bitsandbytes / cache-dit /
-# colossalai / deepspeed / llama.cpp / onnxruntime / trl /
-# whisper.cpp) keep that block for the read-only Ascend driver
-# bind-mounts the test wants; torchtitan does not need those.
-#
-# CLI generation contract: this workflow tests the latest RELEASE tag
-# (v0.2.x: tyro CLI, --job.config_file <toml>) NOT upstream main
-# (argparse CLI, --module <name> --config <name>). The two have
-# incompatible option schemas - main's ConfigManager._load_config
-# raises a ValueError when --module is missing, v0.2.x's tyro block
-# prints a full options table on --help and exits 0. When editing
-# Step 1 of the doc, read the v0.2.x run_train.sh + debug_model.toml;
-# do NOT copy from main README - main is the dev branch and not
-# what the guard actually checks out.
 
 name: torchtitan-quick-start
 
 concurrency:
-  # format() is load-bearing: a '||' between 'manual-' and
-  # github.run_id would short-circuit on the truthy literal and
-  # every dispatch would share one 'manual-' group.
   group: ${{ github.event_name == 'schedule' && 'torchtitan-quick-start-schedule' || format('manual-{0}', github.run_id) }}
-  # cancel-in-progress: false because (1) a schedule run cancelled
-  # mid-way loses its outcome writeback - the outcome is what makes
-  # the retry mechanism work, and the 'if: always()' guard isn't
-  # enough when the container is being torn down; (2) dispatch runs
-  # already live in unique groups so there's nothing to cancel.
   cancel-in-progress: false
 
 on:
   schedule:
-    # Run every 6 hours: '0 */6 * * *' fires at minute 0 of every
-    # 6th hour (00:00, 06:00, 12:00, 18:00). Cadence is loose enough
-    # for an upstream that ships ~1 minor release every 2-3 months
-    # (torchtitan: v0.1.0 2025-06, v0.2.0 2025-10, v0.2.1 2025-12,
-    # v0.2.2 2026-02), but tight enough that doc fixes propagate
-    # within a day. include_prerelease above is what lets schedule
-    # pick up prerelease-tagged releases (the only kind torchtitan
-    # ships before a stable).
     - cron: '0 */6 * * *'
   workflow_dispatch:
 
@@ -64,43 +18,13 @@ jobs:
   torchtitan-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-torchtitan-*), artifacts
-      # (torchtitan-quick-start-<run_id>) and the test working dir
-      # (workflows/projects/torchtitan).
       project: torchtitan
-      # Self-hosted NPU runner for the test job only; the engine pins
-      # the cache I/O jobs (restore-cache / publish-and-persist) to
-      # GitHub-hosted ubuntu-latest. Runner is a 2-card machine
-      # (`linux-aarch64-a2-2`); Step 1 in the doc uses
-      # ASCEND_RT_VISIBLE_DEVICES=0 to smoke on 1 card, Step 2 uses
-      # ASCEND_RT_VISIBLE_DEVICES=0,1 + torchrun --nproc_per_node=2 to
-      # exercise real HCCS collective. Same runner, two configs.
       test_runner: '["linux-aarch64-a2-2"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
       container_options: >-
         --volume=/data/ci-cache/modelscope/torchtitan:/root/.cache/modelscope
-      # Doc body does: git clone + uv pip install -r requirements.txt +
-      # uv pip install -e . --no-deps + a 1-step llama3_debugmodel run
-      # under --comm.mode fake_backend (Step 1, single card) +
-      # torchrun --nproc_per_node=2 --comm.mode hierarchical (Step 2,
-      # 2-card DDP). 5 #test blocks × ~22 min per block (Step 2's
-      # hierarchical + rendezvous overhead adds ~5 min) puts worst-case
-      # ~135 min; 180 leaves room without making a hung run sit through
-      # the full engine default.
       timeout_minutes: 180
       upstream_repo: pytorch/torchtitan
-      # torchtitan pre-stable: every release so far (v0.1.0…v0.2.2) is
-      # marked prerelease, so GitHub's /releases/latest 404s on this repo.
-      # The engine's auto-fallback chain handles this transparently:
-      # /releases/latest fails → /releases?per_page=20 picks the most
-      # recent non-draft by published_at. No caller input needed.
-      # Raw URL the engine's monitor hashes and the test fetches;
-      # doc-hash state lives under the monitor-state-torchtitan- cache
-      # prefix.
       doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/torchtitan/docs/Quick-start-Ascend.md
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/torchtitan/docs/Quick-start-Ascend.md
-      # cwd is workflows/projects/torchtitan; env contract (MONITORED_DOC_URL /
-      # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
-      # env prep and installs live in the test subclass's
-      # prepare_environment hook.
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

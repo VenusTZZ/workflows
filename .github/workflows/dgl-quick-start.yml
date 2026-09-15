@@ -6,7 +6,7 @@
 # monitored doc, and the test entry command. The guard loop, cache
 # I/O, state relay and publishing all live in the engine.
 #
-# Cache keys (monitor-state-dgl-*) and artifact names are derived
+# Cache keys (quick-start-monitor-state-dgl_*) and artifact names are derived
 # from project=dgl, not from the workflow name.
 #
 # Container options:
@@ -41,7 +41,7 @@ jobs:
   dgl-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-dgl-*), artifacts
+      # Namespaces cache keys (quick-start-monitor-state-dgl_*), artifacts
       # (dgl-quick-start-<run_id>) and the test working dir
       # (workflows/projects/dgl).
       project: dgl

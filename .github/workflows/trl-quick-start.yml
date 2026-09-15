@@ -8,17 +8,15 @@
 #
 # Engine-fixed behaviours this trigger relies on (declared in the
 # engine, NOT here):
-#   * cache key prefix: monitor-state-trl-  (from inputs.project)
+#   * cache key prefix: quick-start-monitor-state-trl_  (from inputs.project)
 #   * artifact name:    trl-quick-start-<run_id>
 #   * result.json is written by the engine and validated against
 #     schemas/result.schema.json before upload.
 #
-# NOTE: only workflow_dispatch is enabled for now (per spec: same
-# onboarding rhythm as llama.cpp / whisper.cpp). Once the pipeline
-# runs green and stable, re-enable the schedule block below
-# (copy the peft-quick-start.yml cron: '0 */3 * * *') to start the
-# periodic monitor loop. Until then, the engine's schedule-only steps
-# (monitor / record-monitor-outcome / cache save) simply never run.
+# schedule is enabled; workflow_dispatch stays for manual reruns.
+# The engine's schedule-only steps (monitor / record-monitor-outcome /
+# cache save) run on schedule triggers; dispatch forces a manual test
+# without mutating monitor state.
 
 name: trl-quick-start
 
@@ -26,8 +24,6 @@ concurrency:
   # format() is load-bearing: a '||' between 'manual-' and
   # github.run_id would short-circuit on the truthy literal and
   # every dispatch would share one 'manual-' group.
-  # The schedule branch is kept (even though schedule is not enabled
-  # yet) so re-enabling the cron later needs no concurrency change.
   group: ${{ github.event_name == 'schedule' && 'trl-quick-start-schedule' || format('manual-{0}', github.run_id) }}
   # cancel-in-progress: false because (1) a schedule run cancelled
   # mid-way loses its outcome writeback - the outcome is what makes
@@ -37,9 +33,8 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # schedule: deliberately NOT enabled yet - see the header note.
-  # Enable with e.g. `- cron: '0 */3 * * *'` once the pipeline is
-  # proven stable on manual runs.
+  schedule:
+    - cron: '0 */3 * * *'
   workflow_dispatch:
 
 permissions:
@@ -49,9 +44,11 @@ jobs:
   trl-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-trl-*), artifacts
+      # Namespaces cache keys (quick-start-monitor-state-trl_*), artifacts
       # (trl-quick-start-<run_id>) and the test working dir
       # (workflows/projects/trl).
+      # result.json is uploaded by the engine's publish-and-persist job
+      # (ubuntu-latest, if: always()); the NPU test job never uploads.
       project: trl
       # Self-hosted NPU runner for the test job only; the engine pins
       # the cache I/O jobs (restore-cache / publish-and-persist) to
@@ -65,10 +62,13 @@ jobs:
       # Doc under guard: projects/trl/docs/Quick-start-Ascend.md in
       # this repo (raw URL for hashing/fetching, blob URL for the
       # human-clickable link recorded in result.json).
+      # Doc body does: PyPI 二进制安装 trl + SFT / DPO 双方法 LoRA smoke
+      # （模型与数据集 HuggingFaceH4/ultrafeedback_binarized 均经
+      # ModelScope snapshot_download 自动下载到默认缓存；
+      # /root/.cache/modelscope 挂载供跨轮复用）。
       doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/trl/docs/Quick-start-Ascend.md
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/trl/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/trl; env contract (MONITORED_DOC_URL /
-      # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
-      # env prep and installs live in the test subclass's
-      # prepare_environment hook.
+      # NPU_READY) is injected by the engine. All project env prep and
+      # installs live in the test subclass's prepare_environment hook.
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

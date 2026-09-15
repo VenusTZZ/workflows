@@ -108,7 +108,7 @@ if ((${#EXTRA_ARGS[@]})); then
   ensure_passthrough "$EXAMPLE_PATH"
 fi
 
-cd "$TARGET_ROOT"
+cd /tmp
 # Export so the example script sees the same cache/output contract.
 export FIXTURE_DIR CI_OUTPUT_DIR ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
 # Source CANN env in the same shell that runs the example

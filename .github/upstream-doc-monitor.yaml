@@ -1,55 +1,16 @@
 # Upstream doc monitor — 完全自包含的监控清单
-#
-# 手动指定全部监控项，不依赖 projects.yaml 解析（监控清单与项目注册表
-# 各自独立演进，repo 一致性由本文件的评审保障）。
-#
-# 每个条目 = 一个监控项，字段：
-#   project  展示标签（工单标题与报告分组用；同一标签可出现在多个条目）
-#   owner    处理人 GitHub 用户名（可选但强烈建议填写：该条目产生的工单
-#            会 @owner 并尽力设为 assignee；缺省则工单不 @人）
-#   source   采集源，type 二选一：
-#     type: repo_file → 监控 GitHub 仓库内的单个文档
-#       repo    owner/repo 形式（必填）
-#       path    仓库内文档路径，相对仓库根（必填）
-#       branch  可选，默认上游默认分支
-#     type: web_page → 监控外部官方网页
-#       url     完整 http(s) 地址（必填）
-#
-# 若同一项目未来需要监控第二个文档，增加一个条目即可（标签可重复、
-# 可配不同 owner）。新增条目首轮记 first_seen（不建工单），第二轮起
-# 正常判定变化。
-#
-# TODO(owner): 当前 2 个测试条目的 owner 均为 lltiaor；后续补齐全量
-# 清单时按团队分工逐条填写。
-#
-# 当前仅保留 2 个测试条目（repo_file / web_page 各一，覆盖两条检测
-# 路径）；全量监控清单待验证通过后按上述格式逐步补齐。
+
+maintainer: lltiaor        # 本配置文件管理人
 
 projects:
   - project: deepspeed
     owner: lltiaor
-    source:
-      type: repo_file
-      repo: deepspeedai/DeepSpeed
-      path: README.md
-  # 官方网页监控示例（ascend.github.io 社区文档页，URL 已核实可达）。
-  # 其他项目的社区文档页核实路径后按同款方式追加。
-  - project: lm-eval-ascend-doc
+    url: https://github.com/deepspeedai/DeepSpeed/blob/master/docs/_tutorials/getting-started.md
+
+  - project: timm
     owner: lltiaor
-    source:
-      type: web_page
-      url: https://ascend.github.io/docs/sources/lm_evaluation/quick_start.html
-  # CI 效果验证用条目：监控 lltiaor 自己的测试仓库文档（public），
-  # 改 doc.md 内容 → 下一轮 dispatch 触发 changed → 建工单 @lltiaor。
-  # 验证完成后删除本条目。
-  - project: ci-test
+    url: https://github.com/huggingface/hub-docs/blob/main/docs/hub/timm.md
+    
+  - project: TRL
     owner: lltiaor
-    source:
-      type: repo_file
-      repo: lltiaor/doc-test
-      path: doc.md
-  - project: page-test
-    owner: lltiaor
-    source:
-      type: web_page
-      url: https://lltiaor.github.io/doc-test/
+    url: https://github.com/huggingface/trl/blob/main/docs/source/quickstart.md

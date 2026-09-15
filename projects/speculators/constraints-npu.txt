@@ -1,0 +1,12 @@
+# Keep the vllm-ascend:v0.23.0 image stack. speculators' pyproject
+# allows a torch range that would otherwise pull NVIDIA wheels.
+torch==2.10.0
+torch-npu==2.10.0.post4
+torchvision==0.25.0
+torchaudio==2.10.0
+vllm==0.23.0
+vllm-ascend==0.23.0
+transformers==5.5.4
+setuptools>=77,<81
+numpy==1.26.4
+modelscope==1.39.1

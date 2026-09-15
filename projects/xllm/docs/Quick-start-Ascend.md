@@ -1,6 +1,6 @@
 # Quick Start (Ascend NPU)
 
-在单卡昇腾 NPU 上快速验证 xllm 离线推理。
+在单卡昇腾 NPU 上快速验证 xllm 在线服务推理。
 
 ## 前置条件
 
@@ -20,20 +20,20 @@ Atlas 900 A2 训练系列产品或者 Ascend 910B 系列产品，并按需完成
 
 **配套镜像**：
 
-quay.io/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605
+swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-0.10.0-release-hb-rc2-arm
 
 **软件版本**：
 
 | 组件 | 版本 |
 | --- | --- |
-| Python | 3.12 |
+| Python | 3.11 |
 | CANN | 9.1.0 |
 | torch | 2.9.0 |
 | torch_npu | 2.9.0.post2 |
-| xllm | 官方镜像预装 (v0.10.1) |
+| xllm | 官方 release 镜像预装 (v0.10.0) |
 | 模型 | [Qwen2-7B-Instruct](https://www.modelscope.cn/models/Qwen/Qwen2-7B-Instruct) |
 
-> 说明：CI 使用 xllm 官方 NPU 镜像 `quay.io/jd_xllm/xllm-ai:xllm-dev-a2-arm-cann9-20260605`，**已预装 xllm v0.10.1 及其依赖**（含 torch 2.9.0、torch_npu 2.9.0.post2、CANN 9.1.0 运行时），无需从源码编译，启动即用。
+> 说明：CI 使用 xllm 官方 release 镜像 `swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-0.10.0-release-hb-rc2-arm`，**已预装 xllm v0.10.0 及其依赖**，无需从源码编译，启动即用。
 
 ### 前置安装
 
@@ -59,6 +59,12 @@ npu-smi info
 
 > 如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动。
 
+输出结果如下（表格内容随环境变化，仅校验命令执行成功）：
+
+```shell #test-result id="check-npu"
+...
+```
+
 检查 Python 版本：
 
 ```shell #test id="check-py"
@@ -79,7 +85,7 @@ python -c "import torch, torch_npu; print('torch=', torch.__version__); print('t
 输出结果如下：
 
 ```shell #test-result id="check-torch"
-torch= 2.9.0
+torch= 2.9.0+cpu
 torch_npu= 2.9.0.post2
 is_available: True
 count: 1
@@ -89,87 +95,87 @@ count: 1
 
 ## 验证 xllm 安装
 
-xllm 由 CI 从源码编译安装，验证版本：
+xllm 已预装于官方 release 镜像，无需编译，验证可导入（镜像内 xllm 包未暴露 `__version__`，此处打印模块路径确认安装位置）：
 
 ```shell #test id="check-xllm"
-python -c "import xllm; print('xllm version:', xllm.__version__)"
+python -c "import xllm; print('xllm import ok:', xllm.__file__)"
 ```
 
 输出结果如下：
 
 ```shell #test-result id="check-xllm" fuzzy='xxx'
-xllm version: xxx
+xllm import ok: xxx
 ```
 
-## 离线推理示例
+## 在线服务用例
 
-使用单卡 NPU 运行生成示例（最大生成 10 token，快速验证链路）：
+参考 [xllm 在线服务文档](https://docs.xllm-ai.com/zh/getting_started/online_service/)，选取 **LLM 客户端调用 → HTTP 调用（chat 模式）** 用例进行验证。先按 [xllm 启动文档](https://docs.xllm-ai.com/zh/getting_started/launch_xllm/) 的 NPU 方式在单卡上启动服务，再通过 OpenAI 兼容接口发起一次对话请求（按文档说明调整参数：`stream: false`、`max_tokens: 10` 以便快速验证）。
 
-```shell #test id="generate"
-ASCEND_RT_VISIBLE_DEVICES=0 python -m examples.generate --model /root/.cache/modelscope/Qwen2-7B-Instruct --max_tokens 10
+一个命令完成"启动服务 → 等待就绪 → chat 请求 → 停止服务"：
+
+```shell #test id="serve-chat"
+[ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ] && source /usr/local/Ascend/ascend-toolkit/set_env.sh
+[ -f /usr/local/Ascend/nnal/atb/set_env.sh ] && source /usr/local/Ascend/nnal/atb/set_env.sh
+
+rm -f /tmp/xllm-serve.log
+ASCEND_RT_VISIBLE_DEVICES=0 xllm \
+  --model /root/.cache/modelscope/Qwen2-7B-Instruct \
+  --port 9977 \
+  --master_node_addr=127.0.0.1:9748 \
+  --nnodes=1 \
+  --node_rank=0 \
+  --block_size=128 \
+  --max_memory_utilization=0.86 \
+  --communication_backend="hccl" \
+  --enable_prefix_cache=false \
+  --enable_chunked_prefill=true \
+  --enable_schedule_overlap=true \
+  > /tmp/xllm-serve.log 2>&1 &
+XLLM_PID=$!
+trap 'kill $XLLM_PID 2>/dev/null || true' EXIT
+
+response=""
+for i in $(seq 1 30); do
+  kill -0 "$XLLM_PID" 2>/dev/null || break
+  response=$(curl -s --max-time 30 http://localhost:9977/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{
+      "model": "Qwen2-7B-Instruct",
+      "max_tokens": 10,
+      "temperature": 0,
+      "stream": false,
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are a helpful assistant."
+        },
+        {
+          "role": "user",
+          "content": "hello xllm"
+        }
+      ]
+    }') || response=""
+  if [ -n "$response" ] && echo "$response" | grep -q '"choices"'; then
+    break
+  fi
+  sleep 10
+done
+
+if ! echo "$response" | grep -q '"choices"'; then
+  echo "xllm service did not become ready in time; last 50 lines of /tmp/xllm-serve.log:"
+  tail -50 /tmp/xllm-serve.log
+  exit 1
+fi
+
+echo "$response" | python -c "import json, sys; d = json.load(sys.stdin); print('chat content:', d['choices'][0]['message']['content'])"
 ```
 
 输出结果如下：
 
-```shell #test-result id="generate" fuzzy='xxx' fuzzy='...'
-Prompt: 'Hello, my name is', Generated text: 'xxx'
-Prompt: 'The president of the United States is', Generated text: 'xxx'
-Prompt: 'The capital of France is', Generated text: 'xxx'
-Prompt: 'The future of AI is', Generated text: 'xxx'
-...
-llm finished
+```shell #test-result id="serve-chat" fuzzy='xxx'
+chat content: xxx
 ```
 
 > 注意：模型路径 `/root/.cache/modelscope/Qwen2-7B-Instruct` 是 CI 环境通过 ModelScope 预先下载的目录（挂载自 CI 缓存 `/data/ci-cache/modelscope/xllm`）。本地运行时请用 `modelscope` 自行下载该模型到对应目录。
-
-## Beam Search 生成示例
-
-```shell #test id="generate-beam"
-ASCEND_RT_VISIBLE_DEVICES=0 python -m examples.generate_beam_search --model /root/.cache/modelscope/Qwen2-7B-Instruct --max_tokens 10
-```
-
-输出结果如下：
-
-```shell #test-result id="generate-beam" fuzzy='xxx' fuzzy='...'
-Prompt: 'Hello, my name is', Generated text: 'xxx'
-...
-```
-
-## Embedding 生成示例
-
-```shell #test id="generate-embedding"
-ASCEND_RT_VISIBLE_DEVICES=0 python -m examples.generate_embedding --model /root/.cache/modelscope/Qwen2-7B-Instruct
-```
-
-输出结果如下：
-
-```shell #test-result id="generate-embedding" fuzzy='xxx' fuzzy='...'
-Embedding shape: xxx
-...
-```
-
-## VLM 示例（如果模型支持）
-
-```shell #test id="generate-vlm"
-ASCEND_RT_VISIBLE_DEVICES=0 python -m examples.generate_vlm --model /root/.cache/modelscope/Qwen2-7B-Instruct --max_tokens 10
-```
-
-输出结果如下：
-
-```shell #test-result id="generate-vlm" fuzzy='xxx' fuzzy='...'
-Prompt: 'xxx', Generated text: 'xxx'
-...
-```
-
-## Sample 示例
-
-```shell #test id="sample"
-ASCEND_RT_VISIBLE_DEVICES=0 python -m examples.sample --model /root/.cache/modelscope/Qwen2-7B-Instruct --max_tokens 10
-```
-
-输出结果如下：
-
-```shell #test-result id="sample" fuzzy='xxx' fuzzy='...'
-Prompt: 'xxx', Generated text: 'xxx'
-...
-```
+>
+> 服务日志输出到 `/tmp/xllm-serve.log`，排查启动失败时可查看该文件。更多客户端调用方式（completions 模式、Beam Search、`/v1/sample`、Python 调用、VLM）见 [在线服务文档](https://docs.xllm-ai.com/zh/getting_started/online_service/)。

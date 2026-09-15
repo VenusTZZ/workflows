@@ -39,6 +39,14 @@
 #   UPSTREAM_REF        release tag substituted into the doc's <ref>
 #   NPU_READY           'true'; gates the project's E2E test class
 #   UV_* / PIP_*        cluster mirror defaults (overridable in hook)
+#
+# Monitor-state cache keys use the format
+# quick-start-monitor-state-<project>_<run_id>. On restore the matched
+# key is strictly
+# asserted - strip the trailing run id and the rest must be exactly
+# this project's prefix. A mismatch is NOT fatal: the cache is
+# discarded and the run proceeds as a cold start (cost: one extra
+# guard round).
 
 name: quick-start-template
 
@@ -112,11 +120,35 @@ jobs:
       cache_test_error:      ${{ steps.read-monitor.outputs.cache_test_error }}
     steps:
       - name: Restore monitor state
+        id: cache-restore
         uses: actions/cache/restore@v6
         with:
           path: .monitor-state
-          key: cache-not-used-restore-keys-only
-          restore-keys: monitor-state-${{ inputs.project }}-
+          # Per-run key always misses; restore-keys picks the latest
+          # save. The '_' terminator makes this prefix match only keys
+          # of the very same project (see header comment).
+          key: quick-start-monitor-state-${{ inputs.project }}_${{ github.run_id }}
+          restore-keys: |
+            quick-start-monitor-state-${{ inputs.project }}_
+
+      # Ownership guard (non-fatal): the matched key must belong to
+      # this project - strip the trailing run id and the rest must be
+      # exactly this project's prefix. On mismatch the restored state
+      # is discarded and the run proceeds as a cold start; a
+      # ::warning annotation makes the cross-talk visible.
+      - name: Verify matched cache key
+        env:
+          PROJECT: ${{ inputs.project }}
+          MATCHED_KEY: ${{ steps.cache-restore.outputs.cache-matched-key }}
+        run: |
+          set -euo pipefail
+          if [ -n "$MATCHED_KEY" ] \
+            && ! printf '%s' "$MATCHED_KEY" | grep -Eq "^quick-start-monitor-state-${PROJECT}_[0-9]+$"; then
+            echo "::warning::monitor-state cache cross-talk: matched key '$MATCHED_KEY' is not owned by project '$PROJECT' - discarding cache (cold start)"
+            rm -rf .monitor-state
+          else
+            echo "matched cache key ok: ${MATCHED_KEY:-cold start}"
+          fi
 
       # Re-emit each field as a separate step output rather than passing
       # the raw file content as one big string - keeps the materializer
@@ -300,7 +332,14 @@ jobs:
           #   3. /tags?per_page=1          (covers repos that never publish
           #                                 GitHub Releases — Ascend/vision is
           #                                 the canonical case; /releases/latest
-          #                                 404s AND /releases returns [])
+          #                                 404s AND /releases returns []. The
+          #                                 jq guard requires a non-empty array:
+          #                                 a 200-but-empty [] (SpecForge) must
+          #                                 fall through to tier 4, else the
+          #                                 chain stops here with an empty
+          #                                 {id, tag_name} and the decide step
+          #                                 curls /commits/ with an empty ref,
+          #                                 which the API answers with 422)
           #   4. /commits/HEAD             (covers repos with NO releases AND
           #                                 NO tags — sgl-project/SpecForge is
           #                                 the canonical case; all three
@@ -353,9 +392,9 @@ jobs:
               /tmp/r2.json > /tmp/release.json
             echo "monitor: release source=/releases?per_page=20 (prerelease fallback)"
           elif curl -fsSL --retry 3 --max-time 30 \
-              "$GH_API/repos/${{ env.UPSTREAM_REPO }}/tags?per_page=1" -o /tmp/r3.json 2>/dev/null; then
-            jq -r 'if (.[0] // null) != null then {id: .[0].commit.sha, tag_name: .[0].name} else empty end' \
-              /tmp/r3.json > /tmp/release.json
+              "$GH_API/repos/${{ env.UPSTREAM_REPO }}/tags?per_page=1" -o /tmp/r3.json 2>/dev/null \
+              && jq -e '(.[0] // null) != null' /tmp/r3.json > /dev/null 2>&1; then
+            jq -r '{id: .[0].commit.sha, tag_name: .[0].name}' /tmp/r3.json > /tmp/release.json
             echo "monitor: release source=/tags?per_page=1 (tags-only fallback)"
           elif curl -fsSL --retry 3 --max-time 30 \
               "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/HEAD" -o /tmp/r4.json 2>/dev/null; then
@@ -524,6 +563,7 @@ jobs:
             # could read .commit.sha directly, but tracking which source
             # fired across the bash steps would add state for a marginal
             # saving — not worth it.)
+            [ -n "$ref" ] || { echo "ERROR: monitor fired (reason=$reason) with empty ref - no upstream ref to test"; exit 1; }
             SHA=$(curl -fsSL "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/$ref" \
               | jq -r '.sha // empty')
             [ -z "$SHA" ] && { echo "failed to resolve $ref"; exit 1; }
@@ -812,4 +852,4 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: .monitor-state
-          key: monitor-state-${{ inputs.project }}-${{ github.run_id }}
+          key: quick-start-monitor-state-${{ inputs.project }}_${{ github.run_id }}

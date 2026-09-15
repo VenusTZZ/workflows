@@ -1,0 +1,288 @@
+version: 1
+scan:
+  root: examples
+  include_extensions: ['.sh', '.py', '.yaml']
+  # files-only 模型（docs/examples-guard-engine.md §2.7）。exclude 项为目录
+  # 路径（递归剪枝）或 glob（`**` 跨目录，匹配相对 target root 的路径），
+  # 排除"不是 example 的配套物"：共享 helper 模块、上游自测、运行配置、
+  # 入口脚本背后的实现文件。扫描工具的 exclude 支持随发现 workflow 的
+  # PR 落地；examples 引擎不扫描，本段当前只是声明。
+  exclude:
+    - examples/sft/configs           # deepspeed/fsdp 配置，被 run_peft_*.sh 引用
+    - examples/sft/train.py          # run_peft.sh 背后的实现，入口是 .sh
+    - '**/utils'                    # 各 example 的共享 helper 模块目录
+    - '**/__init__.py'
+    - '**/utils.py'                 # 单文件版 helper
+    - '**/datautils.py'
+    - '**/preprocess.py'            # 数据预处理脚本
+    - '**/test_*'                   # 上游自测（.py / .sh）
+    - '**/*config*.yaml'            # accelerate 等运行配置
+
+supported:
+  # ===== 已在 coder npu-3（910B4×2, torch2.9/torch_npu2.9.0.post2, CANN9.1）
+  # 逐例验证通过（exit 0），依赖线 pin 见 setup_example.sh 注释 =====
+
+  # CI 首跑已绿（run 34818091939）：TRL SFTTrainer LoRA，1 卡 1 step
+  - path: examples/sft/run_peft.sh
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${SFT_MODEL_PATH}   # 脚本默认 Mistral-7B：换 setup 预下载的 0.5B（CI 规模 + 避 HF 下载）
+      - --dataset_name ${TARGET_ROOT}/fixtures/ci_sft_8.jsonl   # 默认拉 HF hub：换仓内 8 行 fixture
+      - --use_4bit_quantization False   # bnb 4bit 无 NPU 后端
+      - --use_flash_attn False          # flash-attn 仅 CUDA
+      - --gradient_checkpointing False  # 0.5B 无需省显存；关掉避免 NPU reentrant 兼容问题
+      - --use_reentrant False           # 同上（checkpointing 已关，双保险）
+      - --push_to_hub False             # 默认 True：CI 不推模型仓
+      - --packing False                 # 8 行样本无需打包，行为更可预期
+      - --max_length 512                # 默认 2048：压序列长度
+      - --per_device_train_batch_size 1 # 默认 8：压批
+      - --per_device_eval_batch_size 1  # 同上
+      - --gradient_accumulation_steps 1 # 默认 8：1 step 即可验证
+      - --max_steps 1                   # 默认整 epoch：1 步压到 CI 规模
+      - --logging_steps 1               # 默认 5：确保 1 步内也有日志
+      - --dataset_num_proc 1            # 避免 datasets 多进程在 CI 容器的不稳定
+      - --eval_strategy no              # 默认 epoch：跳过评估省时
+      - --save_strategy no              # 默认 epoch：不落 checkpoint
+      - --report_to none                # 关闭 wandb 等外部上报（未装会报错）
+      - --output_dir ${CI_OUTPUT_DIR}   # 默认仓内相对路径：输出必须进 CI 输出目录
+    timeout_minutes: 90
+
+  # BEFT：mt0-small + financial_phrasebank，原样跑通（两套环境均 exit 0）
+  - path: examples/beft_finetuning/beft_finetuning.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    timeout_minutes: 30
+
+  # MiSS：Qwen2.5-0.5B + imdb 1%（trl 1.12 需 --loss_type nll 绕开 chunked_nll patch）
+  - path: examples/miss_finetuning/miss_finetuning.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --base_model_name_or_path ${SFT_MODEL_PATH}   # HfArgumentParser 必填：注入 setup 预下载的 0.5B
+      - --dataset_field text label   # 默认 None 会崩（example 自身缺陷）：imdb 的输入/输出列名
+      - --loss_type nll   # trl 1.12 默认 chunked_nll：与 peft 预包装模型的 partial lm_head 冲突（coder 实测）
+    timeout_minutes: 30
+
+  # MiCA：同上配方（Qwen2.5-0.5B + imdb 1% + nll）
+  - path: examples/mica_finetuning/mica_finetuning.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --base_model_name_or_path ${SFT_MODEL_PATH}   # HfArgumentParser 必填：注入 0.5B
+      - --loss_type nll   # 同 miss：绕开 trl chunked_nll 与 peft partial 的冲突
+    timeout_minutes: 30
+
+  # PVeRa：dinov2-base + beans，原样跑通
+  - path: examples/pvera/confidence_interval_generation.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    timeout_minutes: 30
+
+  # 序列分类（非 LoRA 方法）：bert-base + GLUE
+  - path: examples/sequence_classification/peft_no_lora_accelerate.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path bert-base-uncased   # argparse 必填：小模型，HF 经 hf-mirror 可达
+      - --output_dir ${CI_OUTPUT_DIR}   # argparse 断言必填（脚本硬校验）
+    timeout_minutes: 45
+
+  # AdaMSS GLUE：roberta-base + mrpc 单 epoch
+  - path: examples/adamss_finetuning/glue_adamss_asa_example.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --dataset_name mrpc   # 默认 cola；mrpc 数据量小跑得快（docstring 推荐用法）
+      - --model_name_or_path roberta-base   # 默认即 roberta-base，显式声明（也可 roberta-large，太大）
+      - --num_epochs 1   # 默认 100：压到单 epoch（mrpc 3.7k 样本几分钟）
+    timeout_minutes: 45
+
+  # AdaMSS manual：手动 API 演示，roberta-base 单 epoch
+  - path: examples/adamss_finetuning/glue_adamss_asa_manual_example.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --num_epochs 1   # 默认 100：压到单 epoch
+    timeout_minutes: 45
+
+  # Supertuning：Qwen2.5-0.5B + guanaco 完整 1 epoch（308 步 exit 0）
+  - path: examples/supertuning_finetuning/supertuning_finetuning.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --base_model ${SFT_MODEL_PATH}   # 默认 meta-llama/Llama-3.2-1B（gated + 大）：换 0.5B
+      - --batch_size 2   # 默认 1：guanaco 全 epoch 308 步，batch 2 控制时长（coder 实测 ~13 分钟）
+    timeout_minutes: 45
+
+# ===== unsupported（每条附理由：coder npu-3 2026-09-14 逐例验证 / 静态分析） =====
+unsupported:
+  # Mixtral-8x7B（MoE ~47B）超出 2×32G；且 7B 系已见 FA 内核问题
+  - examples/KappaTune/experiments_kappatune_peft.py
+  - examples/adamss_finetuning/glue_adamss_asa_example.py
+  - examples/adamss_finetuning/glue_adamss_asa_manual_example.py
+  # vit-base + StanfordCars：训练 63%+ 无错误但全量 ~84 分钟超 CI 预算，候选
+  - examples/adamss_finetuning/image_classification_adamss_asa.py
+  # Mistral-7B：7B 家族代表 dora 实测 FA 内核崩，同架构预期同因
+  - examples/alora_finetuning/alora_finetuning.py
+  # Phi-3-mini 3.8B + device_map=auto 多任务：未验证
+  - examples/arrow_multitask/arrow_phi3_mini.py
+  # HTTP 客户端，需先部署 BDLoRA 路由服务
+  - examples/bdlora_finetuning/chat.py
+  - examples/beft_finetuning/beft_finetuning.py
+  # 需预训练 ControlNet 权重 + SD 推理，未验证
+  - examples/boft_controlnet/eval.py
+  # 同上
+  - examples/boft_controlnet/eval.sh
+  # SD ControlNet 训练 + bitsandbytes/xformers（无 NPU 后端）
+  - examples/boft_controlnet/train_controlnet.py
+  # 同上（包装脚本）
+  - examples/boft_controlnet/train_controlnet.sh
+  # SD dreambooth + bitsandbytes
+  - examples/boft_dreambooth/train_dreambooth.py
+  # 同上（包装脚本）
+  - examples/boft_dreambooth/train_dreambooth.sh
+  # 多阶段研究管线（synthesize/train/distill）：非单一 example
+  - examples/cartridge_self_study/arxiv_synthesize.py
+  # 多阶段研究管线：非单一 example
+  - examples/cartridge_self_study/arxiv_train.py
+  # 多阶段研究管线：非单一 example
+  - examples/cartridge_self_study/synthesize.py
+  # 多阶段研究管线：非单一 example
+  - examples/cartridge_self_study/train_distill.py
+  # bloomz-7b1 + deepspeed zero3 offload：7B 家族 + deepspeed NPU 组合均未验证
+  - examples/causal_language_modeling/peft_lora_clm_accelerate_ds_zero3_offload.py
+  # epoch 0 + eval 已完成（bart-base），全量未确认，候选
+  - examples/conditional_generation/peft_adalora_seq2seq.py
+  # T0_3B + deepspeed zero3 offload：未验证
+  - examples/conditional_generation/peft_lora_seq2seq_accelerate_ds_zero3_offload.py
+  # t5-base + accelerate FSDP1：NPU 支持未验证
+  - examples/conditional_generation/peft_lora_seq2seq_accelerate_fsdp.py
+  # bitsandbytes 量化（无 NPU 后端）
+  - examples/corda_finetuning/corda_finetuning.py
+  # SD dreambooth + bitsandbytes
+  - examples/deft_dreambooth/train_dreambooth.py
+  # llama-7b：家族代表 dora 实测 flash-attention 内核崩（aclnn 错误 207001），单卡 32G
+  - examples/deft_finetuning/deft_finetuning.py
+  # llama-7b：家族代表 dora 实测 flash-attention 内核崩（aclnn 错误 207001），单卡 32G
+  - examples/delora_finetuning/delora_finetuning.py
+  # Llama-3.1-8B：单卡 32G 紧张（8B 家族实测 HBM 溢出），llama 架构另有 FA 内核问题
+  - examples/dora_finetuning/dora-caching.py
+  # 家族代表实测：载入 OK（Using device: npu），首步前向 aclnnFlashAttentionScore 错误 207001（CANN 9.1）
+  - examples/dora_finetuning/dora_finetuning.py
+  # accelerate ephemeral GPU offload 特性：NPU 未验证
+  - examples/ephemeral_gpu_offloading/load_with_dora.py
+  # Llama-3.1-8B：单卡 32G 紧张（8B 家族实测 HBM 溢出），llama 架构另有 FA 内核问题
+  - examples/eva_finetuning/eva_finetuning.py
+  # Intel XPU
+  - examples/eva_finetuning/eva_finetuning_multi_accelerator.py
+  # 训练循环已验证（embedding），全量时长未确认
+  - examples/feature_extraction/peft_lora_embedding_semantic_search.py
+  # bitsandbytes NF4（无 NPU 后端）
+  - examples/fp4_finetuning/finetune_fp4_opt_bnb_peft.py
+  # NPU 硬阻塞（coder 实测）：同上（sparse 算子）
+  - examples/frod_finetuning/frod_image_classification.py
+  # NPU 硬阻塞（coder 实测）：torch.sparse.mm → aten::addmm 无 NPU 后端
+  - examples/frod_finetuning/frod_text_classification.py
+  # 训练循环已验证（loss 正常），alpaca 52k 单 epoch >5h 且无 max_steps 参数
+  - examples/glora_finetuning/glora_finetuning.py
+  # NPU 硬阻塞（coder 实测）：optimizer.step(grad_scaler=) 为 CUDA AMP 私有参数
+  - examples/gralora_finetuning/gralora_finetuning.py
+  # 同 glora（已验证可训，无法压规模）
+  - examples/hira_finetuning/hira_finetuning.py
+  # SD dreambooth + bitsandbytes
+  - examples/hra_dreambooth/train_dreambooth.py
+  # 同上（包装脚本）
+  - examples/hra_dreambooth/train_dreambooth.sh
+  # bitsandbytes int8
+  - examples/int8_training/fine_tune_blip2_int8.py
+  # bitsandbytes int8 + whisper-large
+  - examples/int8_training/peft_adalora_whisper_large_training.py
+  # bitsandbytes int8（包装脚本）
+  - examples/int8_training/run_adalora_whisper_int8.sh
+  # NPU 硬阻塞（coder 实测）：backward acl ERR00100（KASA 自定义层）
+  - examples/kasa_finetuning/kasa_finetuning.py
+  # NPU 硬阻塞（coder 实测）：同上（grad_scaler）
+  - examples/lily_finetuning/lily_finetuning.py
+  # bitsandbytes int8
+  - examples/loftq_finetuning/int8_correction.py
+  # LoftQ 依赖 bitsandbytes（coder 实测确认）
+  - examples/loftq_finetuning/quantize_save_load.py
+  # 与近期 transformers 不兼容（send_example_telemetry 已移除，coder 实测）
+  - examples/loftq_finetuning/train_gsm8k_llama.py
+  # CPU 格式转换工具，无需 NPU 看护
+  - examples/lora_dreambooth/convert_kohya_ss_sd_lora_to_peft.py
+  # CPU 格式转换工具
+  - examples/lora_dreambooth/convert_peft_sd_lora_to_kohya_ss.py
+  # SD dreambooth + bitsandbytes
+  - examples/lora_dreambooth/train_dreambooth.py
+  # NVIDIA TransformerEngine（仅 CUDA）
+  - examples/lora_finetuning_transformer_engine/lora_finetuning_te.py
+  # 训练循环已验证（gpt2+wikitext），全量时长未确认
+  - examples/lora_ga_finetuning/lora_ga_finetuning.py
+  # Llama-3-8B：单卡 32G 紧张（8B 家族实测 HBM 溢出）
+  - examples/lorafa_finetune/lorafa_finetuning.py
+  - examples/mica_finetuning/mica_finetuning.py
+  - examples/miss_finetuning/miss_finetuning.py
+  # 训练循环已验证（roberta+mrpc），5 epoch 全量未跑完，候选
+  - examples/monteclora_finetuning/sequence_classification_finetune_monteclora.py
+  # SD dreambooth + bitsandbytes
+  - examples/oft_dreambooth/train_dreambooth.py
+  # 同 glora（已验证可训；quantize 关闭时无 bnb 依赖）
+  - examples/olora_finetuning/olora_finetuning.py
+  # Llama-3.1-8B：单卡 32G 紧张（8B 家族实测 HBM 溢出），llama 架构另有 FA 内核问题
+  - examples/orthogonal_subspace_learning/osf_continual_learning.py
+  # NPU 硬阻塞（coder 实测）：同上（grad_scaler）
+  - examples/peanut_finetuning/peanut_finetuning.py
+  # llama-7b：家族代表 dora 实测 flash-attention 内核崩（aclnn 错误 207001），单卡 32G
+  - examples/pissa_finetuning/pissa_finetuning.py
+  # 版本敏感：trl 1.10 可跑（exit 0）、1.12 backward 崩，与 mica/miss 配方冲突
+  - examples/psoft_finetuning/psoft_finetuning.py
+  - examples/pvera/confidence_interval_generation.py
+  # GPTQ（exllama CUDA kernel）
+  - examples/qalora_finetuning/qalora_gptq_finetuning.py
+  # llama-7b：家族代表 dora 实测 flash-attention 内核崩（aclnn 错误 207001），单卡 32G
+  - examples/randlora_finetuning/randlora_finetuning.py
+  # llama-7b：家族代表 dora 实测 flash-attention 内核崩（aclnn 错误 207001），单卡 32G
+  - examples/road_finetuning/road_finetuning.py
+  - examples/sequence_classification/peft_no_lora_accelerate.py
+  # Llama-2-70b：超出单机卡容量
+  - examples/sft/run_peft_deepspeed.sh
+  # Llama-2-70b：超出单机卡容量
+  - examples/sft/run_peft_fsdp.sh
+  # GPTQ INT4
+  - examples/sft/run_peft_fsdp_gptq.sh
+  # Mistral-7B 多卡 accelerate：7B 家族 FA 内核问题 + 未验证
+  - examples/sft/run_peft_multigpu.sh
+  # Llama-2-70b + bnb qlora
+  - examples/sft/run_peft_qlora_deepspeed_stage3.sh
+  # Llama-2-70b + bnb qlora
+  - examples/sft/run_peft_qlora_fsdp.sh
+  # unsloth（仅 CUDA）
+  - examples/sft/run_unsloth_peft.sh
+  # 家族代表实测：权重载入完成，随后单卡 HBM 溢出被 SIGKILL（脚本硬编码单设备，无法双卡分摊）
+  - examples/shadow_finetuning/shadow_finetuning.py
+  # NPU 硬阻塞（coder 实测）：sparse COO tensor 触发 PyTorch 内部断言
+  - examples/shira_finetuning/shira_finetuning.py
+  # CPU 格式转换工具
+  - examples/stable_diffusion/convert_sd_adapter_to_peft.py
+  # Intel Gaudi HPU
+  - examples/stable_diffusion/inc_flux_lora_hpu.py
+  # SD dreambooth + bitsandbytes
+  - examples/stable_diffusion/train_dreambooth.py
+  - examples/supertuning_finetuning/supertuning_finetuning.py
+  # NPU 硬阻塞（coder 实测）：backward NPU 内核错误（nll 绕过 trl patch 后仍崩）
+  - examples/unilora_finetuning/unilora_finetuning.py
+  # 同 glora（已验证可训，无法压规模）
+  - examples/waveft_finetuning/waveft_finetuning.py
+  # mistral.rs 推理引擎（Rust/CUDA）
+  - examples/xlora/xlora_inference_mistralrs.py

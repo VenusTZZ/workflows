@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run one example from a CI working copy of the target tree.
-# Overlay CLI args come from OVERLAY_ARGS (JSON array). Never
-# git add/commit/push.
+# Overlay CLI args come from OVERLAY_ARGS (JSON array). Do not
+# patch the working copy. Never git add/commit/push.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -12,19 +12,12 @@ fi
 EXAMPLE_REL="$1"
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
 CI_OUTPUT_DIR="${CI_OUTPUT_DIR:?CI_OUTPUT_DIR is required}"
-EXEC_REL="${EXEC:?EXEC is required}"
 PROFILE="${PROFILE:?PROFILE is required}"
 
 EXAMPLE_PATH="$TARGET_ROOT/$EXAMPLE_REL"
 
-if [[ ! -e "$EXAMPLE_PATH" ]]; then
+if [[ ! -f "$EXAMPLE_PATH" ]]; then
   echo "example not found: $EXAMPLE_PATH" >&2
-  exit 1
-fi
-
-EXEC_PATH="$TARGET_ROOT/$EXEC_REL"
-if [[ ! -f "$EXEC_PATH" ]]; then
-  echo "exec not found: $EXEC_PATH" >&2
   exit 1
 fi
 
@@ -66,53 +59,47 @@ PY
 
 source_cann() {
   export PATH="/usr/local/sbin:/usr/local/bin:$PATH"
+  # shellcheck disable=SC1091
   source /usr/local/Ascend/ascend-toolkit/set_env.sh
+}
+
+assert_cpu-python() {
+  if ! grep -Eq '5(\.0*)?,?[[:space:]]+7(\.0*)?,?[[:space:]]+9(\.0*)?' "$RUN_LOG"; then
+    echo "getting_started did not print the Add result 5 7 9" >&2
+    exit 1
+  fi
+}
+
+assert_quant-cpu() {
+  if ! grep -qF 'Calibrated and quantized model saved.' "$RUN_LOG"; then
+    echo "quantizer did not print Calibrated and quantized model saved." >&2
+    exit 1
+  fi
+  if [[ ! -f "$CI_OUTPUT_DIR/mobilenetv2-7.quant.onnx" ]]; then
+    echo "quantized model missing: $CI_OUTPUT_DIR/mobilenetv2-7.quant.onnx" >&2
+    exit 1
+  fi
+  if grep -qF 'CANNExecutionProvider' "$RUN_LOG"; then
+    echo "cpu/ quantization log mentioned CANNExecutionProvider; this profile is host-only" >&2
+    exit 1
+  fi
 }
 
 eval "EXTRA_ARGS=( $(expand_overlay) )"
 
-echo "running $EXEC_PATH for $EXAMPLE_REL with ${#EXTRA_ARGS[@]} overlay args"
+echo "running $EXAMPLE_PATH with ${#EXTRA_ARGS[@]} overlay args"
 if ((${#EXTRA_ARGS[@]})); then
   printf 'overlay arg: %q\n' "${EXTRA_ARGS[@]}"
 fi
 
 source_cann
-cd "$TARGET_ROOT"
 export CI_OUTPUT_DIR ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
+export PYTHONUNBUFFERED=1
 
-RUN_LOG="$CI_OUTPUT_DIR/$(basename "$EXEC_REL").log"
-
-assert_cann-gtest() {
-  if grep -qF '0 tests from 0 test suites' "$RUN_LOG"; then
-    echo "gtest ran 0 tests; --gtest_filter matched nothing" >&2
-    exit 1
-  fi
-  if ! grep -qF 'CannExecutionProviderTest.FunctionTest' "$RUN_LOG"; then
-    echo "gtest log missing CannExecutionProviderTest.FunctionTest; empty --gtest_filter is a false green" >&2
-    exit 1
-  fi
-  if ! grep -Eq '\[  PASSED  \] [1-9][0-9]* tests?' "$RUN_LOG"; then
-    echo "gtest did not report a non-zero PASSED count" >&2
-    exit 1
-  fi
-  if grep -Eq 'CANN failure|CANNGRAPH failure' "$RUN_LOG"; then
-    echo "gtest log contains a CANN failure marker" >&2
-    exit 1
-  fi
-}
-
-assert_cmake-consumer() {
-  if ! grep -qF 'Result: PASS' "$RUN_LOG"; then
-    echo "sample did not print Result: PASS" >&2
-    exit 1
-  fi
-  if ! grep -qF 'ONNX Runtime version:' "$RUN_LOG"; then
-    echo "sample did not print ONNX Runtime version:" >&2
-    exit 1
-  fi
-}
-
-"$EXEC_PATH" "${EXTRA_ARGS[@]}" 2>&1 | tee "$RUN_LOG"
+RUN_LOG="$CI_OUTPUT_DIR/$(basename "$EXAMPLE_REL").log"
+EXAMPLE_DIR=$(dirname "$EXAMPLE_PATH")
+cd "$EXAMPLE_DIR"
+"$PYTHON" "$(basename "$EXAMPLE_PATH")" "${EXTRA_ARGS[@]}" 2>&1 | tee "$RUN_LOG"
 
 if ! declare -F "assert_${PROFILE}" >/dev/null 2>&1; then
   echo "no stdout guard for profile: ${PROFILE}" >&2

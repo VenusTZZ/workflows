@@ -48,7 +48,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     contract -> run ``#test-setup`` / ``#test`` in order -> compare against
     ``#test-result``."""
 
-    DEFAULT_COMMAND_TIMEOUT = 3600  # training + inference can take a while
+    # 6h per command: the doc runs the full aishell-1 flow per labeled
+    # block -- the stage -1 download alone pulls ~15.6 GB, and the
+    # stage 4 train block runs 5 conformer epochs over 120k utts with
+    # the upstream-default DataLoader (num_workers=8), plus stage 5
+    # decodes 7176 test utts in 4 modes. 1h was enough for the
+    # mock-data era only.
+    DEFAULT_COMMAND_TIMEOUT = 21600
     USER_AGENT = 'cosdt-ci-test/quick-start'
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 

@@ -7,7 +7,7 @@
 # I/O, state relay and publishing all live in the engine. See the
 # engine's `workflow_call.inputs` block for the full input contract.
 #
-# Cache keys (monitor-state-tensordict-*) and artifact names are
+# Cache keys (quick-start-monitor-state-tensordict_*) and artifact names are
 # derived from project=tensordict, not from the workflow name.
 #
 # No device mounts: the self-hosted NPU runner (`linux-aarch64-a2-1`)
@@ -61,7 +61,7 @@ jobs:
   tensordict-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-tensordict-*), artifacts
+      # Namespaces cache keys (quick-start-monitor-state-tensordict_*), artifacts
       # (tensordict-quick-start-<run_id>) and the test working dir
       # (workflows/projects/tensordict).
       project: tensordict
@@ -83,7 +83,7 @@ jobs:
       timeout_minutes: 90
       upstream_repo: pytorch/tensordict
       # Raw URL the engine's monitor hashes and the test fetches;
-      # doc-hash state lives under the monitor-state-tensordict- cache
+      # doc-hash state lives under the quick-start-monitor-state-tensordict_ cache
       # prefix.
       doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/tensordict/docs/Quick-start-Ascend.md
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/tensordict/docs/Quick-start-Ascend.md

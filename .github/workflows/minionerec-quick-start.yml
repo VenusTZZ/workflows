@@ -1,0 +1,60 @@
+# MiniOneRec quick start guard - project thin trigger.
+#
+# The shared quick-start template owns monitoring, cache state, result
+# validation, and artifact publishing. Project-specific environment setup
+# and document execution live in projects/minionerec/tests.
+#
+# Smoke scope: single-card SFT on NPU (ModelScope Qwen2.5-0.5B base +
+# HF-mirror preprocessed Amazon Industrial_and_Scientific subset +
+# transfer_to_npu patch + 1-epoch HF-Trainer run, sample=600/dataset).
+# RL (GRPO) is pointer-only — its vLLM path is CUDA-only; see
+# projects/minionerec/docs/Quick-start-Ascend.md for rationale.
+#
+# torch stack pinned in the doc + test probe to torch 2.9.0 +
+# torch_npu 2.9.0.post2 (CANN 9.1.0 pairing, same line as dgl/xdit).
+# Manual verification on this exact image/runner shape passed
+# 2026-09-03: 1 epoch, loss ~1.0-1.7 tail, 9.1 samples/s, bf16 OK on
+# 910B3.
+#
+# Data is downloaded per-run from hf-mirror (~27 MB, Industrial subset
+# without .npy embeddings) — small enough that no modelscope cache
+# bind-mount is needed; the Qwen2.5-0.5B base model (~1 GB) is also a
+# per-run ModelScope pull.
+
+name: minionerec-quick-start
+
+concurrency:
+  group: ${{ github.event_name == 'schedule' && 'minionerec-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+on:
+  # Enable after the first successful workflow_dispatch run.
+  # schedule:
+  #   - cron: '30 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  minionerec-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      project: minionerec
+      test_runner: '["linux-aarch64-a2-1"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      container_options: >-
+        --shm-size=64g
+        --device=/dev/davinci0
+        --device=/dev/davinci_manager
+        --device=/dev/devmm_svm
+        --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+      timeout_minutes: 120
+      upstream_repo: AkaliKong/MiniOneRec
+      fixed_ref: main
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/minionerec/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/minionerec/docs/Quick-start-Ascend.md
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

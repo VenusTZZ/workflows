@@ -7,7 +7,7 @@
 # I/O, state relay and publishing all live in the engine. See the
 # engine's `workflow_call.inputs` block for the full input contract.
 #
-# Cache keys (monitor-state-lightx2v-*) and artifact names are derived
+# Cache keys (quick-start-monitor-state-lightx2v_*) and artifact names are derived
 # from project=lightx2v, not from the workflow name.
 #
 # No device mounts: the self-hosted NPU runner (`linux-aarch64-a2-2`,
@@ -19,22 +19,18 @@
 # tensordict / pytorch.vision / accelerate / ray / torchtitan /
 # transformers / diffusers / mooncake.
 #
-# Two bind mounts beyond the defaults:
-#   1. modelscope cache -> /root/.cache/modelscope (default location
-#      modelscope writes to when --local_dir is omitted; some helper
-#      commands like `snapshot_download(..., allow_patterns=...)`
-#      bypass --local_dir and land here). Reused across runs.
-#   2. <doc-cwd>/models (/root/lightx2v-test/models on CI — the test
-#      class chdirs there in prepare_environment; the doc body is
-#      cwd-relative, "wherever you run it is the project root") ->
-#      /data/ci-cache/lightx2v-models. This is where the doc's
-#      `modelscope download --local_dir models/...` writes. Bind-mount
-#      covers persistence + the cache invalidation contract
-#      (purge_corrupt_models walks this dir).
-# The HF cache bind from earlier iterations was dropped: the doc's
-# e2e scope no longer downloads from HF (Wan2.2 T2V distill and the
-# Qwen-Image-Edit I2I route were cut to pointer-only sections; all
-# smoke weights come from ModelScope now).
+# One bind mount beyond the defaults: the modelscope cache ->
+# /root/.cache/modelscope, which is where the doc's embedded
+# `snapshot_download('Wan-AI/Wan2.1-T2V-1.3B')` writes (no local dir is
+# requested, so weights land in the default cache). Reused across runs;
+# also the dir the test class's purge_modelscope_corrupt() walks.
+#
+# The <doc-cwd>/models bind from earlier iterations was dropped together
+# with the doc's `modelscope download --local_dir models/...` block: the
+# generation script now resolves the weights through snapshot_download
+# into the default cache, so nothing writes to <doc-cwd>/models any more.
+# The HF cache bind was dropped earlier for the same reason (all smoke
+# weights come from ModelScope).
 
 name: lightx2v-quick-start
 
@@ -53,8 +49,8 @@ concurrency:
 on:
   # Enable after the first successful workflow_dispatch run (same
   # convention as mooncake / tensorflow / most of the repo).
-  # schedule:
-  #   - cron: '45 */6 * * *'
+  schedule:
+    - cron: '45 */6 * * *'
   workflow_dispatch:
 
 permissions:
@@ -64,7 +60,7 @@ jobs:
   lightx2v-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-lightx2v-*), artifacts
+      # Namespaces cache keys (quick-start-monitor-state-lightx2v_*), artifacts
       # (lightx2v-quick-start-<run_id>) and the test working dir
       # (workflows/projects/lightx2v).
       project: lightx2v
@@ -77,62 +73,31 @@ jobs:
       # in the smoke step picks card 0 only).
       test_runner: '["linux-aarch64-a2-2"]'
       # Plain CANN base image (the proven old stack): the image ships
-      # only CANN 9.1.0 - torch 2.9.0 + torch_npu 2.9.0.post2 are
-      # installed by the doc's own `lightx2v-install-torch` #test
-      # block, so the whole install path (torch included) is guarded
-      # by CI instead of being baked into an opaque image. MindIE is
-      # NOT needed by the current route (npu_flash_attn comes from
-      # torchada). Same SWR registry domain as the previous images -
-      # the runner's host docker daemon already pulls this exact tag
-      # daily (it ran the pre-Wan2.2 stack for many green runs).
+      # only CANN 9.1.0 - the whole torch stack (torch 2.9.0 +
+      # torchvision 0.24.* + torch_npu 2.9.0.post2 + triton 3.5.*) is
+      # installed by the doc's own `lightx2v-install-torch` block, so
+      # the install path is guarded by CI instead of being baked into
+      # an opaque image. MindIE is NOT needed by the current route:
+      # `npu_flash_attn` resolves to torch_npu's own
+      # `npu_fusion_attention`, and the `mindie` compile backend is
+      # only created on explicit request. Same SWR registry domain as
+      # the previous images - the runner's host docker daemon already
+      # pulls this exact tag daily.
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
       container_options: >-
         --volume=/data/ci-cache/modelscope/lightx2v:/root/.cache/modelscope
-        --volume=/data/ci-cache/lightx2v-models:/root/lightx2v-test/models
-      # 4h ceiling: cold run pulls ~18 GB of weights (Wan-AI/
-      # Wan2.1-T2V-1.3B, include-filtered) at cluster network speed +
-      # 50-step 1.3B t2v smoke on a single 910B4 (480P / 81 frames
-      # typically runs in minutes). 4h covers cache-cold downloads +
-      # several retries on dependency flakes.
+      # 4h ceiling: cold run pulls the full ~17.6 GB Wan-AI/
+      # Wan2.1-T2V-1.3B repo into the default modelscope cache at
+      # cluster network speed + a 50-step 1.3B t2v smoke on a single
+      # 910B4 (480x832 / 81 frames typically runs in minutes). 4h
+      # covers cache-cold downloads + several retries on dependency
+      # flakes.
       timeout_minutes: 240
       upstream_repo: ModelTC/LightX2V
-      # LightX2V has zero GitHub Releases and zero tags (verified via
-      # the API: /tags returns 200 + []), rolling main only. The
-      # engine's auto-fallback chain short-circuits on that empty-tags
-      # 200: monitor resolves ref="" and the decide step's
-      # /commits/$ref lookup 422s -> exit 1 (the same failure that
-      # killed every schedule run of the tagless specforge guard
-      # before fixed_ref existed). fixed_ref: main makes the monitor
-      # poll /commits/main and use its SHA as the change key, and the
-      # dispatch path resolves ref="main" directly, so UPSTREAM_REF
-      # is a non-empty "main" the doc's store/load contract can use.
-      fixed_ref: main
-      # Same URL the legacy pattern monitors: doc-hash state carries
-      # over via the shared monitor-state-lightx2v- cache prefix.
-      # GitHub Contents API URL (NOT raw.githubusercontent.com):
-      #   * raw.githubusercontent.com is firewalled off the NPU runner
-      #     → test's MONITORED_DOC_URL fetch fails (returns HTML error
-      #     page that mistune can't parse → empty doc body → "no commands
-      #     parsed" failure). CI 33255726245 / 33258866596 both hit
-      #     `URLError(TimeoutError('_ssl.c:993: The handshake operation timed out'))`
-      #     on the raw URL before this switch.
-      #   * engine's monitor already sends `Authorization: Bearer
-      #     $GH_TOKEN` + `Accept: application/vnd.github.raw`, which is
-      #     exactly the Contents API contract for raw markdown; with the
-      #     raw URL those headers are silently ignored and a HTML error
-      #     page is hashed instead, so doc signal is permanently "unknown"
-      #     and doc edits never trigger a run (only release / retry drives
-      #     it). Contents API + the existing engine headers fix both
-      #     ends with one URL change.
-      # `markdown_doc_test_base.py` already special-cases `api.github.com`
-      # URLs and re-applies the same Accept header on the test-side
-      # fetch, so MONITORED_DOC_URL inherits the fix.
-      # `?ref=${{ github.sha }}` is load-bearing: the Contents API without
-      # a ref defaults to the repo's default branch (`main`), so a dispatch
-      # on hdc would silently fetch main's doc and the test would never
-      # reflect hdc edits. Same pattern as aibrix / bitsandbytes / colossalai /
-      # mooncake / llama.cpp / onnxruntime / opencv / flagscale / specforge /
-      # torchtune.
+      # The doc installs the latest upstream release tag: its clone
+      # block injects UPSTREAM_REF via store/load into `git clone
+      # --branch <ref>`, so the engine release signal tracks
+      # exactly what the doc installs. No fixed_ref needed.
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/lightx2v/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/lightx2v/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/lightx2v; env contract (MONITORED_DOC_URL /

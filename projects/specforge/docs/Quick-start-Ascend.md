@@ -1,12 +1,12 @@
 # Quick Start (Ascend NPU)
 
-在 4 卡昇腾 NPU 上把 [SpecForge](https://github.com/sgl-project/SpecForge) 端到端跑通：镜像预装 torch 2.10.0 + torch_npu 2.10.0 + sglang 0.5.18 + CANN 9.0.0 + Python 3.11.15，再装 modelscope 1.37.0 + mooncake-transfer-engine 0.3.13 + specforge 源码（`pip install --no-deps .`），从 ModelScope 拉 `Qwen/Qwen3.5-4B`，起 `mooncake_master` + SGLang capture server + `specforge train` 三件套，跑 1 步训练作为 smoke。
+在 4 卡昇腾 NPU 上端到端跑通 [SpecForge](https://github.com/sgl-project/SpecForge)：安装依赖 → 从 ModelScope 拉 Qwen3.5-4B → 起 SGLang capture server → 完成 1 步训练。
 
 ## 前置条件
 
-**机器**：Atlas 900 A2 / A3 训练系列 或 Ascend 950 系列，**≥ 4 卡**（smoke 把 capture server 放卡 0、trainer 放卡 1，卡 2/3 留空给 HCCL buffer）。
+**机器**：Atlas 900 A2 / A3 训练系列 或 Ascend 950 系列，**≥ 4 卡**（capture server 用卡 0、trainer 用卡 1，卡 2/3 留给 HCCL 通信 buffer）。
 
-**镜像**：`swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b`（Ubuntu 22.04 + Atlas 910B4 64 GB × 4）。
+**镜像**：`swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b`。
 
 | 组件 | 版本 |
 | --- | --- |
@@ -16,23 +16,27 @@
 | sglang | 0.5.18 |
 | specforge | 上游 main 源码 |
 | modelscope | 1.37.0 |
-| mooncake-transfer-engine | 0.3.13（**从源码编**——PyPI 只有 CUDA 变体，NPU image 没 CUDA → `import mooncake.store` 必撞 `ImportError: libcuda.so.1`） |
+| mooncake-transfer-engine | 0.3.13 |
 | 模型 | [Qwen/Qwen3.5-4B](https://www.modelscope.cn/Qwen/Qwen3.5-4B) |
-| 配方 | `examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-online-npu.yaml` |
+| 参考样例 | `examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-online-npu.yaml` |
 
-> specforge 上游 `pyproject.toml` 还钉 `sglang==0.5.14`，`pip install --no-deps .` 跳过依赖解析、运行时走镜像里的 0.5.18——spec-capture patch 也按 `--target v0.5.18` 走，配套。如果后续 SpecForge pin 变了，sglang 行要跟着镜像对齐。
+## 前置检查
 
-## 预检
+先确认 NPU 和镜像基础环境就绪。`npu-smi info` 应至少列出 4 张 `910B4` 且状态 OK，否则回 [官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动。
 
-`npu-smi info` 至少列出 4 张 `910B4` 且状态 OK；否则回 [官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动。
+确认 Python 版本：
 
 ```shell #test id="check-py"
 python --version
 ```
 
+输出结果如下：
+
 ```shell #test-result id="check-py" fuzzy='xxx'
 Python 3.11.xxx
 ```
+
+确认 CANN 版本：
 
 ```shell #test id="check-cann"
 test -f /usr/local/Ascend/ascend-toolkit/latest/$(uname -m)-linux/ascend_toolkit_install.info && \
@@ -40,15 +44,19 @@ test -f /usr/local/Ascend/ascend-toolkit/latest/$(uname -m)-linux/ascend_toolkit
     echo "ascend_toolkit_install.info MISSING"
 ```
 
+输出结果如下：
+
 ```shell #test-result id="check-cann"
 version=9.0.0
 ```
 
-> 走 `grep install.info` 而不 `source set_env.sh`：ascend set_env.sh 在 `case $- in *i*)` 下跳过非交互式运行，`bash -c` 子 shell 里 `$-` 不带 `i` → ASCEND_HOME 落空（run 33464343161 复现）。
+确认 torch / torch_npu / sglang 都能 import 且能看到 4 张卡：
 
 ```shell #test id="check-torch"
 python -c "import torch, torch_npu; from importlib.metadata import version; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('sglang', version('sglang')); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
 ```
+
+输出结果如下：
 
 ```shell #test-result id="check-torch" fuzzy='xxx'
 torch= 2.10.0+cpu
@@ -57,6 +65,8 @@ sglang 0.5.18
 is_available: True
 count: 4
 ```
+
+汇总镜像信息：
 
 ```shell #test id="image-probe"
 python -c "
@@ -71,6 +81,8 @@ print('npu_count', torch.npu.device_count())
 "
 ```
 
+输出结果如下：
+
 ```shell #test-result id="image-probe" fuzzy='xxx'
 python 3.11.xxx
 torch xxx
@@ -80,95 +92,37 @@ npu_available True
 npu_count 4
 ```
 
-> `sglang` 实际版本看 `image-probe`——spec-capture patch 的 target 跟着 sglang 走（`--target v${SGLANG_VER}`）。
-
 ## 安装 modelscope
+
+用 uv 安装 modelscope（后面从 ModelScope 下载模型用）：
 
 ```shell #test-setup
 uv pip install 'modelscope==1.37.0'
 ```
 
-## 源码编译 mooncake
+## 安装 mooncake
 
-`mooncake-transfer-engine` **从源码编译**。`-DUSE_ASCEND_DIRECT=ON` 把 transport 切到 ADXL/HIXL（CANN 内置），整链不再链 libcuda；`-DWITH_STORE=ON` 同时产出 Python `mooncake.store` 模块（specforge eager-import 要它）+ `mooncake_master` 二进制。`-DBUILD_BENCHMARK=OFF` 跳过 tebench 二进制（它把 `libllm_datadist.so` 链进自己，CANN 9.0.0 镜像缺 `libadxl.so` / `libhixl.so` 那些 runtime 符号，链接报 `undefined reference to adxl::* / llm::HcclAdapter::* / hixl::EngineFactory`；specforge 只用 `mooncake.store` + `mooncake_master`，不影响功能）。cmake flags 与 `projects/mooncake/docs/Quick-start-Ascend.md` + `scripts/setup_example.sh` + `release-npu.yaml` 一致。
+SpecForge 的在线训练用 mooncake 在 SGLang server 和 trainer 之间传数据。直接用 PyPI 上 Mooncake 官方发布的 NPU prebuilt wheel，wheel 没带的三个系统库用 apt 补齐：
 
 ```shell #test-setup id="build-mooncake"
 set -euo pipefail
-BUILD_DIR="${MOONCAKE_BUILD_DIR:-/tmp/build-mooncake}"
-MOONCAKE_REF=v0.3.13
-rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR"
-cd "$BUILD_DIR"
-# 前 11 个与 mooncake/setup_example.sh 一致（仅编 transfer_engine_ascend_direct_perf 够用）；
-# WITH_STORE=ON 额外要 6 个 cmake 包（缺一个 cmake configure 直接 abort）+ 2 个 wheel 打包工具。
+# wheel 不带 libibverbs / libcurl / libnuma，apt 补（libtransfer_engine.so / libmooncake_store.so DT_NEEDED）。
 apt-get update -qq >/dev/null 2>&1
 apt-get install -qq -y --no-install-recommends \
-    build-essential cmake git pkg-config \
-    libgoogle-glog-dev libgflags-dev libibverbs-dev \
-    libjsoncpp-dev libnuma-dev libyaml-cpp-dev \
-    libssl-dev libcurl4-openssl-dev \
-    libzstd-dev libxxhash-dev libzmq3-dev libasio-dev \
-    libboost-dev libmsgpack-dev patchelf file \
-    >/dev/null 2>&1 \
-    || { echo "build-mooncake: FAILED - apt install build deps" >&2; exit 1; }
-git clone --depth 1 https://github.com/kvcache-ai/Mooncake.git \
-    >/tmp/build-mooncake-clone.log 2>&1 \
-    || { echo "build-mooncake: FAILED - mooncake clone:" >&2; tail -20 /tmp/build-mooncake-clone.log >&2; exit 1; }
-cd Mooncake
-git fetch --depth 1 origin "$MOONCAKE_REF" >/dev/null 2>&1
-git checkout FETCH_HEAD >/dev/null 2>&1
-# 直连 GitHub 拉 pybind11 失败时降级到 ghfast.top 镜像（与 mooncake setup_example.sh 同款）。
-if ! git submodule update --init --depth 1 extern/pybind11 >/dev/null 2>&1; then
-    expect=$(git ls-tree HEAD extern/pybind11 | awk '{print $3}')
-    if [[ ! "$expect" =~ ^[0-9a-f]{40}$ ]]; then
-        echo "build-mooncake: FAILED - cannot read pybind11 SHA from tree" >&2
-        exit 1
-    fi
-    rm -rf extern/pybind11
-    mkdir -p extern/pybind11
-    git -C extern/pybind11 init -q
-    git -C extern/pybind11 remote add origin https://ghfast.top/https://github.com/pybind/pybind11.git
-    git -C extern/pybind11 fetch --depth 1 origin "$expect" >/dev/null 2>&1 \
-        || { echo "build-mooncake: FAILED - pybind11 fetch via mirror" >&2; exit 1; }
-    git -C extern/pybind11 checkout --detach FETCH_HEAD -q
-fi
-cmake -S . -B build \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DUSE_ASCEND_DIRECT=ON \
-    -DBUILD_BENCHMARK=OFF \
-    -DBUILD_UNIT_TESTS=OFF \
-    -DWITH_STORE=ON \
-    -DWITH_STORE_RUST=OFF \
-    -DWITH_EP=OFF \
-    -DWITH_P2P_STORE=OFF \
-    -DUSE_ETCD=OFF \
-    -DUSE_REDIS=OFF \
-    >/tmp/build-mooncake-cmake.log 2>&1 \
-    || { echo "build-mooncake: FAILED - cmake configure:" >&2; tail -50 /tmp/build-mooncake-cmake.log >&2; exit 1; }
-cmake --build build -j"$(nproc)" \
-    >/tmp/build-mooncake-build.log 2>&1 \
-    || { echo "build-mooncake: FAILED - cmake build:" >&2; tail -50 /tmp/build-mooncake-build.log >&2; exit 1; }
-NPU_BUILD=1 OUTPUT_DIR=dist ./scripts/build_wheel.sh \
-    >/tmp/build-mooncake-wheel.log 2>&1 \
-    || { echo "build-mooncake: FAILED - build_wheel.sh:" >&2; tail -50 /tmp/build-mooncake-wheel.log >&2; exit 1; }
-WHL=$(ls mooncake-wheel/dist/*.whl | head -1)
-if [[ -z "$WHL" || ! -f "$WHL" ]]; then
-    echo "build-mooncake: FAILED - no wheel produced in mooncake-wheel/dist/" >&2
-    ls -la mooncake-wheel/dist/ >&2 || true
-    exit 1
-fi
-uv pip install "$WHL" \
+    libibverbs1 libcurl4 libnuma1 >/dev/null 2>&1 \
+    || { echo "build-mooncake: FAILED - apt install runtime deps" >&2; exit 1; }
+# Aliyun mirror 同步 PyPI；pip 找不到则退回 PyPI。
+uv pip install --upgrade \
+    'mooncake-transfer-engine-npu==0.3.13.post1' \
+    --index-url https://mirrors.aliyun.com/pypi/simple/ \
+    --extra-index-url https://pypi.org/simple/ \
     >/tmp/build-mooncake-pip.log 2>&1 \
-    || { echo "build-mooncake: FAILED - pip install wheel:" >&2; tail -20 /tmp/build-mooncake-pip.log >&2; exit 1; }
-echo "build-mooncake: installed $WHL"
-# 把 wheel 自带的 bundled libs（libtransfer_engine.so / libmooncake_store.so / libasio / libglog 等 8 个）
-# 所在目录加进 LD_LIBRARY_PATH。store.so 与 libmooncake_store.so 都 RPATH=$ORIGIN，但当从 site-packages/mooncake
-# 之外的进程 import（如 specforge 启动时 Python 走 dlopen），动态链接器解析 NEEDED 时不一定走 RPATH 链——
-# 显式 export 最稳。用 sysconfig 拿 purelib 路径，对 venv / system python 都能找到。
-SITE_PACKAGES="$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
-export LD_LIBRARY_PATH="${SITE_PACKAGES}/mooncake:${LD_LIBRARY_PATH:-}"
-echo "build-mooncake: LD_LIBRARY_PATH includes ${SITE_PACKAGES}/mooncake"
+    || { echo "build-mooncake: FAILED - pip install:" >&2; tail -20 /tmp/build-mooncake-pip.log >&2; exit 1; }
+INSTALLED=$(python -c "from importlib.metadata import version; print(version('mooncake-transfer-engine-npu'))")
+echo "build-mooncake: installed mooncake-transfer-engine-npu==${INSTALLED}"
 ```
+
+验证两个包都装好了（mooncake 能 import、mooncake_master 可执行文件存在）：
 
 ```shell #test id="install-deps"
 python -c "import modelscope; print('modelscope', modelscope.__version__)"
@@ -180,6 +134,8 @@ fi
 test -x "$(command -v mooncake_master)" && echo "mooncake_master binary present" || echo "mooncake_master binary MISSING"
 ```
 
+输出结果如下：
+
 ```shell #test-result id="install-deps" fuzzy='xxx'
 modelscope xxx
 xxx
@@ -188,7 +144,7 @@ mooncake_master binary present
 
 ## 安装 specforge
 
-从源码装是为了拿 `examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-online-npu.yaml` 配方 + `scripts/apply_sglang_spec_capture_patch.sh` + `patches/sglang/v0.5.18/spec-capture-ascend-mount.patch`——PyPI wheel 不会带 examples/ 与 patches/。
+从源码安装——PyPI wheel 不带示例配置和 sglang 补丁文件（`examples/` 与 `patches/` 目录）：
 
 <!--
 ```shell #test-setup store="upstream_ref"
@@ -206,13 +162,16 @@ else
 fi
 cd SpecForge
 uv pip install --no-deps .
-# specforge/_train() lazy-import accelerate.utils.set_seed（specforge-import 不触发，
-# smoke-train 才暴露 ModuleNotFoundError——run 33578505226 复现）。
+# specforge/_train() lazy-import accelerate.utils.set_seed（仅 import 不触发，
+# 真正训练才暴露 ModuleNotFoundError——run 33578505226 复现）；CLI 的 click 依赖
+# 镜像已自带（--no-deps 不会安装它）。
 uv pip install --no-deps accelerate
 python -c "from importlib.metadata import version; print('specforge, version', version('specforge'))"
 ```
 
-`<ref>` 为最新的 release tag / 分支名 / commit SHA（监控自动 fallback）。
+`<ref>` 是要验证的上游版本（release tag / 分支名 / commit SHA，由监控自动注入）。
+
+确认安装成功，输出结果如下：
 
 ```shell #test-result id="specforge-install-source" fuzzy='xxx'
 specforge, version xxx
@@ -220,9 +179,13 @@ specforge, version xxx
 
 ## CLI 自检
 
+确认 specforge 能在 NPU 环境里正常 import：
+
 ```shell #test id="specforge-import"
 python -c "import specforge, torch, torch_npu; print('specforge', getattr(specforge, '__version__', 'unknown')); print('torch', torch.__version__); print('torch.npu.is_available', torch.npu.is_available())"
 ```
+
+输出结果如下：
 
 ```shell #test-result id="specforge-import" fuzzy='xxx'
 specforge xxx
@@ -230,63 +193,72 @@ torch 2.10.0+cpu
 torch.npu.is_available True
 ```
 
+查看 CLI 帮助（三个子命令：train / export / benchmark）：
+
 ```shell #test id="specforge-help"
 specforge --help
 ```
 
+输出结果如下：
+
 ```shell #test-result id="specforge-help"
-usage: specforge [-h] {train,export,benchmark} ...
+Usage: specforge [OPTIONS] COMMAND [ARGS]...
 
-positional arguments:
-  {train,export,benchmark}
-    train               train a draft model from a typed config
-    export              materialize a runtime checkpoint as a model directory
-    benchmark           benchmark a running SGLang server
+  SpecForge: speculative decoding training framework.
 
-options:
-  -h, --help            show this help message and exit
+Options:
+  -h, --help  Show this message and exit.
+
+Commands:
+  benchmark  benchmark a running SGLang server
+  export     materialize a runtime checkpoint as a model directory
+  train      train a draft model from a typed config
 ```
+
+查看 train 子命令的参数（后面训练就用这些 flag）：
 
 ```shell #test id="specforge-train-help"
 specforge train --help
 ```
 
+输出结果如下：
+
 ```shell #test-result id="specforge-train-help"
-usage: specforge train [-h] -c CONFIG
-                       [--role {auto,all,producer,consumer,both}]
-                       [--node-rank NODE_RANK] [--plan]
-                       [overrides ...]
+Usage: specforge train [OPTIONS] [OVERRIDES]...
 
-positional arguments:
-  overrides             dotted overrides, e.g. training.learning_rate=1e-4
+  Train a draft model from a typed run config.
 
-options:
-  -h, --help            show this help message and exit
-  -c CONFIG, --config CONFIG
-                        YAML or JSON run config
-  --role {auto,all,producer,consumer,both}
-                        launch selection (default: offline local all or
-                        online/disaggregated producer+consumer)
-  --node-rank NODE_RANK
-                        node-local rank for an explicit multi-node trainer
-                        launch
-  --plan                print the resolved process plan without starting
-                        workers
+  OVERRIDES are dotted ``section.field=value`` assignments applied on top of
+  the config file, e.g. ``training.learning_rate=1e-4``.
+
+Options:
+  -c, --config PATH               YAML or JSON run config.  [required]
+  --role [auto|all|producer|consumer|both]
+                                  Launch selection: offline local 'all' or
+                                  online/disaggregated producer+consumer when
+                                  'auto'.  [default: auto]
+  --node-rank INTEGER             Node-local rank for an explicit multi-node
+                                  trainer launch.
+  --plan                          Print the resolved process plan without
+                                  starting workers.
+  -h, --help                      Show this message and exit.
 ```
 
 ## 端到端 smoke：1 步训练
 
-Smoke 把 `mooncake_master` / SGLang capture server / `specforge train` 串起来：5 个独立 `#test` 块，任一段失败定位到具体阶段；`SPECFORGE_*` 环境变量覆盖默认值。
+按顺序把 `mooncake_master` → SGLang capture server → `specforge train` 拉起来跑 1 步训练，每小节一个阶段，失败可定位到具体环节。`SPECFORGE_*` 环境变量可覆盖各段默认值。
 
-> 每段入口先 `pkill -f '^mooncake_master'` / `pkill -f '^python -m sglang\.launch_server'` 扫一遍上次残留——前一段 setup 返回 0 后下一段直接复用，端口不冲突。
+> 每段入口先 `pkill` 清掉自己上次残留的进程，避免端口被占；上一段拉起的健康服务直接复用，不重启。
 
 ### 预下载模型
+
+从 ModelScope 把 Qwen3.5-4B（约 8 GB）拉到本地缓存，路径供后面起 server 和训练用：
 
 ```shell #test-setup id="smoke-download-model" store="model_path"
 set -euo pipefail
 MODEL_ID="${SPECFORGE_MODEL_ID:-Qwen/Qwen3.5-4B}"
-# store="model_path" 抓整段 stdout → redirect_stdout 让 modelscope 进度落 stderr，
-# print(path) 走真 stdout，<MODEL_PATH> 才能拿到单行路径（run 33507844975 复现）。
+# 本段 stdout 会被框架捕获、供下方 `<MODEL_PATH>` 占位符替换，所以 modelscope 进度
+# 重定向到 stderr，stdout 只留一行模型路径（run 33507844975 复现）。
 echo "smoke: downloading model $MODEL_ID from ModelScope" >&2
 python - "$MODEL_ID" <<'PY'
 import sys, contextlib
@@ -298,19 +270,15 @@ print(path)
 PY
 ```
 
+输出结果如下（一行本地缓存路径）：
+
 ```shell #test-result id="smoke-download-model" load="model_path>>MODEL_PATH"
 <MODEL_PATH>
 ```
 
 ### 打补丁 + apt 依赖
 
-镜像里 sglang 是 0.5.18（看 `image-probe`），`apply_sglang_spec_capture_patch.sh` 默认 target 是 `v0.5.18`。脚本会从 specforge 源码仓拉 `patches/sglang/v0.5.18/spec-capture.patch` + `spec-capture-ascend-mount.patch`。后者 hunk 行号跟上游 a8c0993 之后版本对不上，ascend companion 用字符串替换做（不依赖行号）。
-
-> `apply_sglang_spec_capture_patch.sh` 内部 `git apply -v -p2`，对 git-editable 装的 sglang（`pip install -e` / 镜像预装，working tree 根在 `python/`）会**全 12 个文件静默 Skipped patch**——patch header 是 `a/python/sglang/...`，`-p2` 剥成 `sglang/...` 找不到路径，但脚本的"已应用"判定（`cmp -s APPLIED_COPY PATCH && check_reverse`）依然通过、run rc=0 一行没写。
->
-> 治本：直接 `git -C <sglang_repo_root> apply -p1 patches/sglang/v0.5.18/spec-capture.patch`（`-p1` 只剥 `a/` → `python/sglang/...`）。server_args fallback 只补 3 个 field，**不**恢复 logits_processor/scheduler/model_runner hook，`smoke-start-sglang` 仍会因缺 patch 在 forward 早期 ValueError。
-
-> SpecForge 上游 2026-08-29 退掉 v0.5.14 patch（commit `b453386827`）。以后 image 把 sglang 倒回 0.5.14，这条 step 会立即红——届时把 sglang 重新钉到 0.5.18、或 checkout `b453386827` 之前的 SpecForge commit。
+SGLang 需要打 spec-capture 补丁才能在推理时导出训练所需的 hidden states。SpecForge 仓库自带补丁和 apply 脚本，对镜像里的 sglang 0.5.18 直接执行；脚本处理不了的部分（Ascend 挂载段改写、个别字段兜底插入）由下方命令块内的 Python 段完成，均已验证过幂等可重跑。
 
 ```shell #test id="smoke-apply-patches"
 set -euo pipefail
@@ -331,16 +299,7 @@ if [[ -f scripts/apply_sglang_spec_capture_patch.sh ]]; then
 else
     echo "smoke: WARNING - apply_sglang_spec_capture_patch.sh missing; assuming already patched"
 fi
-# 治本：apply_sglang_spec_capture_patch.sh 的 -p2 在 sglang git toplevel（镜像装在
-# python 子目录但仓库根在上一级）上静默 skip——patch header a/python/sglang/... 经
-# -p2 剥成 sglang/... 找不到路径，git apply --check 全文件 silently skipped；脚本
-# `cmp -s APPLIED_COPY PATCH && check_reverse PATCH` 也 rc=0（--reverse 同样找不到
-# 文件 rc=0），误判"已应用"，APPLIED_COPY 落盘但 12 个 patch 文件全没落盘。
-# 后果：smoke-start-sglang 启动后 --enable-spec-capture 字段被 server_args.py 解析
-# 但 spec_capture_sink.py 等 11 个文件缺失，/generate 返回 meta_info 无 spec_capture，
-# specforge producer 标 10 terminally failed prompts。
-# 治本：强制清掉 APPLIED_COPY、用正确 -p1 + --reject 重 apply（git toplevel 是
-# SGLANG_DIR 的父目录），--reject 容忍已被 Python fallback / 旧 apply 部分修改的文件。
+
 SGLANG_DIR=$(python -c "import importlib.util, os; print(os.path.dirname(os.path.dirname(importlib.util.find_spec('sglang').origin)))")
 APPLIED_COPY="$SGLANG_DIR/sglang/.spec_capture_patch.applied"
 SINK_FILE="$SGLANG_DIR/sglang/srt/spec_capture_sink.py"
@@ -360,10 +319,7 @@ if [[ ! -f "$SINK_FILE" ]] || ! grep -q 'class SpecCaptureSink' "$SINK_FILE"; th
     fi
     echo "smoke: spec-capture re-apply OK (12 files)" >&2
 fi
-# ascend companion 替换（脚本自己的 hunk2 在 a8c0993 之后版本 BSD patch 直接 malformed）。
-# 锚点字符串是 spec-capture.patch 引入的多行 unique 子串，不依赖行号。
-# 用 find_spec 而非 import：sglang.__init__ 会拉 sglang.lang → IPython → traitlets，
-# 链上某环断 import 失败；find_spec 只查 spec 不执行 __init__。
+
 SGLANG_DIR=$(python -c "import importlib.util, os; print(os.path.dirname(os.path.dirname(importlib.util.find_spec('sglang').origin)))")
 SINK_FILE="$SGLANG_DIR/sglang/srt/spec_capture_sink.py"
 if [[ -f "$SINK_FILE" ]] && ! grep -q 'segment_to_mount' "$SINK_FILE"; then
@@ -452,19 +408,14 @@ PY
 fi
 popd >/dev/null
 
-# wheel 自带的 bundled libs（libasio / libglog / libgflags / libjsoncpp / libxxhash /
-# libyaml-cpp / libzstd / libtransfer_engine / libmooncake_store / libmooncake_common）走
-# RPATH=$ORIGIN 直接在 site-packages/mooncake/ 互相解析，但 libcurl4 / libibverbs1 / libnuma1
-# wheel 没带——apt 补，否则 libtransfer_engine.so 的 DT_NEEDED 拿不到。
+# wheel 自带的 bundled libs 走 RPATH 在 site-packages/mooncake/ 互相解析，但
+# libcurl4 / libibverbs1 / libnuma1 wheel 没带——apt 补，否则 import mooncake.store 报错。
 apt-get update -qq >/dev/null 2>&1
 apt-get install -qq -y --no-install-recommends \
     libcurl4 libibverbs1 libnuma1 >/dev/null 2>&1
 
-# 防御性 verify：前面 build-mooncake 已 export LD_LIBRARY_PATH=.../mooncake... 显式让
-# site-packages/mooncake/ 进搜索路径（store.so 与 libmooncake_store.so 的 RPATH=$ORIGIN 在
-# site-packages 之外的进程 dlopen 时不一定生效）；这里再做一次 import 自检，撞 fail 把 stderr
-# 整段打出来好排查（典型错误：libmooncake_store.so 的 libascendcl.so 找不到 → CANN set_env.sh
-# 没 source；libtransfer_engine.so 的 libibverbs.so.1 找不到 → apt install 那一段没跑）。
+# 防御性 verify：再做一次 import 自检，撞 fail 把 stderr 整段打出来好排查
+#（典型根因是上面的 apt 依赖没装成功）。
 if ! python -c 'import mooncake.store' 2>/tmp/smoke-stub.err; then
     echo "smoke: FAILED - mooncake.store import still broken:" >&2
     tail -10 /tmp/smoke-stub.err >&2 || true
@@ -529,6 +480,8 @@ fi
 echo "smoke: patches + apt deps applied"
 ```
 
+输出结果如下：
+
 ```shell #test-result id="smoke-apply-patches"
 smoke: applying spec-capture patches for sglang 0.5.18
 smoke: patches + apt deps applied
@@ -536,7 +489,7 @@ smoke: patches + apt deps applied
 
 ### 起 mooncake_master
 
-CANN 镜像没装 nc，`nc -z 127.0.0.1 35551` 直接 command-not-found → 30 次循环每次都 false → smoke 误判。改用 Python socket 检查。
+后台拉起 mooncake_master（metadata + 传输协调服务），等 RPC 端口（默认 35551）就绪。端口探测用 Python socket 而非 `nc -z`——镜像里没装 nc：
 
 ```shell #test id="smoke-start-mooncake"
 set -euo pipefail
@@ -577,11 +530,15 @@ tail -50 /tmp/smoke-mooncake.log >&2
 exit 1
 ```
 
+输出结果如下：
+
 ```shell #test-result id="smoke-start-mooncake" fuzzy='xxx'
 smoke: mooncake ready (rpc 35551, pid=xxx)
 ```
 
 ### 起 SGLang capture server
+
+后台拉起打好补丁的 SGLang server（卡 0），开启 dflash spec-capture，等 `/health` 就绪。首次启动含 NPU graph 编译，等 5-10 分钟属正常：
 
 ```shell #test id="smoke-start-sglang" load="model_path>>MODEL_PATH"
 set -euo pipefail
@@ -591,12 +548,15 @@ SGLANG_PORT="${SPECFORGE_SGLANG_PORT:-30000}"
 SGLANG_HEALTH_TIMEOUT="${SPECFORGE_SGLANG_HEALTH_TIMEOUT:-600}"
 MOONCAKE_RPC_PORT="${SPECFORGE_MOONCAKE_RPC_PORT:-35551}"
 MOONCAKE_HTTP_PORT="${SPECFORGE_MOONCAKE_HTTP_PORT:-35880}"
-ASCEND_RT_VISIBLE_DEVICES=$CAPTURE_DEVICE \
-MOONCAKE_LOCAL_HOSTNAME=127.0.0.1 \
-MOONCAKE_METADATA_SERVER=http://127.0.0.1:$MOONCAKE_HTTP_PORT/metadata \
-MOONCAKE_MASTER_SERVER_ADDR=127.0.0.1:$MOONCAKE_RPC_PORT \
-MOONCAKE_PROTOCOL=tcp \
-MOONCAKE_GLOBAL_SEGMENT_SIZE=$((32<<30)) \
+# 逐个 export，不要串成 `VAR=x \... nohup ...` 前缀链：中间的注释会终止 `\` 续行，
+# 赋值退化成未导出的 shell 变量，server 进程拿不到——spec-capture 会去连默认的
+# localhost:50051（master 实际监听 35551），反复 "Client not available" 直至 setup 失败。
+export ASCEND_RT_VISIBLE_DEVICES=$CAPTURE_DEVICE
+export MOONCAKE_LOCAL_HOSTNAME=127.0.0.1
+export MOONCAKE_METADATA_SERVER=http://127.0.0.1:$MOONCAKE_HTTP_PORT/metadata
+export MOONCAKE_MASTER_SERVER_ADDR=127.0.0.1:$MOONCAKE_RPC_PORT
+export MOONCAKE_PROTOCOL=tcp
+export MOONCAKE_GLOBAL_SEGMENT_SIZE=$((32<<30))
 # Qwen3.5-4B 是 hybrid Mamba/GDN，forward 时 torch_npu op_plugin.atb lazy-load libatb.so；
 # CANN set_env.sh 把 atb bin 加进 PATH 但 lib 不进 LD_LIBRARY_PATH，graph capture 阶段
 # 调 torch_npu._npu_reshape_and_cache 就 OSError: libatb.so: cannot open shared object。
@@ -634,6 +594,8 @@ tail -50 /tmp/smoke-sglang.log >&2
 exit 1
 ```
 
+输出结果如下：
+
 ```shell #test-result id="smoke-start-sglang" fuzzy='xxx'
 smoke: waiting for SGLang /health (up to 600s)
 smoke: sglang ready (pid=xxx)
@@ -641,7 +603,7 @@ smoke: sglang ready (pid=xxx)
 
 ### 准备训练数据
 
-`qwen3.5-4b-dflash-online-npu.yaml` 默认 `data.train_data_path: ./cache/dataset/train_regen.jsonl`——上游流程是 `scripts/regenerate_train_data.py` 拿 sglang `/v1/chat/completions` 重生成 assistant（draft 与 target 分布对齐，质量更高），代价是 ~30s HTTP round-trip + `openai` 依赖。smoke 1 步不做数据质量优化：直接写一条 user→assistant 多轮对话进去，assistant 段 ~270 词足够提供 dflash `num_anchors=32` 上限（_sample_anchor_positions 需要 32 个 consecutive supervised token）；下面 `smoke-train` 用 `data.train_data_path=...` CLI override 把 recipe 默认路径指过来，schema 与 regen 文件一致（都是 `{id, conversations}` JSONL，trainer 不区分）。
+写一条 user→assistant 对话的 JSONL 作为训练数据（smoke 只跑 1 步，不追求数据质量；assistant 段够长即可满足 dflash 采样 32 个 anchor 的要求）。正式训练可用上游的 `scripts/regenerate_train_data.py` 重新生成对齐分布的数据：
 
 ```shell #test-setup id="smoke-prepare-data" store="sharegpt_path"
 set -euo pipefail
@@ -673,16 +635,17 @@ then
     exit 1
 fi
 SHAREGPT_PATH="$SPECFORGE_ROOT/cache/dataset/sharegpt_train.jsonl"
-# 后续 smoke-train 会 `pushd "$SPECFORGE_ROOT"` 把 cwd 切到 SpecForge/，相对路径会变成
+# 后续训练命令会 `pushd "$SPECFORGE_ROOT"` 把 cwd 切到 SpecForge/，相对路径会变成
 # SpecForge/SpecForge/cache/dataset/...。此处用 realpath 转绝对，下游 <SHAREGPT_PATH>
 # placeholder 替换后 specforge train 不管 cwd 都能找到文件。
 SHAREGPT_PATH="$(realpath "$SHAREGPT_PATH")"
 ls -la "$SHAREGPT_PATH" >&2
 echo "smoke: prepare-data OK ($SHAREGPT_PATH)" >&2
-# store="sharegpt_path" 只抓最后一行 stdout 给下游 placeholder 替换，
-# 把诊断信息 redirect 到 stderr，避免污染 sharegpt_path 捕获值。
+# stdout 只留最终路径（供下方 <SHAREGPT_PATH> 占位符替换），诊断信息走 stderr。
 echo "$SHAREGPT_PATH"
 ```
+
+输出结果如下（一行数据文件绝对路径）：
 
 ```shell #test-result id="smoke-prepare-data" load="sharegpt_path>>SHAREGPT_PATH"
 <SHAREGPT_PATH>
@@ -690,18 +653,12 @@ echo "$SHAREGPT_PATH"
 
 ### 跑 specforge 训练（1 步）
 
-> Framework 用 `subprocess.run(capture_output=True)` 跑 `#test` 块，bash block 的
-> stdout/stderr 整段缓在 pipe 里，**只在 block 结束时**（exit 0 / exit 非零 / framework
-> timeout=5400s fire）才 dump 到 runner console。所以整段 `specforge train` 跑期间
-> runner 黑屏是 framework 设计行为，不是真卡死。
->
-> 这里拆成 launch + monitor 两步：launch 是同步短任务（≤30s），framework 跑完立刻
-> dump，runner 能看到"启动确认 + pid"；monitor 是长 poll，每 60s echo 一行
-> `[hh:mm:ss] elapsed=Ns log_size=NB last: <最后一行 log>`——但 monitor block 自身的
-> stdout 仍被 framework 缓冲到 block 结束才 dump，**runner 期间看不到 monitor echo**。
-> 真要 streaming，得改 framework 用 `Popen` + 迭代 stdout（超出 doc 范围）。
+CI 框架逐段执行本文命令块，单段 stdout/stderr 整段缓冲，只在段结束时才输出到日志。所以 `specforge train` 运行期间日志长时间没有新输出是正常现象，不是卡死。
+因此训练拆成"启动 + 监控"两段：启动段是 ≤30s 的短任务，跑完立刻能看到启动确认和 pid；监控段每 60s 打一行进度，训练完成后收尾。
 
 #### 启动 specforge train（后台）
+
+在卡 1 上后台启动 1 步训练（batch/步数压到最小的 smoke 配置），30 秒后确认进程还活着——典型失败（mooncake 没起或补丁没生效）会在 30s 内直接退出：
 
 ```shell #test id="smoke-train-launch" load="model_path>>MODEL_PATH" load="sharegpt_path>>SHAREGPT_PATH"
 set -euo pipefail
@@ -711,9 +668,8 @@ RECIPE="${SPECFORGE_RECIPE:-examples/configs/online/disaggregated/external/qwen3
 pushd "$SPECFORGE_ROOT" >/dev/null
 # 配方 output_dir 残留的 producer_claim / failed 标记会让 _claim_fresh_control_path 拒绝继续。
 rm -rf outputs/qwen3.5-4b-dflash-npu-online
-# PYTHONUNBUFFERED=1 让 specforge train 的 stdout 走无缓冲写 /tmp/smoke-train.log；
-# 即便 framework 把整个 bash block 缓冲住，文件里也是 line-buffered 行粒度（出问题后
-# 能 tail 看到断点位置，不是 4KB chunk）。
+# PYTHONUNBUFFERED=1 让 specforge train 的 stdout 无缓冲写 /tmp/smoke-train.log；
+# 即使外层框架缓冲整段命令输出，日志文件里也是行粒度（出问题后能 tail 看到断点位置）。
 PYTHONUNBUFFERED=1 \
 ASCEND_RT_VISIBLE_DEVICES=$TRAINER_DEVICE \
 HCCL_CONNECT_TIMEOUT=7200 HCCL_EXEC_TIMEOUT=7200 \
@@ -736,9 +692,8 @@ TRAIN_PID=$!
 disown $TRAIN_PID 2>/dev/null || true
 echo "$TRAIN_PID" > /tmp/smoke-train.pid
 # 30s 健康检查：确认 train 进程没立刻死。典型失败模式：mooncake_master 没起 / sglang
-# spec_capture_sink 缺 mount 段 → producer 30s 内 10 个 prompt 全 terminally failed
-# → train 直接抛 RuntimeError 退出（run 后续 elapsed=80s 直接 FAILED）。这里 30s 内
-# 撞死就 fail-fast，避免 monitor 浪费 timeout 反复查同样的错。
+# spec_capture_sink 缺 mount 段 → producer 的 prompt 全部失败，train 直接抛
+# RuntimeError 退出。这里 30s 内撞死就 fail-fast，避免监控段空转到超时。
 sleep 30
 if ! kill -0 "$TRAIN_PID" 2>/dev/null; then
     echo "smoke: FAILED - specforge train died within 30s of launch"
@@ -749,25 +704,75 @@ echo "smoke: specforge train alive after 30s, pid=$TRAIN_PID, log=/tmp/smoke-tra
 popd >/dev/null
 ```
 
+输出结果如下：
+
 ```shell #test-result id="smoke-train-launch" fuzzy='xxx'
 smoke: specforge train alive after 30s, pid=xxx, log=/tmp/smoke-train.log
 ```
 
 #### 监控直到退出
 
-```shell #test id="smoke-train-monitor" timeout=5400
+轮询等待训练完成：日志出现 step/loss 指标即训练成功，正常情况下进程随后自行退出。注意容器环境下进程退出后可能停留在僵尸状态（容器 PID 1 不回收孤儿，`kill -0` 仍返回成功），本段已按"僵尸即退出"处理。若进程确认活着但 300s 内不退出，杀掉进程树并按训练成功收尾，同时把各进程的 `/proc` 状态和 py-spy 线程栈写到日志（供定位）。若始终没有 step/loss 指标，则等到 80 min 上限判失败：
+
+```shell #test id="smoke-train-monitor"
 set -euo pipefail
 LOG_FILE=/tmp/smoke-train.log
 TRAIN_PID=$(cat /tmp/smoke-train.pid)
-WAIT_TIMEOUT="${SPECFORGE_TRAIN_TIMEOUT:-4800}"   # 80 min 上限；framework 自身 timeout=5400s
+WAIT_TIMEOUT="${SPECFORGE_TRAIN_TIMEOUT:-4800}"     # 总等待上限；单段命令的框架超时为 5400s
+GRACE_AFTER_DONE="${SPECFORGE_TRAIN_GRACE:-300}"   # step/loss 出现后，等进程退出的宽限
 WAIT_START=$(date +%s)
-while kill -0 "$TRAIN_PID" 2>/dev/null; do
+DONE_AT=""
+# 存活判定不能只看 kill -0：它对僵尸进程也返回成功。GH Actions 容器的 PID 1 不回收
+# 孤儿——specforge train 正常退出后停在 zombie 状态、kill -0 恒真，看起来像"卡死"
+#（CI 3/3 复现；coder 的 PID 1 会收尸所以从不复现）。State 为 Z 即视为已退出。
+trainer_alive() {
+    kill -0 "$TRAIN_PID" 2>/dev/null || return 1
+    if grep -q 'State:[[:space:]]*Z' "/proc/$TRAIN_PID/status" 2>/dev/null; then
+        echo "smoke: train pid=$TRAIN_PID already exited (zombie state; container init does not reap orphans)"
+        return 1
+    fi
+    return 0
+}
+while trainer_alive; do
     ELAPSED=$(( $(date +%s) - WAIT_START ))
     if [[ $ELAPSED -ge $WAIT_TIMEOUT ]]; then
         echo "smoke: FAILED - specforge train exceeded ${WAIT_TIMEOUT}s, killing pid=$TRAIN_PID"
         kill -9 "$TRAIN_PID" 2>/dev/null || true
         tail -50 "$LOG_FILE"
         exit 1
+    fi
+    if [[ -z "$DONE_AT" ]] && grep -qE "step.*loss|loss.*step|step N:|train_runtime" "$LOG_FILE" 2>/dev/null; then
+        DONE_AT=$ELAPSED
+        echo "smoke: step/loss markers present at elapsed=${ELAPSED}s; giving the process ${GRACE_AFTER_DONE}s to exit"
+    fi
+    # 训练已产出 step/loss 但进程活着迟迟不退（非僵尸）——尚未在实测中出现过，留作兜底。
+    # 杀进程树前先取证（父+子进程各一份），全部写 stderr 并带 [ERROR] 前缀——框架对含
+    # [ERROR] 的 stderr 即使 rc=0 也整段 print 到 job log（≤256KB 不截断），GitHub 上可直接
+    # 复制。三层证据：/proc 状态+内核栈（D=不可中断等驱动、wchan=等待点）→ py-spy
+    # Python 线程栈 → py-spy --native 原生帧（HCCL/CANN 函数名）。
+    if [[ -n "$DONE_AT" ]] && [[ $(( ELAPSED - DONE_AT )) -ge $GRACE_AFTER_DONE ]]; then
+        echo "smoke: WARNING - train pid=$TRAIN_PID still alive ${GRACE_AFTER_DONE}s after step/loss markers; dumping stacks then killing process tree"
+        for P in "$TRAIN_PID" $(pgrep -P "$TRAIN_PID" 2>/dev/null || true); do
+            echo "[ERROR] teardown-hang diagnostic for pid $P:" >&2
+            awk '/^(State|Threads)/{print "  "$0}' /proc/$P/status >&2 2>/dev/null || true
+            echo "  wchan: $(cat /proc/$P/wchan 2>/dev/null)" >&2
+            echo "  kernel stack:" >&2
+            cat /proc/$P/stack 2>/dev/null | sed 's/^/    /' >&2 || echo "    (unreadable)" >&2
+        done
+        if uv pip install --quiet py-spy >/dev/null 2>&1; then
+            for P in "$TRAIN_PID" $(pgrep -P "$TRAIN_PID" 2>/dev/null || true); do
+                echo "[ERROR] py-spy stack dump for pid $P (teardown did not exit):" >&2
+                py-spy dump --pid "$P" --native >&2 2>&1 \
+                    || py-spy dump --pid "$P" >&2 2>&1 \
+                    || echo "[ERROR] py-spy dump failed for pid $P (ptrace blocked?)" >&2
+            done
+        else
+            echo "[ERROR] py-spy install failed; skipping stack dump" >&2
+        fi
+        pkill -9 -P "$TRAIN_PID" 2>/dev/null || true
+        kill -9 "$TRAIN_PID" 2>/dev/null || true
+        sleep 2
+        break
     fi
     if [[ -f "$LOG_FILE" ]]; then
         LOG_SIZE=$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)
@@ -780,7 +785,7 @@ while kill -0 "$TRAIN_PID" 2>/dev/null; do
 done
 ELAPSED=$(( $(date +%s) - WAIT_START ))
 echo "smoke: specforge train process exited, elapsed=${ELAPSED}s"
-# TRAIN_PID 不是当前 shell 的子进程（launch 阶段 shell 已退出），拿不到 exit code；
+# TRAIN_PID 不是当前 shell 的子进程（启动段的 shell 已退出），拿不到 exit code；
 # 用 log 内容判断成败：1 步 max_steps=1 应该写出 step/loss 等行，否则算 fail。
 if ! grep -qE "step.*loss|loss.*step|step N:|train_runtime" "$LOG_FILE"; then
     echo "smoke: FAILED - no step/loss output in train log"
@@ -794,7 +799,10 @@ fi
 echo "smoke: OK - 1-step training completed"
 ```
 
+输出结果如下（首行通配符吸收监控期间的进度行与状态提示；无论哪条路径，最后都以"进程退出 + 训练完成"两行收尾）：
+
 ```shell #test-result id="smoke-train-monitor" fuzzy='xxx'
+xxx
 smoke: specforge train process exited, elapsed=xxx
 smoke: OK - 1-step training completed
 ```

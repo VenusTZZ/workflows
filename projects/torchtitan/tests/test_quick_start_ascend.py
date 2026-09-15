@@ -53,25 +53,25 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     The test subclass itself does not own any ``test_*`` method beyond the
     template-method entry; the doc body is the spec. ``prepare_environment``
-    makes sure ``torch_npu`` is in place before the framework starts executing
-    doc commands (the doc itself does ``git clone`` + ``uv pip install -r
-    requirements.txt && uv pip install -e . --no-deps`` on a ``<ref>``
-    checkout, but we still probe to fail fast on obviously broken runners).
+    only does runner-side scaffolding (CANN env + CUDA exclusion list +
+    ``uv`` install); ``torch / torch_npu / torchtitan`` are all installed by
+    the doc's ``#test-setup`` / ``#test`` blocks against a ``<ref>`` checkout,
+    so the test exercises the exact install path users get.
     """
 
     # torchtitan's smallest meaningful command — `python -m torchtitan.train
-    # --job.config_file ./.../debug_model.toml --training.steps 1
+    # --module llama3 --config llama3_debugmodel --training.steps 1
     # --comm.mode fake_backend` — needs to: clone torchtitan (~5 MB
     # sparse), `uv pip install -r requirements.txt` (torchdata / datasets /
     # tensorboard / wandb / fsspec / tyro / tokenizers / safetensors /
     # einops / pillow on v0.2.x; cluster cache resolves most in well under
     # a minute on a warm runner), `uv pip install -e . --no-deps`, then run
-    # a 1-step fake-backend training that builds the Llama 3 debug model
-    # (~256 dim / 6 layers) on NPU. 22 minutes gives cold-cache room for
-    # the install chain (a torchdata/datasets pair on a cold cluster cache
-    # takes a few minutes) without letting a hung training run block the
-    # queue.
-    DEFAULT_COMMAND_TIMEOUT = 1300
+    # a 2-step fake-backend training that builds the Llama 3 debug model
+    # (~256 dim / 6 layers) on NPU. 60 minutes: the first train step on a
+    # cold cache compiles the flex-attention triton kernel through the
+    # bisheng compiler on NPU (tens of seconds per config), dwarfing the
+    # install chain; watch runs showed 1300s is not enough for that.
+    DEFAULT_COMMAND_TIMEOUT = 3600
 
     # Monitored source is the cosdt-ci-test/workflows fork (this repo): the
     # doc lives at projects/torchtitan/docs/Quick-start-Ascend.md and the
@@ -95,7 +95,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     # inherits parent env by default) see it. torchtitan's transitive
     # deps (datasets) occasionally pull CUDA-marked wheels if
     # the resolver sees the cluster cache's CUDA index first.
+    # Also blocks community `triton` (CUDA-only backend): on NPU it must
+    # be replaced by triton-ascend, and installing both clobbers the
+    # same triton/ tree into a broken mix.
     _CUDA_CONSTRAINTS = (
+        'triton<0',
         'cuda-toolkit<0',
         'cuda-python<0',
         'cuda-bindings<0',
@@ -137,21 +141,19 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     )
     _CONSTRAINTS_FILE = '/tmp/torchtitan_npu_constraints.txt'
 
-    # Cluster-internal nginx PyPI cache + Huawei Cloud ascend dual-source.
-    _CLUSTER_INDEX = 'http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple'
-    _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
-
     # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
     # Path is hard-coded, tied to the GitHub workflow container image.
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     # ----------------------------------------------------------
-    # prepare_environment: CANN env + CUDA constraints + torch stack probe
+    # prepare_environment: CANN env + CUDA constraints + uv
+    # (torch / torch_npu / torchtitan install are owned by the doc's
+    #  #test-setup / #test blocks)
     # ----------------------------------------------------------
 
     @classmethod
     def prepare_environment(cls) -> None:
-        """Install CANN env + CUDA constraints + torch stack probe.
+        """Install CANN env + CUDA constraints + uv.
 
         torchtitan itself is intentionally NOT pre-installed here: the doc
         body runs ``git clone`` + ``uv pip install -r requirements.txt &&
@@ -162,9 +164,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         What this hook does pre-install:
             * CANN env (so torch_npu is importable);
             * CUDA exclusion list (so an accidental ``nvidia-cudnn`` pull
-              doesn't shadow the NPU build);
-            * torch / torch_npu, only if the image's pre-installed wheels
-              don't already match the version matrix.
+              doesn't shadow the NPU build).
+
+        ``torch / torch_npu`` and ``torchtitan`` are owned by the doc's
+        ``#test-setup`` / ``#test`` blocks; this method only does the
+        runner-side scaffolding that has to happen before those blocks run.
         """
         # 0) CANN env: source set_env.sh and merge the env stream into
         # os.environ
@@ -204,48 +208,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             check=True,
         )
 
-        # 3) torch stack probe: when version matches the image's
-        # pre-installed wheels, reuse them to avoid the cluster cache
-        # triggering ``+cpu`` resolution.
-        # torchtitan v0.2.1+ imports ``torch.nn.attention.varlen`` (added
-        # in torch 2.10), so the test env must have torch 2.10.0 +
-        # torch_npu 2.10.0.post4. Same matrix validated for speculators
-        # on the same CANN 9.1.0 base image.
-        _PROBE_SCRIPT = (
-            'import torch, torch_npu\n'
-            "raise SystemExit(0 if "
-            "torch.__version__.startswith('2.10.0') "
-            "and torch_npu.__version__.startswith('2.10.0') "
-            "else 1)"
-        )
-        probe = subprocess.run(
-            ['python', '-c', _PROBE_SCRIPT],
-            capture_output=True,
-            check=False,  # probe's success/failure is the branch signal — don't raise
-        )
-        if probe.returncode == 0:
-            _VERSIONS_SCRIPT = (
-                'import torch, torch_npu; '
-                'print(torch.__version__, torch_npu.__version__)'
-            )
-            versions = subprocess.run(
-                ['python', '-c', _VERSIONS_SCRIPT],
-                capture_output=True, text=True, check=True,
-            )
-            print(f'setup: reusing image torch stack ({versions.stdout.strip()})')
-        else:
-            print('setup: installing torch==2.10.0 torch_npu==2.10.0.post4')
-            subprocess.run(
-                [
-                    'python', '-m', 'pip', 'install',
-                    '--index-url', cls._CLUSTER_INDEX,
-                    '--extra-index-url', cls._ASCEND_EXTRA,
-                    'torch==2.10.0', 'torch_npu==2.10.0.post4',
-                ],
-                check=True,
-            )
-
-        # 4) torchtitan transitive deps (tyro / tokenizers / safetensors /
+        # 3) torchtitan transitive deps (tyro / tokenizers / safetensors /
         # datasets / tensorboard / wandb / torchdata / fsspec / einops /
         # pillow) are all declared in the release's `requirements.txt`. The
         # doc body's `uv pip install -r requirements.txt` block installs

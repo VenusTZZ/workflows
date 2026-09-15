@@ -35,7 +35,8 @@ jobs:
         --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
         --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
-      timeout_minutes: 120
+        --volume=/root/.cache/cosdt-ci-test/onnxruntime:/root/.cache/cosdt-ci-test/onnxruntime
+      timeout_minutes: 300
       upstream_repo: microsoft/onnxruntime
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/onnxruntime/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/onnxruntime/docs/Quick-start-Ascend.md

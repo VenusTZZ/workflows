@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/cosdt-ci-test/workflows/schemas/upstream_doc_monitor_result.schema.json",
+  "title": "Upstream doc monitor result",
+  "description": "Machine-readable result.json consumed by the frontend, uploaded as an artifact by the upstream-doc-monitor job. A bare array; each item reports one monitored doc entry.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": [
+      "project",
+      "doc",
+      "version",
+      "status",
+      "ticket"
+    ],
+    "properties": {
+      "project": {
+        "type": "string",
+        "description": "Project name of the monitored entry."
+      },
+      "doc": {
+        "type": "string",
+        "description": "Full URL of the monitored document, matching the configured url field: a GitHub blob URL for repo_file entries, the web page URL for web_page entries."
+      },
+      "version": {
+        "type": ["string", "null"],
+        "description": "Upstream version tag; null when the entry carries no version marker or is a web page."
+      },
+      "status": {
+        "type": "string",
+        "enum": ["error", "pending", "unchanged"],
+        "description": "Current state: error = detection failed, pending = changed and awaiting confirmation (an open ticket exists), unchanged = no change detected."
+      },
+      "ticket": {
+        "type": ["string", "null"],
+        "description": "HTML URL of the open ticket; null when there is none."
+      }
+    }
+  }
+}

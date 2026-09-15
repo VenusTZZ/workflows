@@ -1,0 +1,43 @@
+# OpenRLHF quick start guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/quick-start-template.yml.
+# This file only declares what varies: concurrency, runner, image,
+# container options, upstream repo, monitored doc, and the test command.
+name: openrlhf-quick-start
+
+concurrency:
+  group: ${{ github.event_name == 'schedule' && 'openrlhf-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+on:
+  # Enable after the first successful workflow_dispatch run.
+  # schedule:
+  #   - cron: '55 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  openrlhf-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      project: openrlhf
+      test_runner: '["linux-aarch64-a2-1"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      container_options: >-
+        --shm-size=64g
+        --device=/dev/davinci0
+        --device=/dev/davinci_manager
+        --device=/dev/devmm_svm
+        --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+        --volume=/root/.cache/cosdt-ci-test/openrlhf:/root/.cache/cosdt-ci-test/openrlhf
+        --volume=/data/ci-cache/modelscope/openrlhf:/root/.cache/modelscope
+      timeout_minutes: 150
+      upstream_repo: OpenRLHF/OpenRLHF
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/openrlhf/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/openrlhf/docs/Quick-start-Ascend.md
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

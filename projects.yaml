@@ -104,6 +104,18 @@ projects:
     dir: projects/accelerate
     workflows:
       quick_start: .github/workflows/accelerate-quick-start.yml
+      # Release-only examples guard on the shared engine
+      # examples-template.yml (design: docs/examples-guard-engine.md).
+      # First supported entries: the 4 single-card NLP/CV classics
+      # (nlp_example.py / complete_nlp_example.py / cv_example.py /
+      # complete_cv_example.py) plus 8 by_feature/* NLP demos on
+      # bert-base-cased + GLUE MRPC (pre-cached via HF mirror). 12
+      # entries × default 2-3 epochs; total wallclock per run ~25 min
+      # on a single 910B4. profiler.py was on the supported list but
+      # moved to unsupported (torch_npu 2.9 lacks self_npu_time_total
+      # for prof.key_averages().table()) — see
+      # docs/case-accelerate-examples-on-npu.md.
+      examples: .github/workflows/accelerate-examples.yml
   - name: peft
     category: 训练加速
     support_level: 基础支持
@@ -113,6 +125,11 @@ projects:
     dir: projects/peft
     workflows:
       quick_start: .github/workflows/peft-quick-start.yml
+      # Release-only examples guard on the shared engine
+      # examples-template.yml (design: docs/examples-guard-engine.md).
+      # First supported entry: examples/sft/run_peft.sh, LoRA SFT of
+      # ModelScope-predownloaded Qwen2.5-0.5B on 1 card, 1 step.
+      examples: .github/workflows/peft-examples.yml
   - name: diffusers
     category: 训练加速
     support_level: 基础支持
@@ -210,6 +227,7 @@ projects:
     runner: linux-aarch64-a2-1
     dir: projects/speculators
     workflows:
+      examples: .github/workflows/speculators-examples.yml
       quick_start: .github/workflows/speculators-quick-start.yml
   - name: slime
     category: 训练加速
@@ -328,6 +346,24 @@ projects:
     dir: projects/timm
     workflows:
       quick_start: .github/workflows/timm-quick-start.yml
+  - name: open_clip
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: mlfoundations/open_clip
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/open_clip
+    workflows:
+      quick_start: .github/workflows/open-clip-quick-start.yml
+  - name: internlm
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: InternLM/InternLM
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/internlm
+    workflows:
+      quick_start: .github/workflows/internlm-quick-start.yml
   - name: xllm
     category: 推理加速
     support_level: 基础支持
@@ -534,3 +570,45 @@ projects:
     dir: projects/axolotl
     workflows:
       quick_start: .github/workflows/axolotl-quick-start.yml
+  # openrlhf quickstart installs torch 2.11 / torch_npu 2.11 on CANN
+  # 9.1.0, maps torch.cuda to NPU via sitecustomize + transfer_to_npu,
+  # then runs a 4-step LoRA SFT of Qwen2.5-0.5B-Instruct through
+  # deepspeed --module openrlhf.cli.train_sft on one 910B4 card.
+  # Upstream has no Ascend code; setup.py tags wheels as x86_64 so the
+  # doc puts the clone on PYTHONPATH instead of pip installing.
+  - name: openrlhf
+    category: 训练加速
+    support_level: 新兴适配
+    upstream_repo: OpenRLHF/OpenRLHF
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/openrlhf
+    workflows:
+      quick_start: .github/workflows/openrlhf-quick-start.yml
+  # MiniOneRec quickstart exercises generative-recommendation SFT on
+  # Ascend NPU: ModelScope base-model download (Qwen2.5-0.5B, base not
+  # Instruct — upstream README warns Instruct + newer transformers can
+  # break constrained decoding) + HF-mirror pull of the official
+  # preprocessed Amazon Industrial_and_Scientific subset (~27 MB, .npy
+  # embeddings excluded — RQ/SID-construction stage only) +
+  # transfer_to_npu patch (top-level bitsandbytes import stripped: it is
+  # never used and aarch64 wheel availability is uncertain, same class
+  # of problem as xtuner's 0.45.0 pin) + 1-epoch HF-Trainer SFT smoke
+  # (sample=600 per sub-dataset, cutoff 256, batch 8 / micro 2).
+  # torch stack pinned in doc + probe: torch 2.9.0 + torch_npu
+  # 2.9.0.post2 (CANN 9.1.0 pairing, same line as dgl / xdit). Manual
+  # verification on this image shape passed 2026-09-03 (910B3, bf16 OK,
+  # 9.1 samples/s, no DataLoader fork segfault at the default
+  # num_workers=0). RL stage (GRPO) is pointer-only: minionerec_trainer's
+  # vLLM path is CUDA-only and the transformers-native generation
+  # fallback is too slow for a smoke; evaluate.py constrained beam
+  # search is pointer-only for the same reason (follow-up candidates).
+  - name: minionerec
+    category: 训练加速
+    support_level: 新兴适配
+    upstream_repo: AkaliKong/MiniOneRec
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/minionerec
+    workflows:
+      quick_start: .github/workflows/minionerec-quick-start.yml

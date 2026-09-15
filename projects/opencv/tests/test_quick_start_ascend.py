@@ -61,7 +61,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         6. ``opencv_test_dnn`` + ``opencv_version`` smoke + HUAWEI
            backend gtest filter;
         7. Python binding smoke (cv2 import + HUAWEI backend enum) +
-           SqueezeNet ONNX forward on NPU.
+           MobileNetV2 ONNX forward on NPU (classic DNN engine forced
+           via OPENCV_FORCE_DNN_ENGINE=1 inside the doc block).
     """
 
     # 150 min per command: `make -j2` is the long pole — Debug -O0 at

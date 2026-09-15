@@ -7,22 +7,50 @@
 # I/O, state relay and publishing all live in the engine. See the
 # engine's `workflow_call.inputs` block for the full input contract.
 #
-# Cache keys (monitor-state-torch.vision-*) and artifact names
+# Cache keys (quick-start-monitor-state-torch.vision_*) and artifact names
 # are derived from project=torch.vision, not from the workflow name.
 # The dot in the project name is allowed by both GitHub cache keys
 # (treated as a literal character) and artifact names (alphanumeric
 # + dot + hyphen + underscore per GitHub's artifact name rules); see
 # https://docs.github.com/en/actions/using-workflows/storing-workflow-data-as-artifacts
 #
-# Upstream: github.com/pytorch/vision. The doc installs torchvision
-# two ways: (1) `uv pip install torchvision -i ...` pulls the latest
-# PyPI release matching torch==2.9.0 — canonical stock wheel path;
-# (2) the source build section `git clone`s pytorch/vision at the
-# latest release tag (`<ref>`) and runs `uv pip install -e .`,
+# Upstream: github.com/pytorch/vision. The doc builds torchvision
+# from source only: the source build section `git clone`s pytorch/vision
+# at the latest release tag (`<ref>`), applies the Stable ABI compat
+# patch (see below), and runs `FORCE_CUDA=0 uv pip install -e .`,
 # mirroring ms-swift's source build pattern. pytorch/vision
-# publishes GitHub Releases (e.g. v0.24.0) so the engine's default
+# publishes GitHub Releases (e.g. v0.29.0) so the engine's default
 # release_source=releases works — no special source=tags override
 # needed.
+#
+# torch / torch_npu both pinned to 2.12.0: this is the verified
+# upgrade from the prior torch=2.9.0+cpu + torch_npu=2.9.0.post6
+# combo. torchvision v0.29.0 (Sep 2026) migrated to the PyTorch
+# Stable C ABI, which needs torch wheel to ship
+# `torch/csrc/stable/c/shim.h` and `torch/headeronly/util/shim_utils.h`
+# — torch 2.9.0 wheel ships an incomplete Stable ABI header snapshot
+# (verified via `unzip -l` on aliyun's wheel). torch 2.12.0+cpu wheel
+# ships 61 Stable ABI headers including those two; the matching
+# torch_npu 2.12.0 wheel is on aliyun pypi/simple. The torchtitan
+# Quick-start-Ascend.md project in this same repo uses the exact same
+# torch 2.12.0 + torch_npu 2.12.0 + aliyun pypi/simple combo and has
+# been green on the same NPU runner with CANN 9.1.0 — cross-project
+# parity reduces the surface area this guard has to re-verify.
+#
+# Stable ABI compat patch: v0.29.0's build targets torch 2.14
+# (setup.py TORCH_TARGET_VERSION=0x020e000000000000) and its
+# deform_conv2d_kernel.cpp uses torch::stable::permute — a function
+# that only enters the stable API surface in torch 2.14 (2.12 / 2.13
+# wheels' stable/ops.h lack it; torch_npu tops out at 2.12.0 stable,
+# 2.13.0rc1 is rc-only on aliyun). The doc therefore applies
+# projects/torch.vision/patches/torch-2.12-stable-api-permute.patch
+# after clone: replaces the two permute(t, {0,2,3,1,4,5}) call sites
+# with the numerically equivalent
+# transpose(transpose(t, 1, 3), 1, 2) chain (numpy-verified; 910B4
+# build + nms + deform_conv2d fwd/bwd + transforms.v2 NPU dispatch
+# all verified green). Drop the patch once torch_npu 2.14 ships on
+# aliyun — transpose still exists in 2.14, so keeping it compiles
+# fine either way.
 #
 # No container devices / volumes: torch_npu auto-registers with the
 # CANN base image, and torchvision transforms run on synthetic PIL
@@ -72,7 +100,7 @@ jobs:
   torch-vision-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-torch.vision-*),
+      # Namespaces cache keys (quick-start-monitor-state-torch.vision_*),
       # artifacts (torch.vision-quick-start-<run_id>) and the test
       # working dir (workflows/projects/torch.vision).
       project: torch.vision
@@ -87,7 +115,7 @@ jobs:
       # dispatch on a synthetic PIL image).
       container_options: ''
       # Doc body does: uv pip install torch / torch_npu from Aliyun
-      # pytorch-wheels + Huawei Cloud ascend dual-source (torch_npu is
+      # pytorch-wheels + aliyun pypi/simple dual-source (torch_npu is
       # the slowest piece, ~30 min on cold cache), then stock torchvision
       # cpu wheel from Aliyun PyPI mirror, then 9 transforms.v2 smoke
       # tests that exercise torch_npu PrivateUse1 dispatch. No source

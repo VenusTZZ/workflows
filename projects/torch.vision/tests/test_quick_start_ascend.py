@@ -18,25 +18,27 @@ Environment variables (injected by GitHub workflow
                                   have no ``/dev/davinci*`` device, and the
                                   hard run would fail on ``import torch_npu``.
 
-    Note: ``UPSTREAM_REF`` is NOT consulted by this test — the doc no
-    longer ``git clone``s the Ascend/vision fork (smoke path uses stock
-    cpu wheel only; the fork is a ``torchvision_npu`` patch package
-    whose ops don't intersect transforms.v2). The variable may still
-    appear in the workflow env for monitoring parity with other
-    projects, but its value is irrelevant to this test.
+    Note: ``UPSTREAM_REF`` IS consumed by the doc — the (HTML-commented,
+    still runner-executed) ``#test-setup store="upstream_ref"`` block
+    captures it, and the source-build ``#test`` block loads it into the
+    ``git clone --branch <ref>`` placeholder. The engine resolves it to
+    the latest pytorch/vision release tag; the doc no longer clones the
+    Ascend/vision fork (the fork is a ``torchvision_npu`` patch package
+    whose ops don't intersect transforms.v2).
 
 Scope note: the doc body covers the smoke path for **stock torchvision**
 running under ``torch_npu`` PrivateUse1 dispatch. ``torch`` /
 ``torch_npu`` are installed by the doc body via ``uv pip install`` from
 Aliyun PyPI mirror / Huawei Cloud ascend pypi
-(versions per [Ascend PyTorch Compatibility 矩阵](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md): torch==2.9.0 / torch_npu==2.9.0.post6 / CANN==9.1.0).
-``torchvision`` is installed two ways: (1) **binary path** — `uv pip install
-torchvision` from Aliyun PyPI mirror (unconstrained, pip resolves latest
-compatible with torch==2.9.0); (2) **source build** — `git clone
-github.com/pytorch/vision` at the latest release tag + `uv pip install -e .`,
-mirroring ms-swift's source build pattern. Both paths install the **same**
-stock torchvision; the source build is for users who need exact-version
-reproducibility or want to modify torchvision source. No Ascend/vision fork
+(versions per [Ascend PyTorch Compatibility 矩阵](https://gitcode.com/Ascend/pytorch/blob/main/COMPATIBILITY.en.md): torch==2.12.0 / torch_npu==2.12.0 / CANN==9.1.0).
+``torchvision`` is installed from source: `git clone
+github.com/pytorch/vision` at the latest release tag + apply the
+Stable ABI compat patch ``patches/torch-2.12-stable-api-permute.patch``
+(v0.29.0 targets torch 2.14's stable API surface and uses
+``torch::stable::permute``, which torch 2.12/2.13 lack — the patch
+swaps the two permute call sites for an equivalent transpose chain)
++ ``uv pip install -e .`` with ``FORCE_CUDA=0``, mirroring ms-swift's
+source build pattern. No Ascend/vision fork
 build: the fork is a ``torchvision_npu`` patch package whose ops
 (``deform_conv`` / ``roi_pool``) are not exercised by the transforms.v2 smoke
 path, and its ``csrc`` includes a ``npu_decode_video_kernel.{cpp,hpp}`` that
@@ -87,10 +89,11 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     makes sure CANN env is sourced + CUDA exclusion list is written + ``uv``
     is bootstrapped before the framework starts executing doc commands
     (the doc body itself installs ``torch`` / ``torch_npu`` from Aliyun
-    pytorch-wheels + Huawei Cloud ascend pypi, then stock torchvision
-    cpu wheel from Aliyun PyPI mirror, then 9 v2 transforms smoke tests
-    that exercise ``torch_npu`` PrivateUse1 dispatch — no Ascend/vision
-    fork source build, see module docstring).
+    pytorch-wheels + Huawei Cloud ascend pypi, then torchvision via
+    patched source build of the latest pytorch/vision release, then 9
+    v2 transforms smoke tests that exercise ``torch_npu`` PrivateUse1
+    dispatch — no Ascend/vision fork source build, see module
+    docstring).
     """
 
     # 60 min per command: the doc installs torch / torch_npu from the
@@ -186,7 +189,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         ``torch`` / ``torch_npu`` via the doc's ``#test-setup`` block
         (Aliyun pytorch-wheels + Huawei Cloud ascend dual-source);
         ``torchvision`` via the doc's ``## 安装 torchvision`` block
-        (Aliyun PyPI mirror, stock cpu wheel). This class only owns
+        (patched source build of the latest pytorch/vision release).
+        This class only owns
         env-level concerns that aren't doc-visible: CANN env sourcing,
         defensive CUDA exclusion list, ``uv`` bootstrap.
 
@@ -230,17 +234,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             ['python', '-m', 'pip', 'install', 'uv'],
             check=True,
         )
-
-        # ``torch`` / ``torch_npu`` / ``torchvision`` / ``pillow`` are NOT
-        # pre-installed here: the doc body's ``#test-setup`` /
-        # ``## 安装 torchvision`` blocks are the single source of truth
-        # for which packages get installed, at which source. A pre-install
-        # here would mask install-block failures (the v2 transforms +
-        # NPU dispatch on stock torchvision wheels is the smoke test's
-        # whole point). numpy comes in transitively as a torchvision
-        # requirement; safetensors is NOT needed (no modelscope
-        # snapshot_download in the doc body — transforms work on
-        # synthetic PIL images).
 
     # ----------------------------------------------------------
     # test entry

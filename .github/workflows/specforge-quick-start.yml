@@ -7,7 +7,7 @@
 # I/O, state relay and publishing all live in the engine. See the
 # engine's `workflow_call.inputs` block for the full input contract.
 #
-# Cache keys (monitor-state-specforge-*) and artifact names
+# Cache keys (quick-start-monitor-state-specforge_*) and artifact names
 # are derived from project=specforge, not from the workflow name.
 #
 # No device mounts: the self-hosted NPU runner (`linux-aarch64-a2-1`)
@@ -55,7 +55,7 @@ jobs:
   specforge-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-specforge-*), artifacts
+      # Namespaces cache keys (quick-start-monitor-state-specforge_*), artifacts
       # (specforge-quick-start-<run_id>) and the test working dir
       # (workflows/projects/specforge).
       project: specforge

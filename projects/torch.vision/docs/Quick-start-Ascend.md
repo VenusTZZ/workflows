@@ -32,9 +32,9 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | --- | --- |
 | Python | 3.12 |
 | CANN | 9.1.0 |
-| torch | 2.9.0+cpu |
-| torch_npu | 2.9.0.post6 |
-| torchvision | 最新 release（**必须源码构建** `FORCE_CUDA=0`——torchvision ≥0.23 停止发布 CPU-only wheel，PyPI 上的 linux wheel 都链 `libcudart.so`，跟 torch_npu 不兼容；CPU-only 构建产出的 `_C.so` 只链 `libc10_cpu` / `libtorch_cpu`，跟 torch_npu 完全兼容） |
+| torch | 2.12.0+cpu |
+| torch_npu | 2.12.0 |
+| torchvision | 最新 release（**必须源码构建** `FORCE_CUDA=0`——torchvision ≥0.23 停止发布 CPU-only wheel，PyPI 上的 linux wheel 都链 `libcudart.so`，跟 torch_npu 不兼容；CPU-only 构建产出的 `_C.so` 只链 `libc10_cpu` / `libtorch_cpu`，跟 torch_npu 完全兼容；v0.29.0 起迁移 Stable ABI，还需打本仓补丁 `patches/torch-2.12-stable-api-permute.patch`，见「安装 torchvision」） |
 | pillow | `>=10.0`（`torchvision.transforms.functional.to_pil_image` 等的运行时依赖） |
 
 ### 前置安装
@@ -79,9 +79,11 @@ Python 3.12.xxx
 安装 `torch` / `torch_npu`：
 
 ```shell #test-setup
-uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.9.0
-uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi torch_npu==2.9.0.post6
+uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.12.0
+uv pip install --extra-index-url https://mirrors.aliyun.com/pypi/simple torch_npu==2.12.0
 ```
+
+> torchvision v0.29.0（2026-09 发布）把 C 扩展迁移到 PyTorch Stable C ABI，这条链踩过两级坑：**第一级**，torch 2.9.0 wheel 的 Stable ABI 头是早期不完整快照，缺 `torch/csrc/stable/c/shim.h` 等核心头，v0.29.0 的 `box_iou_rotated.cpp` 直接编不过——所以把 torch / torch_npu 升到 2.12.0（wheel 完整 ship 61 个 Stable ABI 头；组合本身是仓库里 torchtitan Quick-start-Ascend.md 已实测的稳定组合，同款 CANN 9.1.0 镜像 / 同源 wheel / NPU 上跑通过 Llama 3 debug_model + 8B 训练；torch_npu 2.12.0 在 aliyun pypi/simple 上有，跟 torch 2.12.0 是华为官方兼容矩阵对齐的同一 minor）。**第二级**，头文件齐了还不够：v0.29.0 的构建目标钉在 torch 2.14（`setup.py` 里 `TORCH_TARGET_VERSION=0x020e000000000000`），`deform_conv2d_kernel.cpp` 用了 `torch::stable::permute`——该函数 **2.14 才进 stable API**（2.12 / 2.13 wheel 的 `stable/ops.h` 函数面里都没有，实测解包对比过），而 torch_npu 目前最高只有 2.12.0 正式版（aliyun 上 2.13 只有 rc1，没有 2.14），所以 NPU 上不可能用 torch 2.14——只能打本仓补丁 `patches/torch-2.12-stable-api-permute.patch` 把两处 `permute` 换成等价 transpose 链（见下一段）。
 
 检查 torch / torch_npu 是否装好且 NPU 设备可用：
 
@@ -92,8 +94,8 @@ python -c "import torch, torch_npu; print('torch=', torch.__version__); print('t
 输出结果如下：
 
 ```shell #test-result id="check-torch" fuzzy='xxx'
-torch= 2.9.0+cpu
-torch_npu= 2.9.0.post6
+torch= 2.12.0+cpu
+torch_npu= 2.12.0
 is_available: True
 count: 1
 ```
@@ -122,6 +124,8 @@ Pillow xxx
 
 torchvision ≥0.23 不再发布 CPU-only wheel——PyPI 上的 linux aarch64 / x86_64 wheel 全部链接 `libcudart.so`，跟 `torch_npu`（替换 torch CUDA backend）不兼容。所以必须**从源码构建**，强制 `FORCE_CUDA=0` 让构建脚本跳过 CUDA 依赖，产出的 `_C.so` 只链 `libc10_cpu` / `libtorch_cpu`，跟 torch_npu 完全兼容。
 
+torchvision ≥v0.29 进一步迁移到 PyTorch Stable C ABI，C 扩展从 `#include <torch/csrc/stable/c/shim.h>` 等头编译。注意 **Stable ABI 的 forward-compat 只在"构建目标版本 ≤ 已装 torch 版本"的方向成立**：v0.29.0 的构建目标（torch 2.14）比本文档钉的 torch 2.12.0 新两个 minor——2.12.0 wheel 虽然完整 ship 了 61 个 Stable ABI 头（含 `c/shim.h` / `headeronly/util/shim_utils.h` / `headeronly/version.h`），但 `stable/ops.h` 的函数面缺 `permute`，直接编会报 `'permute' is not a member of 'torch::stable'`。所以在 clone 之后、构建之前打本仓补丁 `patches/torch-2.12-stable-api-permute.patch`：把 `deform_conv2d_kernel.cpp` 里两处 `torch::stable::permute(t, {0, 2, 3, 1, 4, 5})` 替换成数值等价的 `torch::stable::transpose(torch::stable::transpose(t, 1, 3), 1, 2)`（`transpose` 在 2.12 的 stable API 里就有；等价性经 numpy 验证 + 910B4 上 deform_conv2d 前向/反向实测）。补丁打不上时（`git apply` 失败）说明上游源码已变化——若构建仍报 permute 错误就按新源码重新生成补丁，若编过了说明上游已不再用 permute，可以删补丁。等 torch_npu 2.14 上架 aliyun 后即可整体去掉补丁并解绑 torch 版本（`transpose` 在 2.14 里仍存在，补丁留着也不影响编译）。
+
 构建工具依赖（g++ / make / cmake / git）已在基础镜像里，无需额外安装。
 
 <!-- 获取 release tag：
@@ -135,11 +139,12 @@ echo "${UPSTREAM_REF}"
 ```shell #test id="stock-torchvision-source" load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/pytorch/vision.git
 cd vision
+git apply ../patches/torch-2.12-stable-api-permute.patch || echo "WARN: permute 补丁未套上（上游源码可能已变化）；若构建报 permute 错误请更新补丁" >&2
 FORCE_CUDA=0 uv pip install -e . --no-build-isolation
 python -c "import torchvision; print('torchvision', torchvision.__version__)"
 ```
 
-\<ref\> 为 pytorch/vision 最新 release tag。
+\<ref\> 为 pytorch/vision 最新 release tag。`git apply` 的补丁文件在本仓 `projects/torch.vision/patches/` 下（clone 出的 `vision/` 与 `patches/` 同级，所以从 `vision/` 内用 `../patches/` 引用；在其它目录复现时把补丁放到 clone 的同级即可）。补丁的来龙去脉见下方引用块。
 
 输出结果如下：
 

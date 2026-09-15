@@ -3,8 +3,7 @@
 Inject the repo root's ``src/`` into ``sys.path`` so that
 ``from workflows.markdown_doc_test_base import ...`` can resolve.
 
-``import workflows`` also triggers ``src/workflows/__init__.py``, which
-installs mistune when it is missing.
+mistune is installed by the shared engine's test step, not by this file.
 """
 
 from __future__ import annotations

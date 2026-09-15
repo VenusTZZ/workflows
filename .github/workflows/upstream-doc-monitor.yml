@@ -1,42 +1,13 @@
 # upstream-doc-monitor — 上游文档变化监控（独立 workflow）。
-#
-# 与 quick-start / examples 引擎（quick-start-template.yml）完全解耦：
-# 不共用 job、不触发任何测试、不修改引擎。按手动指定的监控清单
-# （.github/upstream-doc-monitor.yaml）每 6 小时对每份被监控文档做一次
-# 纯哈希校验，将内容变化与上游侧检测异常同步为仓库内工单 Issue
-# （每文档一张、@owner、去重追加、异常恢复评论）。
-#
-# 检测机制（详见 scripts/upstream_doc_monitor.py 模块文档）：
-#   repo_file → GitHub Contents API 取 git blob SHA（1 次轻量调用/项）
-#   web_page  → HTTP 条件请求优先（304 = 无变化）+ 响应体 SHA-256 兜底
-#
-# 错误分级（按故障域裁决，退出码由脚本给出）：
-#   上游侧（doc_not_found / repo_error / fetch_error）→ 继续其余监控项，
-#     job 绿，异常走工单通知；
-#   本仓库侧（配置/基线致命 exit 1；rate_limited 中断剩余检测 exit 2；
-#     全部监控项均未能完成观测 exit 2）→ job 标红（借 GitHub 内置失败
-#     通知告警）。
-#
-# schedule 生效时机：GitHub 仅对默认分支上的 workflow 定义执行定时触发。
-# 每 6 小时自动检测一轮（UTC 0/6/12/18 点）；亦可在 Actions 页手动
-# workflow_dispatch 触发。
-#
-# 基线持久化：actions/cache（沿用引擎 restore/persist 模式，键前缀
-# upstream-doc-monitor-state-），承载各监控项的哈希、工单链接与频控状态
-# （last_event / last_error_type）。
 
 name: upstream-doc-monitor
 
 concurrency:
-  # 固定组串行：manual 与 schedule 共享一个队列。基线经 actions/cache
-  # 跨 run 读写，并发 run 会竞争写入；cancel-in-progress: false 使排队
-  # 成为期望行为（队列中的 run 取消无意义）。
   group: upstream-doc-monitor
   cancel-in-progress: false
 
 on:
   # 定时调度：每 6 小时一次（UTC 0/6/12/18 点整 = 香港 8/14/20/2 点）。
-  # 手动验证已通过（run#1 全 first_seen / run#2 稳态 unchanged+304），恢复定时。
   schedule:
     - cron: '0 */6 * * *'
   workflow_dispatch:
@@ -47,7 +18,7 @@ permissions:
 
 jobs:
   monitor:
-    name: detect doc changes & sync tickets
+    name: detect doc changes & sync issues
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -58,12 +29,11 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: /tmp/upstream-doc-monitor-state.json
-          # 前缀匹配取最新一份基线（每轮 save 都落新键，见 persist 步骤）
           key: upstream-doc-monitor-state-not-exist
           restore-keys: |
             upstream-doc-monitor-state-
 
-      - name: Run doc monitor (detect + sync tickets)
+      - name: Run doc monitor (detect + sync issues)
         id: monitor
         env:
           GH_TOKEN: ${{ github.token }}
@@ -101,8 +71,8 @@ jobs:
               f"web_page {s['by_source']['web_page']}）",
               f"- 变化 **{s['changed']}** ｜ 新增 **{s['first_seen']}** ｜ "
               f"无变化 {s['unchanged']} ｜ 异常 **{s['errors']}**",
-              f"- 工单动作：新建 {s['tickets'].get('created', 0)} ｜ "
-              f"评论追加 {s['tickets'].get('commented', 0)}",
+              f"- Issue 动作：新建 {s['tickets'].get('created', 0)} ｜ "
+              f"追加评论 {s['tickets'].get('commented', 0)}",
               "",
           ]
           # report 的 changes 数组包含全部监控项（靠 status 区分），
@@ -111,7 +81,7 @@ jobs:
                           if c.get("status") in ("changed", "first_seen")]
           if changed_rows:
               lines += ["### 变化明细", "",
-                        "| 项目 | 处理人 | 源 | 文档 | 状态 | 工单 |",
+                        "| 项目 | 处理人 | 源 | 文档 | 状态 | Issue |",
                         "| --- | --- | --- | --- | --- | --- |"]
               for c in changed_rows:
                   ticket = (f"[{c.get('ticket_action','')}]({c['ticket_url']})"
@@ -124,7 +94,7 @@ jobs:
               lines.append("")
           if r["errors"]:
               lines += ["### 异常明细", "",
-                        "| 项目 | 处理人 | 源 | 类型 | 详情 | 工单 |",
+                        "| 项目 | 处理人 | 源 | 类型 | 详情 | Issue |",
                         "| --- | --- | --- | --- | --- | --- |"]
               for e in r["errors"]:
                   ticket = (f"[{e.get('ticket_action','')}]({e['ticket_url']})"
@@ -137,11 +107,30 @@ jobs:
               lines.append("")
           if not changed_rows and not r["errors"]:
               lines += ["本轮无变化、无异常。", ""]
-          lines += [f"<sub>report.json 保留于本 run 的临时目录（详见 job 日志）；"
-                    f"交付面为仓库 Issues（前缀 `[upstream-doc-monitor]`）。</sub>"]
+          lines += [f"<sub>通知交付面为仓库 Issues（前缀 `[upstream-doc-monitor]`）。</sub>"]
           with open(summary, "a", encoding="utf-8") as fh:
               fh.write("\n".join(lines) + "\n")
           PYEOF
+
+      - name: Validate result.json against schema
+        if: always()
+        run: |
+          if [ ! -s /tmp/upstream-doc-monitor-report/result.json ]; then
+            echo "result.json is missing or empty; schema validation failed"
+            exit 1
+          fi
+          python3 -m pip install -q check-jsonschema
+          check-jsonschema \
+            --schemafile schemas/upstream_doc_monitor_result.schema.json \
+            /tmp/upstream-doc-monitor-report/result.json
+
+      - name: Upload result artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: upstream-doc-monitor-result-${{ github.run_id }}
+          path: /tmp/upstream-doc-monitor-report/result.json
+          if-no-files-found: error
 
       - name: Persist monitor state (baseline)
         if: always()
@@ -149,5 +138,4 @@ jobs:
         with:
           path: /tmp/upstream-doc-monitor-state.json
           # 每轮落新键：同一 key 二次 save 会被 GitHub 拒绝；run_id 保证唯一。
-          # 6 小时一轮的节奏远高于 7 天未用淘汰线。
           key: upstream-doc-monitor-state-${{ github.run_id }}

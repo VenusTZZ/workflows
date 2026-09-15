@@ -148,6 +148,8 @@ speculators xxx
 
 ### 前置：下载 draft 与 verifier
 
+`#test-setup` 块 stdout 的末行会被捕获为 `store=` 指定的变量，供后续命令里 `<draft_path>` / `<verifier_path>` 占位符替换——所以下载命令用 `| tail -n 1` 只留路径行，后续各 setup 块末尾的 `echo` 同理。
+
 从 ModelScope 拉 draft 模型 z-lab/Qwen3-8B-DFlash-b16：
 
 ```shell #test-setup store="draft_path"
@@ -158,6 +160,22 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('z-
 
 ```shell #test-setup store="verifier_path"
 python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen3-8B'))" | tail -n 1
+```
+
+确认两个模型快照已就位（`config.json` + 权重文件）：
+
+```shell #test id="model-download-check" load="draft_path>>draft_path" load="verifier_path>>verifier_path"
+ls -1 <draft_path>/config.json <draft_path>/model.safetensors
+ls -1 <verifier_path>/config.json <verifier_path>/model.safetensors.index.json
+```
+
+输出结果如下：
+
+```shell #test-result id="model-download-check" load="draft_path>>draft_path" load="verifier_path>>verifier_path"
+<draft_path>/config.json
+<draft_path>/model.safetensors
+<verifier_path>/config.json
+<verifier_path>/model.safetensors.index.json
 ```
 
 ### convert（DFlash 算法）
@@ -177,6 +195,7 @@ convert_model(
 PY
 test -f /root/dflash-qwen3-8b-converted/config.json
 test -f /root/dflash-qwen3-8b-converted/model.safetensors
+# 末行路径供 store 捕获（后续块 <dflash_path> 的替换源）；上面两行 test -f 保证它真实存在
 echo "/root/dflash-qwen3-8b-converted"
 ```
 
@@ -197,7 +216,7 @@ echo <dflash_path>
 
 ### 训练数据预处理
 
-用上游 `scripts/prepare_data.py` 把 JSONL chat 数据 tokenize 写到 `/root/dflash-train-data/`（HF arrow 数据集）：
+把 10 条 chat 用 verifier tokenizer 跑 chat template 得到 `input_ids`/`loss_mask`，写到 `/tmp/prompts.jsonl`（speculator-format），再交给上游 `prepare-data`。
 
 ```shell #test-setup store="data_path" load="verifier_path>>verifier_path"
 set -euo pipefail
@@ -205,27 +224,41 @@ DATA_DIR=/root/dflash-train-data
 rm -rf "$DATA_DIR"
 mkdir -p "$DATA_DIR"
 
-cat > /tmp/prompts.jsonl << 'JSONL'
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #0."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #1."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #2."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #3."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #4."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #5."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #6."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #7."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #8."},{"role":"assistant","content":"AI is a field of computer science."}]}
-{"conversations":[{"role":"user","content":"Briefly describe AI topic #9."},{"role":"assistant","content":"AI is a field of computer science."}]}
-JSONL
+python << 'PY'
+import json
+from transformers import AutoTokenizer
 
-cd /root/speculators
+tokenizer = AutoTokenizer.from_pretrained("<verifier_path>")
 
-python scripts/prepare_data.py \
+def _ids(encoded):
+    # transformers 4.x: list[int] ; 5.x: BatchEncoding with .input_ids
+    return encoded["input_ids"] if hasattr(encoded, "keys") else encoded
+
+# 用 verifier 的 chat template 算 assistant 段分界：
+# prefix_ids（add_generation_prompt=True）渲染到 <|im_start|>assistant\n 为止；
+# full_ids 在它后面追加 <think>\n\n</think>\n\n + assistant 内容 + <|im_end|>\n
+# （Qwen3 thinking 模式 serving 输出形态），所以 [len(prefix_ids):] 就是要算 loss 的 token。
+with open("/tmp/prompts.jsonl", "w") as f:
+    for i in range(10):
+        conv = [
+            {"role": "user", "content": f"Briefly describe AI topic #{i}."},
+            {"role": "assistant", "content": "AI is a field of computer science."},
+        ]
+        prefix_ids = _ids(tokenizer.apply_chat_template(
+            conv[:-1], tokenize=True, add_generation_prompt=True
+        ))
+        full_ids = _ids(tokenizer.apply_chat_template(conv, tokenize=True))
+        loss_mask = [0] * len(prefix_ids) + [1] * (len(full_ids) - len(prefix_ids))
+        f.write(json.dumps({"input_ids": full_ids, "loss_mask": loss_mask}) + "\n")
+PY
+
+speculators prepare-data \
   --model "<verifier_path>" \
   --data /tmp/prompts.jsonl \
   --output "$DATA_DIR" \
   --max-samples 10 \
   --seq-length 8192 \
+  --num-preprocessing-workers 4 \
   --overwrite
 
 echo "$DATA_DIR"
@@ -257,11 +290,9 @@ token_freq keys: xxx
 len: xxx
 ```
 
-### 训练（单卡 torchrun）
+### 训练
 
-单卡 64 GB NPU 装不下「vllm 16 GB 权重 + KV + train draft 模型 + optimizer 激活」并发跑，所以拆成两步：先生成 hidden_states 缓存，再离线训。
-
-起 vllm 一次性 generate 10 条 hidden_states 写到 `/tmp/hs-train/`（train.py 的 FileBackend 直接读这个目录；生成完杀 vllm 释放全部 NPU 给后续 train 留 64 GB 完整空间）：
+先生成 hidden_states 缓存，再离线训。起 vllm 一次性 generate 10 条 hidden_states 写到 `/tmp/hs-train/`（train 的 FileBackend 直接读这个目录；生成完杀 vllm 释放全部 NPU 给后续 train 留 64 GB 完整空间）。v0.8.0 的 `launch_vllm.py` 有两处行为变化需要留意：按宿主机 CPU 数自动推导 `--api-server-count`（render 大批量吞吐优化，大机器上起多个 API server 前端进程），以及不再自动追加 `--no-enable-chunked-prefill`——镜像 vllm 0.23.0 默认开 chunked prefill 而 `ExampleHiddenStatesConnector` 不支持，必须显式关掉。这里 10 条 smoke 数据顺便钉 1 个前端：
 
 ```shell #test-setup store="hs_dir" load="data_path>>data_path" load="verifier_path>>verifier_path"
 set -euo pipefail
@@ -287,6 +318,8 @@ setsid nohup python scripts/launch_vllm.py "<verifier_path>" \
   --gpu-memory-utilization 0.9 \
   --max-model-len 4096 \
   --enforce-eager \
+  --api-server-count 1 \
+  --no-enable-chunked-prefill \
   > /tmp/vllm-gen.log 2>&1 < /dev/null &
 VLLM_GEN_PID=$!
 VLLM_GEN_PGID=$(ps -o pgid= -p "$VLLM_GEN_PID" | tr -d ' ')
@@ -315,7 +348,7 @@ if [ "$VLLM_READY" != "1" ]; then
   exit 1
 fi
 
-python scripts/data_generation_offline.py \
+speculators generate-offline-data \
   --model "<verifier_path>" \
   --preprocessed-data "<data_path>" \
   --output "$HS_DIR" \
@@ -328,7 +361,7 @@ tail -30 /tmp/hs-gen.log >&2
 
 HS_COUNT=$(ls -1 "$HS_DIR"/hs_*.safetensors 2>/dev/null | wc -l)
 if [ "$HS_RC" -ne 0 ] || [ "$HS_COUNT" -ne 10 ]; then
-  echo "=== data_generation_offline.py failed (rc=$HS_RC, hs_count=$HS_COUNT/10); full log ===" >&2
+  echo "=== generate-offline-data failed (rc=$HS_RC, hs_count=$HS_COUNT/10); full log ===" >&2
   cat /tmp/hs-gen.log >&2
   cleanup_vllm_gen
   exit 1
@@ -340,7 +373,21 @@ sleep 5
 echo "$HS_DIR"
 ```
 
-用上游 `scripts/train.py` 单卡 torchrun 训 1 epoch × 10 sample（smoke 验证管线通，不指望 loss 真下降）：
+确认 hidden states 已落盘（10 个 `hs_*.safetensors`）：
+
+```shell #test id="pipeline-step2b-hs" load="hs_dir>>hs_dir"
+echo <hs_dir>
+python -c "from pathlib import Path; print(len(list(Path('<hs_dir>').glob('hs_*.safetensors'))))"
+```
+
+输出结果如下：
+
+```shell #test-result id="pipeline-step2b-hs" load="hs_dir>>hs_dir"
+<hs_dir>
+10
+```
+
+用 `torchrun -m speculators.train` 单卡训 1 epoch × 10 sample（smoke 验证管线通，不指望 loss 真下降）：
 
 ```shell #test-setup store="checkpoint_path" load="hs_dir>>hs_dir" load="data_path>>data_path" load="verifier_path>>verifier_path"
 set -euo pipefail
@@ -357,7 +404,7 @@ set +u
 source /usr/local/Ascend/nnal/atb/set_env.sh
 set -u
 
-torchrun --standalone --nproc_per_node=1 scripts/train.py \
+torchrun --standalone --nproc_per_node=1 -m speculators.train \
   --verifier-name-or-path "<verifier_path>" \
   --data-path "<data_path>" \
   --hidden-states-path "<hs_dir>" \
@@ -376,7 +423,7 @@ torchrun --standalone --nproc_per_node=1 scripts/train.py \
 TRAIN_RC=${TRAIN_RC:-0}
 
 if [ "$TRAIN_RC" -ne 0 ]; then
-  echo "=== train.py failed (rc=$TRAIN_RC); full train.log follows ===" >&2
+  echo "=== train failed (rc=$TRAIN_RC); full train.log follows ===" >&2
   cat /tmp/train.log >&2
   exit 1
 fi
@@ -386,7 +433,7 @@ if [ -n "$LATEST_CKPT" ] && [ "$LATEST_CKPT" != "$CHECKPOINT_DIR/" ]; then
   cp -af "$LATEST_CKPT"/. "$CHECKPOINT_DIR"/
 fi
 if ! test -f "$CHECKPOINT_DIR/config.json" || ! test -f "$CHECKPOINT_DIR/model.safetensors"; then
-  echo "=== train.py rc=0 但 checkpoint 缺失 (looked under $CHECKPOINT_DIR/) ===" >&2
+  echo "=== train rc=0 但 checkpoint 缺失 (looked under $CHECKPOINT_DIR/) ===" >&2
   cat /tmp/train.log >&2
   exit 1
 fi
@@ -405,21 +452,21 @@ rm -f "$CHECKPOINT_DIR"/optimizer_state_dict.pt \
 echo "$CHECKPOINT_DIR"
 ```
 
-确认训练产物（checkpoint 目录 + `config.json` + `model.safetensors`）：
+确认训练产物与训练真跑完（checkpoint 文件 + 从 train.log 提取 val loss）：
 
 ```shell #test id="pipeline-step3-train" load="checkpoint_path>>checkpoint_path"
 echo <checkpoint_path>
 ls -1 <checkpoint_path>
-cat /tmp/train.log
+grep -oE 'val/loss_epoch=[0-9.]+' /tmp/train.log | head -1
 ```
 
 输出结果如下：
 
-```shell #test-result id="pipeline-step3-train"
+```shell #test-result id="pipeline-step3-train" fuzzy='xxx'
 /root/dflash-trained
 config.json
 model.safetensors
-...
+val/loss_epoch=xxx
 ```
 
 ### `vllm serve` 挂 draft 做推理
@@ -469,9 +516,10 @@ kill "$VLLM_PID" 2>/dev/null || true
 
 输出结果如下：
 
-```shell #test-result id="pipeline-step4-serve" fuzzy='xxx'
+```shell #test-result id="pipeline-step4-serve" fuzzy='xxx' fuzzy='...'
 input: Hello
 content: xxx
+...
 completion_tokens: xxx
 finish_reason: length
 ```

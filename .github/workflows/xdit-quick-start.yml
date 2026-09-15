@@ -1,47 +1,16 @@
 # xDiT quick start guard - project thin trigger.
-#
-# Calls the common engine .github/workflows/quick-start-template.yml;
-# this file only declares what varies per project: schedule,
-# concurrency, runner, container image + options, upstream repo,
-# monitored doc, and the test entry command. The guard loop, cache
-# I/O, state relay and publishing all live in the engine. See the
-# engine's `workflow_call.inputs` block for the full input contract.
-#
-# Cache keys (monitor-state-xdit-*) and artifact names are derived
-# from project=xdit, not from the workflow name.
-#
-# Container options:
-#   * No explicit device mounts: the self-hosted NPU runner
-#     (`linux-aarch64-a2-2`, two 910B4) auto-passes `/dev/davinci*`
-#     into the container via the cluster device-plugin.
-#   * ModelScope hub cache bind-mount: the doc's embedded
-#     `snapshot_download` writes SD3 medium into the default hub
-#     cache (/root/.cache/modelscope). Bind-mounting a host-side
-#     persistent volume (`/data/ci-cache/modelscope/xdit`) there
-#     keeps the ~30 GB pull off every run's wall-clock budget (same
-#     modelscope-cache pattern as lightx2v-quick-start.yml).
+# 2-card runner (linux-aarch64-a2-2); test class exposes both via ASCEND_RT_VISIBLE_DEVICES=0,1.
+# ModelScope hub cache bind-mounted from host to persist ~28 GB SD3 download across runs.
 
 name: xdit-quick-start
 
 concurrency:
-  # format() is load-bearing: a '||' between 'manual-' and
-  # github.run_id would short-circuit on the truthy literal and
-  # every dispatch would share one 'manual-' group.
   group: ${{ github.event_name == 'schedule' && 'xdit-quick-start-schedule' || format('manual-{0}', github.run_id) }}
-  # cancel-in-progress: false because (1) a schedule run cancelled
-  # mid-way loses its outcome writeback - the outcome is what makes
-  # the retry mechanism work, and the 'if: always()' guard isn't
-  # enough when the container is being torn down; (2) dispatch runs
-  # already live in unique groups so there's nothing to cancel.
   cancel-in-progress: false
 
 on:
-  # Schedule temporarily disabled while the 0.6.0 adaptation is being
-  # stabilised (40 consecutive red cycles burned the retry loop).
-  # Re-enable after the first green workflow_dispatch run (same
-  # convention as lightx2v / upstream-doc-monitor).
+  # schedule 已具备绿灯基线，可按节奏恢复
   # schedule:
-  #   # Every 6 hours: 00:00 / 06:00 / 12:00 / 18:00 UTC.
   #   - cron: '0 */6 * * *'
   workflow_dispatch:
 
@@ -52,72 +21,16 @@ jobs:
   xdit-quick-start:
     uses: ./.github/workflows/quick-start-template.yml
     with:
-      # Namespaces cache keys (monitor-state-xdit-*), artifacts
-      # (xdit-quick-start-<run_id>) and the test working dir
-      # (workflows/projects/xdit).
       project: xdit
-      # Self-hosted NPU runner for the test job only; the engine
-      # pins the cache I/O jobs (restore-cache / publish-and-persist)
-      # to GitHub-hosted ubuntu-latest. The doc's smoke is single-card
-      # (PR #566 minimalised SD3 script via `torchrun
-      # --nproc_per_node=1`); the 2-card runner is the existing
-      # allocation and the test class pins card 0 via
-      # ASCEND_RT_VISIBLE_DEVICES=0, leaving the second card idle.
       test_runner: '["linux-aarch64-a2-2"]'
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-      # The doc's embedded `snapshot_download` writes the full SD3
-      # medium repo (~30 GB) into the default modelscope hub cache
-      # (/root/.cache/modelscope). Bind-mounting
-      # /data/ci-cache/modelscope/xdit there persists the pull across
-      # runs. `:z` is load-bearing on this SELinux-enforcing cluster;
-      # see ms-swift / diffusers / xtuner / specforge for the same
-      # option.
       container_options: >-
         --volume=/data/ci-cache/modelscope/xdit:/root/.cache/modelscope:z
-      # Doc body does: torch 2.9.0 + torch_npu 2.9.0.post2 + triton
-      # 3.5.* install (the image ships only CANN 9.1.0, so the whole
-      # torch stack is installed and verified by the doc itself;
-      # triton is needed by xfuser >= 0.6.0's sparge_attention which
-      # imports it unconditionally without declaring it) + `uv pip
-      # install xfuser "modelscope==1.37.0"` (PyPI install, no source
-      # checkout; xfuser 0.6.0 is a pure-Python wheel, flash-attn
-      # only an optional extra) + the install verify block (imports
-      # the full xfuser chain, asserts the NPU dispatch prints
-      # `npu hccl True`) + a minimal single-card SD3 script
-      # (heredoc-written sd3_npu.py, embedded `snapshot_download(
-      # 'stabilityai/stable-diffusion-3-medium-diffusers')` into the
-      # default hub cache, full repo ~30 GB; NPU-native device calls,
-      # T5-XXL preloaded fp16) via `torchrun --nproc_per_node=1`
-      # (1 step, 256x256) + a PNG structural check (magic + size
-      # floor) on results/sd3_npu.png.
-      # 90 min covers cold install + SD3 cold-cache download (~30 GB;
-      # warm after first run via the bind-mount) + T5 load +
-      # single-card inference.
+      # Doc body: torch stack install -> xfuser PyPI -> NPU verify -> single-card SD3
+      # -> PNG check -> 2-card Ulysses SDPA. 90 min covers cold download (~28 GB).
       timeout_minutes: 90
       upstream_repo: xdit-project/xDiT
-      # GitHub Contents API URL (NOT raw.githubusercontent.com):
-      #   * Engine's monitor hashes via `Authorization: Bearer
-      #     $GH_TOKEN` + `Accept: application/vnd.github.raw`, which
-      #     is the Contents API contract for raw markdown. raw URLs
-      #     ignore those headers (different auth surface), so the
-      #     engine would hash an unauthenticated blob and miss doc
-      #     edits. API URL is the only form where the monitor + test-
-      #     side fetches both line up with the same Authorization +
-      #     Accept.
-      #   * `markdown_doc_test_base.py` already special-cases
-      #     `api.github.com` URLs and re-applies the same Accept
-      #     header on the test-side fetch (MONITORED_DOC_URL), so
-      #     the test inherits the same authenticated contract.
-      # `?ref=${{ github.sha }}` pins the doc fetch to whichever
-      # ref fired the run (branch tip on `pull_request`, merge commit
-      # on `push`, default branch tip on `schedule`); without it
-      # dispatch from a non-default branch fetches `main` and branch-
-      # side doc edits can't be tested. Same pattern as xtuner /
-      # specforge / aibrix / colossalai.
+      # Contents API URL with ref pin; same pattern as other projects.
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/xdit/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/xdit/docs/Quick-start-Ascend.md
-      # cwd is workflows/projects/xdit; env contract (MONITORED_DOC_URL /
-      # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
-      # env prep and installs live in the test subclass's
-      # prepare_environment hook.
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
