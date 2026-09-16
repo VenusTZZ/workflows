@@ -90,11 +90,16 @@ setup_peft() {
   #   (pyproject.toml 自 v1.0.0 起 commit ac5421b4 引入，datasets<4 会
   #   ResolutionImpossible)，<6 留出口避开未来 6.x breaking
   # - hub<1.0: hub 1.x 拒绝 imdb 等无命名空间数据集
-  # - trl 1.12.0: trl ≥ 1.12 都默认 chunked_nll，与 peft partial lm_head
-  #   冲突（纯 PyTorch patch，sft_trainer.py:1331 检测到 peft 包了 head
-  #   就 raise；CUDA 同问题，NPU 是首个端到端跑这条路径的环境）。
+  # - trl 1.12.0: trl ≥ 1.12 默认 chunked_nll 走 _patch_chunked_ce_lm_head
+  #   (sft_trainer.py:233)。该 patch 第 383 行 (1.13 在 386) 走
+  #   inspect.signature(original_forward.__func__)，假设 forward 是普通
+  #   method；但 miss/mica 用 device_map="auto" 加载，accelerate
+  #   .add_hook_to_module 把 forward 包成 functools.partial，没 __func__
+  #   → AttributeError（纯 PyTorch + accelerate，硬件无关，CUDA 同问题）。
   #   overlay 在 examples_manifest.yaml 的 miss/mica 例里显式 --loss_type nll
   #   跳过 chunked patch 走标准 cross-entropy。
+  #   注：sft_trainer.py:1331 isinstance(BaseTunerLayer) guard 在这两例不
+  #   会触发（target_modules 不含 lm_head），guard 放过后 patch 内部才崩。
   # - scikit-learn: adamss 的 ASA 回调（peft.tuners.adamss）硬性 import
   #   sklearn；evaluate.load("glue") 的 metric 模块同样要 sklearn.metrics。
   #   coder 验证机里碰巧预装，CANN 裸镜像没有（run 35045940066 实测缺失）。
@@ -152,6 +157,7 @@ TO_ENV = [
 TO_PLANT_MODEL = [
     ("bigscience/mt0-small",  "bigscience/mt0-small"),   # beft_finetuning.py 硬编码
     ("facebook/dinov2-base",  "facebook/dinov2-base"),   # pvera/...py 硬编码
+    ("AI-ModelScope/roberta-base", "roberta-base"),       # adamss_manual: argparse schema 不收 --model_name_or_path，硬编码 from_pretrained('roberta-base')，plant 到 hub cache 命中本地
 ]
 
 # (3) snapshot_download + cp plant (dataset): adamss/no_lora 用 glue mrpc，

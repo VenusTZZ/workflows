@@ -18,7 +18,7 @@ ENV = {
     'GH_TOKEN': 't',
     'GITHUB_REPOSITORY': 'org/workflows',
     'GITHUB_RUN_ID': '123',
-    'EXPECTED_JOB_NAME': 'run-example (examples/sft/run_peft.sh)',
+    'EXPECTED_JOB_NAME': 'run_peft',
     'TRIGGER': 'schedule',
     'TARGET_REPO': 'huggingface/peft',
     'TARGET_REF': 'v0.20.0',
@@ -31,23 +31,19 @@ class JobMatchingTests(unittest.TestCase):
 
     def test_exact_name_matches(self) -> None:
         self.assertTrue(write_example_result.job_matches(
-            'run-example (examples/sft/run_peft.sh)',
-            'run-example (examples/sft/run_peft.sh)'))
+            'run_peft', 'run_peft'))
 
     def test_called_workflow_prefix_matches(self) -> None:
         self.assertTrue(write_example_result.job_matches(
-            'peft-examples / run-example (examples/sft/run_peft.sh)',
-            'run-example (examples/sft/run_peft.sh)'))
+            'peft-examples / run_peft', 'run_peft'))
 
     def test_nested_prefix_matches(self) -> None:
         self.assertTrue(write_example_result.job_matches(
-            'outer / peft-examples / run-example (p.sh)',
-            'run-example (p.sh)'))
+            'outer / peft-examples / run_peft', 'run_peft'))
 
     def test_other_jobs_do_not_match(self) -> None:
         self.assertFalse(write_example_result.job_matches(
-            'peft-examples / publish-result (examples/sft/run_peft.sh)',
-            'run-example (examples/sft/run_peft.sh)'))
+            'peft-examples / publish-result (run_peft)', 'run_peft'))
 
 
 class ConclusionMappingTests(unittest.TestCase):
