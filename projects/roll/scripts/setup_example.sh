@@ -40,18 +40,28 @@ except urllib.error.HTTPError:
   echo "pip index: $PIP_INDEX_URL"
 }
 
+# Vendor CANN/ATB env scripts assume a login shell and reference optional
+# variables (e.g. $ZSH_VERSION) without ${VAR:-} guards. Under this
+# project's `set -u` they die with "unbound variable"; relax strict mode
+# only while sourcing vendor code, then restore it.
+source_vendor_env() {
+  local vendor_file="$1"
+  if [[ ! -f "$vendor_file" ]]; then
+    echo "vendor env script not found, skipping: $vendor_file"
+    return 0
+  fi
+  set +eu
+  # shellcheck disable=SC1090
+  source "$vendor_file"
+  set -eu
+}
+
 # The engine no longer sources CANN for project jobs; bring it into this
 # step and persist the runtime variables that ROLL's system_envs does not
 # cover so the Run step inherits them.
 prepare_ascend_env() {
-  if [[ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]]; then
-    # shellcheck disable=SC1091
-    source /usr/local/Ascend/ascend-toolkit/set_env.sh
-  fi
-  if [[ -f /usr/local/Ascend/nnal/atb/set_env.sh ]]; then
-    # shellcheck disable=SC1091
-    source /usr/local/Ascend/nnal/atb/set_env.sh
-  fi
+  source_vendor_env /usr/local/Ascend/ascend-toolkit/set_env.sh
+  source_vendor_env /usr/local/Ascend/nnal/atb/set_env.sh
   # Canonical ROLL NPU knobs (ascend_npu_env_config.md), tightened to smoke
   # timeouts. VLLM_ASCEND_ENABLE_NZ stays off for vLLM stability.
   export HCCL_NPU_SOCKET_PORT_RANGE="auto"
