@@ -95,11 +95,15 @@ setup_peft() {
   #   就 raise；CUDA 同问题，NPU 是首个端到端跑这条路径的环境）。
   #   overlay 在 examples_manifest.yaml 的 miss/mica 例里显式 --loss_type nll
   #   跳过 chunked patch 走标准 cross-entropy。
+  # - scikit-learn: adamss 的 ASA 回调（peft.tuners.adamss）硬性 import
+  #   sklearn；evaluate.load("glue") 的 metric 模块同样要 sklearn.metrics。
+  #   coder 验证机里碰巧预装，CANN 裸镜像没有（run 35045940066 实测缺失）。
   # PIP_CONSTRAINT keeps CUDA metapackages out.
   echo "installing peft from $TARGET_ROOT"
   python -m pip install -e "$TARGET_ROOT"
   python -m pip install "transformers==4.57.1" "datasets>=4.7.0,<6" \
-    "huggingface_hub<1.0" "trl==1.12.0" evaluate torchvision==0.24.0
+    "huggingface_hub<1.0" "trl==1.12.0" evaluate scikit-learn \
+    torchvision==0.24.0
   python -c "import peft, trl, transformers, datasets, accelerate; print('peft', peft.__version__, '/ trl', trl.__version__, '/ transformers', transformers.__version__)"
 
   # Pre-download the example model from ModelScope (China-reachable)
