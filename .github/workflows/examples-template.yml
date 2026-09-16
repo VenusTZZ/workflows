@@ -116,21 +116,55 @@ jobs:
           fi
 
       # Schedule picks the ref from the release signal; manual runs
-      # always proceed with the given inputs (default upstream main).
+      # resolve an empty target_ref to the latest upstream release
+      # (fallback chain: explicit input -> latest release -> main).
+      # Without this, manual dispatch always tests upstream `main`,
+      # which can pick up in-progress pyproject changes that the
+      # supported manifest was not verified against (see torchtitan
+      # CI run 35062962988: main added attn-gym -> nvidia-cutlass-dsl,
+      # conflicts with constraints-npu.txt).
       - name: Decide target
         id: decide
         env:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_REF: ${{ inputs.target_ref }}
+          UPSTREAM_REPO: ${{ inputs.upstream_repo }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            REF=""
+            REASON=""
+            if [ -n "$INPUT_REF" ]; then
+              REF="$INPUT_REF"
+              REASON="explicit"
+            else
+              # Manual with empty input: query the latest upstream
+              # release tag so the run targets a verified, stable
+              # ref rather than bleeding-edge main. Falls back to
+              # main if the API is unreachable or no release exists.
+              RESP_FILE=$(mktemp)
+              HTTP_CODE=$(curl -sSL --retry 3 -o "$RESP_FILE" -w '%{http_code}' \
+                "https://api.github.com/repos/$UPSTREAM_REPO/releases/latest" || true)
+              TAG=""
+              if [ "$HTTP_CODE" = "200" ]; then
+                TAG=$(jq -r '.tag_name // empty' "$RESP_FILE")
+              fi
+              rm -f "$RESP_FILE"
+              if [ -n "$TAG" ]; then
+                REF="$TAG"
+                REASON="latest-release"
+              else
+                REF="main"
+                REASON="main-fallback"
+                echo "::warning::failed to fetch latest release for $UPSTREAM_REPO (HTTP $HTTP_CODE) - falling back to main"
+              fi
+            fi
             {
               echo "need_to_run=true"
               echo "trigger=workflow_dispatch"
-              echo "target_ref=${INPUT_REF:-main}"
+              echo "target_ref=$REF"
             } >> "$GITHUB_OUTPUT"
-            echo "resolved repo=$UPSTREAM_REPO ref=${INPUT_REF:-main} (manual)"
+            echo "resolved repo=$UPSTREAM_REPO ref=$REF reason=$REASON (manual)"
             exit 0
           fi
           NEED="false"
