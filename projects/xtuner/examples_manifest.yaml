@@ -1,0 +1,88 @@
+version: 1
+scan:
+  root: examples
+  include_extensions: ['.sh', '.py']
+  # xtuner/examples/ 下只有 huggingface_trainer/{train_hf,train_lora_hf,train_qlora_hf}.py
+  # 是直接 launchable 的 Python example。examples/demo_data/ 不是 example，是
+  # 给 `xtuner train` 用的 recipe 模板 + 数据（mmengine config.py + map_fn.py +
+  # data.json 三件套，4 套：single_turn / multi_turn_1 / multi_turn_2 /
+  # pretrain）。整个目录是数据/配方概念，跟 peft 里把
+  # examples/research_projects 整目录排除一个理由——不属于 example 语义层，放
+  # exclude 而不是 unsupported（unsupported 是"扫描到了但有 blocker"）。
+  #
+  # 实跑确认 4 套 demo_data 不 launchable（hdc-stable-npu-2 2026-09-15）:
+  #   ① 裸 `python examples/demo_data/<sub>/config.py` (exit_code=1):
+  #      ImportWarning: can't resolve package from __spec__ or __package__,
+  #        falling back on __name__ and __path__
+  #      from .map_fn import <sub>_map_fn as dataset_map_fn
+  #      ImportError: attempted relative import with no known parent package
+  #     （config.py 头部 `from .map_fn import ...` 是相对导入，
+  #       必须 `xtuner train -C <dir>` 把目录当 package）
+  #   ② `xtuner train examples/demo_data/<sub>/config.py` (exit_code=124, 60s timeout):
+  #      mmengine 成功 load cfg、print 出完整 train_cfg、跑到 build_dataset 阶段
+  #      试图 HEAD `https://huggingface.co/internlm/internlm-7b/resolve/main/config.json`
+  #      → MaxRetryError / ConnectTimeoutError：pod 里访问不了 huggingface.co，
+  #        而 config.py 硬编 `pretrained_model_name_or_path = "internlm/internlm-7b"`，没有
+  #        CLI override 切模型；data_files=`./data.json` 相对路径也不存在。
+  # 综合：demo_data 是 recipe templates，需要用户拷贝后改 model path + data path
+  # + 删 bnb，原始 config 不可端到端跑。端到端 NPU 验证由
+  # projects/xtuner/docs/Quick-start-Ascend.md 覆盖（`xtuner train` + 拷贝
+  # qwen1_5_1_8b_chat_qlora_custom_sft_e1 cfg 后手工删 quantization_config，
+  # 跑 plain LoRA + Qwen1.5-1.8B-Chat）。
+  #
+  # 同目录 map_fn.py（每个 demo 一份 sibling 模块）没有 __main__，本 manifest
+  # 不列；data.json / README.md 不是 .py/.sh，被 include_extensions 自然过滤。
+  exclude:
+    - examples/demo_data                       # 4 套 demo recipe + data（不是 example）
+
+# ===== supported（coder npu-2 910B4×2, torch2.11/torch_npu2.11, CANN9.1 实跑 exit 0） =====
+supported:
+  # HF Trainer 路径：build_model 返回 PreTrainedModel，绕过 SupervisedFinetune 的
+  # `build_llm_from_cfg` 入口；Trainer 直接用 plain CausalLM 走 HF 默认 loss。
+  # 2026-09-15 coder npu-2 实跑：1 step / Qwen2.5-0.5B / 8 行 alpaca jsonl / NPU 1.79s/it
+  # loss=1.78 grad_norm=35.3 exit 0；transfer_to_npu shim 自动让 torch.cuda→torch.npu
+  # （xtuner 自身 utils.device.get_device_name() 也走 npu 分支，与 shim 一致）。
+  - path: examples/huggingface_trainer/train_hf.py
+    profile: xtuner-llm
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path ${LLM_MODEL_PATH}        # DefaultTrainingArguments 必填：注入 setup 预下载的 0.5B
+      - --dataset_name_or_path ${TARGET_ROOT}/fixtures/ci_alpaca_8.jsonl   # xtuner.apis.datasets.alpaca_dataset 默认拉 HF `tatsu-lab/alpaca`：换仓内 8 行 fixture
+      - --output_dir ${CI_OUTPUT_DIR}                  # argparse 必填：脚本会 mkdir
+      - --per_device_train_batch_size 1                # 默认 1：0.5B 模型 32G NPU 上无压力
+      - --max_steps 1                                  # 默认整 epoch：1 步压到 CI 规模
+      - --save_strategy no                             # 默认 epoch：1 步训练无 epoch 边界、HF Trainer 报 checkpoint save 异常
+      - --logging_steps 1                              # 默认 5：保证 1 步内也打日志（验证训练循环活着）
+    timeout_minutes: 30
+
+# ===== unsupported（每条附理由：coder npu-2 2026-09-15 实跑 exit code + 真实 traceback） =====
+unsupported:
+  # 上游 sft.py bug：`build_llm_from_cfg` 在 llm_cfg 不是 dict 时跳过
+  # `llm = self._dispatch_lm_model_cfg(...)` 分支，但下一行无条件引用 `llm`
+  # → UnboundLocalError。train_lora_hf.py 走 build_lora_model → SupervisedFinetune(llm)
+  # 路径必然命中；CUDA 同样炸，非 NPU 专属。
+  # coder npu-2 实跑 (2026-09-15, exit_code=1):
+  #   File "xtuner/model/sft.py", line 143, in build_llm_from_cfg
+  #     llm = self._build_from_cfg_or_module(llm)
+  #                                          ^^^
+  #   UnboundLocalError: cannot access local variable 'llm' where it is not associated with a value
+  # torch_npu ERR99999 跟着 NPU 进程一并挂；非 NPU 后端问题，跟 [[quick-start-doc-pitfalls]] 一样
+  # 是 xtuner v0.2.0 上游代码缺陷，应提 issue。绕过办法：走 train_hf.py HF Trainer 路径（supported）。
+  - examples/huggingface_trainer/train_lora_hf.py
+
+  # 双重 blocker：xtuner.apis.model.build_qlora_model 硬编 BitsAndBytesConfig
+  # （load_in_4bit / bnb_4bit_quant_type=nf4），PyPI aarch64 无 bnb wheel，
+  # bitsandbytes 0.45.0 也未 ship npu 后端；即使 bnb 在了，下游 SupervisedFinetune
+  # 的 UnboundLocalError（见 train_lora_hf.py）也会再次炸。
+  # coder npu-2 实跑 (2026-09-15, exit_code=1):
+  #   File "xtuner/apis/model.py", line 18, in build_qlora_model
+  #     quantization_config = BitsAndBytesConfig(
+  #   File "transformers/utils/quantization_config.py", line 419, in __init__
+  #     self.post_init()
+  #   File "transformers/utils/quantization_config.py", line 477, in post_init
+  #     if self.load_in_4bit and not version.parse(
+  #         importlib.metadata.version("bitsandbytes")) >= ...
+  #   importlib.metadata.PackageNotFoundError: No package metadata was found for bitsandbytes
+  # bnb 在 NPU 上无等价实现，QLoRA 不在 NPU guard 范围；改用 train_hf.py 走 plain LoRA。
+  - examples/huggingface_trainer/train_qlora_hf.py

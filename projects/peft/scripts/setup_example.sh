@@ -83,22 +83,37 @@ prepare_fixtures() {
 
 setup_peft() {
   # peft from the guarded release checkout, plus the verified dependency
-  # line (2026-09-14, coder npu-3 逐例验证结论):
-  #   transformers 4.57.1 + datasets 3.6.0 + hub<1.0 + trl 1.12.0
+  # line (2026-09-15, coder npu-1 端到端验证结论):
+  #   transformers 4.57.1 + datasets>=4.7.0,<6 + hub<1.0 + trl 1.12.0
   # - transformers 4.57.1: 5.x 移除 send_example_telemetry 等旧 API
-  # - datasets 3.6.0 + hub<1.0: hub 1.x 拒绝 imdb 等无命名空间数据集
-  # - trl 1.12.0: 1.13 与 peft 的 partial lm_head 冲突（chunked_nll patch）
+  # - datasets>=4.7.0,<6: trl 1.12+ 在 wheel metadata 声明 datasets>=4.7.0
+  #   (pyproject.toml 自 v1.0.0 起 commit ac5421b4 引入，datasets<4 会
+  #   ResolutionImpossible)，<6 留出口避开未来 6.x breaking
+  # - hub<1.0: hub 1.x 拒绝 imdb 等无命名空间数据集
+  # - trl 1.12.0: trl ≥ 1.12 都默认 chunked_nll，与 peft partial lm_head
+  #   冲突（纯 PyTorch patch，sft_trainer.py:1331 检测到 peft 包了 head
+  #   就 raise；CUDA 同问题，NPU 是首个端到端跑这条路径的环境）。
+  #   overlay 在 examples_manifest.yaml 的 miss/mica 例里显式 --loss_type nll
+  #   跳过 chunked patch 走标准 cross-entropy。
+  # - scikit-learn: adamss 的 ASA 回调（peft.tuners.adamss）硬性 import
+  #   sklearn；evaluate.load("glue") 的 metric 模块同样要 sklearn.metrics。
+  #   coder 验证机里碰巧预装，CANN 裸镜像没有（run 35045940066 实测缺失）。
   # PIP_CONSTRAINT keeps CUDA metapackages out.
   echo "installing peft from $TARGET_ROOT"
   python -m pip install -e "$TARGET_ROOT"
-  python -m pip install "transformers==4.57.1" "datasets==3.6.0" \
-    "huggingface_hub<1.0" "trl==1.12.0" evaluate torchvision==0.24.0
+  python -m pip install "transformers==4.57.1" "datasets>=4.7.0,<6" \
+    "huggingface_hub<1.0" "trl==1.12.0" evaluate scikit-learn \
+    torchvision==0.24.0
   python -c "import peft, trl, transformers, datasets, accelerate; print('peft', peft.__version__, '/ trl', trl.__version__, '/ transformers', transformers.__version__)"
 
   # Pre-download the example model from ModelScope (China-reachable)
   # because runners cannot reach HuggingFace. The local snapshot dir
   # is exported as SFT_MODEL_PATH for overlay_args to reference.
-  python -m pip install modelscope
+  # Pinned to the doc's verified line (1.37.0): the hub code split
+  # started at 1.38 and 1.40.1's "modelscope-hub>=0.4.2" floor is too
+  # loose — 1.40.1 + hub 0.4.2 (mirror-lagged) dies on
+  # DEFAULT_CREDENTIALS_PATH import at modelscope import time.
+  python -m pip install "modelscope==1.37.0"
   python - <<'PY'
 import os
 # Non-TTY CI logs: throttle tqdm refreshes instead of disabling.
@@ -110,6 +125,129 @@ local = snapshot_download("Qwen/Qwen2.5-0.5B", cache_dir=MODEL_CACHE)
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"SFT_MODEL_PATH={local}\n")
 print("SFT_MODEL_PATH=", local)
+PY
+
+  # Runtime model loads are a lottery on these runners: hf-mirror 302s
+  # xet-backed weights (all popular models now) to cas-bridge.xethub.hf.co
+  # whose connectivity from the cluster is intermittent (run 35062862773:
+  # one job pulled roberta-base fine, another timed out 5/5 on the same
+  # file). Plant every hub-id model the examples load into the HF cache
+  # from its ModelScope mirror, under the REAL latest revision so
+  # from_pretrained(<hub id>) resolves fully locally without offline mode.
+  python - <<'PY'
+import os
+os.environ.setdefault("TQDM_MININTERVAL", "15")
+from pathlib import Path
+
+import requests
+from huggingface_hub import try_to_load_from_cache
+from modelscope import snapshot_download
+
+HF_ENDPOINT = os.environ.get("HF_ENDPOINT", "https://huggingface.co")
+MODEL_CACHE = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
+hub_root = Path(os.environ.get("HF_HOME", Path.home() / ".cache/huggingface")) / "hub"
+
+# (modelscope mirror id, huggingface hub id the example passes)
+MODELS = [
+    ("AI-ModelScope/roberta-base", "roberta-base"),            # adamss x2
+    ("AI-ModelScope/bert-base-uncased", "bert-base-uncased"),   # no_lora
+    ("bigscience/mt0-small", "bigscience/mt0-small"),           # beft (hardcoded)
+    ("facebook/dinov2-base", "facebook/dinov2-base"),           # pvera (hardcoded)
+]
+
+for ms_id, hf_id in MODELS:
+    src = Path(snapshot_download(ms_id, cache_dir=MODEL_CACHE))
+    sha = requests.get(f"{HF_ENDPOINT}/api/models/{hf_id}", timeout=60).json()["sha"]
+    repo_dir = hub_root / f"models--{hf_id.replace('/', '--')}"
+    snap_dir = repo_dir / "snapshots" / sha
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    (repo_dir / "refs").mkdir(exist_ok=True)
+    # huggingface_hub compares this string to the snapshot folder name
+    # without stripping; a trailing newline makes the cache miss.
+    (repo_dir / "refs" / "main").write_text(sha)
+    for item in src.rglob("*"):
+        if not item.is_file():
+            continue
+        dest = snap_dir / item.relative_to(src)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists() or dest.is_symlink():
+            continue
+        dest.symlink_to(item.resolve())
+    if not (snap_dir / "config.json").is_file():
+        raise SystemExit(f"{hf_id}: planted snapshot missing config.json")
+    cached = try_to_load_from_cache(hf_id, "config.json")
+    if not cached:
+        raise SystemExit(f"{hf_id}: hub cannot see the planted snapshot")
+    print(f"planted {ms_id} -> {hf_id}@{sha[:8]}")
+PY
+
+  # guanaco (supertuning's default dataset) exists only on HF — no
+  # ModelScope mirror — and its files are xet-backed: the mirror 302s
+  # them to cas-bridge, unreachable from the runners. hdc-only
+  # temporary: seed the hub cache from repo-committed copies so
+  # load_dataset("timdettmers/openassistant-guanaco") resolves fully
+  # locally (9846 train / 518 test, verified end-to-end). COPY, not
+  # symlink — the workspace checkout is per-job, the cache must
+  # outlive it. Pinned to the revision the files were fetched from;
+  # if upstream moves, the cache misses and the run fails loudly
+  # (re-seed then). Revert this block and seed/ once the runner
+  # caches are warm.
+  python - <<'PY'
+import os
+import shutil
+from pathlib import Path
+
+SEED_DIR = Path(os.environ["PROJECT_ROOT"]) / "seed" / "guanaco"
+HF_ID = "timdettmers/openassistant-guanaco"
+# revision the seed files were fetched from (2026-09-16)
+SHA = "831dabac2283d99420cda0b673d7a2a43849f17a"
+SIZES = {
+    "openassistant_best_replies_train.jsonl": 20877686,
+    "openassistant_best_replies_eval.jsonl": 1105272,
+}
+hub_root = Path(os.environ.get("HF_HOME", Path.home() / ".cache/huggingface")) / "hub"
+snap = hub_root / f"datasets--{HF_ID.replace('/', '--')}" / "snapshots" / SHA
+need = [n for n in SIZES if not (snap / n).is_file()]
+if not need:
+    print(f"guanaco cache already seeded @{SHA[:8]}")
+else:
+    snap.mkdir(parents=True, exist_ok=True)
+    refs = snap.parent / "refs"
+    refs.mkdir(exist_ok=True)
+    # no trailing newline: hub compares the string to the snapshot dir name
+    (refs / "main").write_text(SHA)
+    for name in need:
+        shutil.copy2(SEED_DIR / name, snap / name)
+        got = (snap / name).stat().st_size
+        assert got == SIZES[name], f"{name}: expected {SIZES[name]} bytes, got {got}"
+    print(f"seeded {HF_ID}@{SHA[:8]} ({sum(SIZES.values()) / 1e6:.1f}MB)")
+PY
+
+  # Prefetch every dataset / metric the examples load, with the exact
+  # runtime call so the run step is a pure cache hit (small files are
+  # mirror-proxied and reliable; the win is failing here, fast and
+  # clearly, instead of mid-train).
+  python - <<'PY'
+import os
+os.environ.setdefault("TQDM_MININTERVAL", "15")
+from datasets import load_dataset
+
+DATASETS = [
+    (("glue", "mrpc"), {}),   # adamss (overlay), no_lora (hardcoded task)
+    (("glue", "cola"), {}),   # adamss manual (default)
+    (("gtfintechlab/financial_phrasebank_sentences_allagree", "5768"), {}),  # beft
+    (("beans",), {"split": "train"}),   # pvera
+    (("imdb",), {"split": "train[:1%]"}),  # miss / mica
+]
+for args, kwargs in DATASETS:
+    ds = load_dataset(*args, **kwargs)
+    splits = list(ds) if hasattr(ds, "keys") else type(ds).__name__
+    print(f"prefetched {args} {kwargs}: {splits}")
+
+import evaluate
+for task in ("mrpc", "cola"):
+    evaluate.load("glue", task)
+print("prefetched evaluate metric glue (mrpc, cola)")
 PY
 }
 

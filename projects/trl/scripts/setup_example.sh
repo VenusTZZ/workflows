@@ -111,7 +111,10 @@ setup_peft_lora() {
     "TPO_MODEL_PATH=Qwen/Qwen3-0.6B"
 }
 ms_download_models() {
-  python -m pip install -q modelscope
+  # modelscope>=1.38 splits its hub code into modelscope-hub. Pin the last
+  # pre-split release because the runner's pip mirror may only expose a hub
+  # version that is too old for the latest modelscope wheel.
+  python -m pip install -q "modelscope==1.37.0"
   TQDM_MININTERVAL="${TQDM_MININTERVAL:-15}" python - "$@" <<'PY'
 import os, sys
 os.environ.setdefault("TQDM_MININTERVAL", os.environ.get("TQDM_MININTERVAL", "15"))

@@ -1,0 +1,489 @@
+version: 1
+scan:
+  root: torchtitan
+  include_extensions: ['.py', '.sh']
+  # torchtitan 的 "example" 不是目录 + 脚本的形态，而是单个 train.py
+  # 入口 + `--module X --config Y` CLI 参数选模型配置。所以
+  # scan.root 设为仓库根 `torchtitan`，include_extensions 留宽；
+  # exclude 把所有非 example 形态的子树都剪掉（configs / docs /
+  # tests assets / proto / requirements），剩下的 .py 文件是
+  # "可能被作为入口点的脚本"。本清单 supported/unsupported 都按
+  # 「(path, overlay_args)」组合语义记录，不依赖 scan 的扫描结果。
+  exclude:
+    - torchtitan/config                              # 训练 job YAML 配置目录
+    - torchtitan/tools                               # proto / ckpt convert 工具
+    - torchtitan/docs                                # 文档源
+    - torchtitan/protocols                           # 结构化日志协议定义
+    - torchtitan/tests                               # 自测 + tests/assets tokenizer
+    - torchtitan/experiments/rl/rollout              # vLLM rollout (CUDA-only)
+    - torchtitan/experiments/rl/renderer.py          # vLLM renderer (CUDA-only)
+    - torchtitan/experiments/rl/rollout_recorder.py  # vLLM recorder (CUDA-only)
+    - torchtitan/experiments/rl/components           # vLLM comm hooks (CUDA-only)
+    - torchtitan/experiments/rl/actors              # vLLM actors (CUDA-only)
+    - torchtitan/experiments/rl/environment         # env wrappers (gym / cuda)
+    - torchtitan/experiments/rl/losses               # grpo / dapo losses
+    - torchtitan/experiments/rl/models               # rl-specific model heads
+    - torchtitan/experiments/rl/observability        # rl-specific logging
+    - torchtitan/experiments/rl/routing              # rl router (cuda)
+    - torchtitan/experiments/rl/rubrics              # rl rubric scoring
+    - torchtitan/experiments/rl/scripts              # rl shell launchers
+    - torchtitan/experiments/rl/tests               # rl tests
+    - torchtitan/experiments/rl/types.py            # rl types
+    - torchtitan/experiments/rl/controller.py       # rl controller
+    - torchtitan/experiments/rl/controller_metrics.py  # rl controller metrics
+    - torchtitan/experiments/rl/batch_invariance.py  # rl batch invariance test
+    - '**/__init__.py'
+    - '**/README.md'
+    - '**/test_*'
+    - '**/*config*.yaml'
+    - '**/*config*.json'
+    - '**/requirements*.txt'
+
+supported:
+  # 4 条支持 example，全部走 setup 写入的 .sh launcher（exec 字段）。
+  # path 字段统一填 `torchtitan/train.py`（上游真实文件，manifest-check
+  # 用它做 (target_root/path).exists() 校验）；exec 是真正的可执行
+  # launcher（setup 写入 target/scripts/），它内部 exec torchrun
+  # -m torchtitan.train "$@" —— overlay_args 透传给 torchtitan.train。
+  # v0.3.0 上游 (release tag) 在本栈的兼容性状态：
+  # - 单卡 1-card debugmodel / debugmodel_ce_loss / sft_debugmodel：
+  #   Quick-start 文档验证过；CI 第 34087315070 号 run green
+  #   跑过 1-card（run-example/llama3_debugmodel_1card）+ 2-card。
+  # - 多卡 2-card debugmodel：Quick-start 验证过。
+  # debugmodel: dim=256 / 6 层 / 16 head / vocab 2048 (~6 M 参数)，
+  # 30 GB HBM 完全够装，FSDP shard=2 切分后单卡仅 ~24 GB 占用。
+  # 模型/数据全在仓库内（debugmodel 用 torchtitan/tests/assets/
+  # tokenizer + random data），不依赖外网。
+  #
+  # 2026-09-15 端到端实跑证据（hdc-stable-npu-4 实测，CANN 9.1.0 +
+  # torch 2.12.0+cpu + torch_npu 2.12.0 + triton-ascend 3.5.0+dev20260701
+  # + torchtitan v0.3.0 checkout + 7 个 sed 补丁）：
+  # - llama3_debugmodel 1-card: 2 步完成，loss 8.05→7.78，内存 0.22 GiB
+  # - llama3_debugmodel_ce_loss 1-card: 2 步完成，loss 8.23→7.97
+  # - sft_debugmodel 1-card: 2 步完成，loss 8.08→7.67，ChatDataLoader 正常
+  # - llama3_debugmodel 2-card (full_dtensor + dp_shard=2 + bf16): 2 步完成，
+  #   global batch size=2 生效，loss 16.06→15.48（reduce-by-dp_shard）。
+  # 实测命令记录在 /tmp/torchtitan-verify/ 与 setup_example.sh 内嵌注释里。
+
+  # 1) 单卡基线：默认 backend / 默认 dtype / 默认 spmd 后端。
+  # --comm.mode default 让 c10d 走真 HCCL（1-rank self-barrier）。
+  # --parallelism.spmd-backend 留空（默认 spmd_types 在 dp_shard=1
+  # 时 torchtitan 跳过该路径，不会触发 "torch >=2.13 注解翻译" 分支）。
+  # 测试目的：smoke 验证 patch 1-7 后 torchtitan 在 NPU 单卡能完整
+  # 跑 2 步（init + forward + backward + optimizer step）。
+  - path: torchtitan/train.py
+    profile: torchtitan
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: scripts/run_llama3_debugmodel_1card.sh
+    overlay_args:
+      - --module llama3
+      - --config llama3_debugmodel
+      - --comm.mode default
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/llama3_debugmodel_1card
+    timeout_minutes: 20
+
+  # 2) 单卡 + CE loss 配置变体：llama3_debugmodel_ce_loss 是上游
+  # registry 内置的 CE 损失等价配置，与 patch 4 替换的
+  # CrossEntropyLoss 完全同源；保留它作为独立 supported 是为了
+  # 在每次 upgrade 时验证 patch 4 与上游 CE 配置仍对齐（漂移信号）。
+  # 测试目的：smoke 验证 patch 4 改的代码路径在 v0.3.0 release 与
+  # HEAD 之间未漂移。
+  - path: torchtitan/train.py
+    profile: torchtitan
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: scripts/run_llama3_debugmodel_ce_loss_1card.sh
+    overlay_args:
+      - --module llama3
+      - --config llama3_debugmodel_ce_loss
+      - --comm.mode default
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/llama3_debugmodel_ce_loss_1card
+    timeout_minutes: 20
+
+  # 3) 双卡：FSDP shard=2 + full_dtensor 后端 + bf16。
+  # --parallelism.spmd-backend full_dtensor 是 patch 4 的多卡等价
+  # 命令（Quick-start §"限制四"：默认 spmd_types 后端需 torch >=2.13
+  # 的 FSDP dp_mesh_dims 翻译，2.12 上 multi-card 必触发 ValueError）。
+  # --training.dtype bfloat16 是混合精度 smoke；不强校验数值，仅
+  # 验证 DTensor forward + HCCL all-reduce + bf16 cast 整条链路不
+  # 触发 NPU 算子缺口。
+  # ASCEND_RT_VISIBLE_DEVICES 由 runner 注入（双卡 runner 暴露 0,1）。
+  - path: torchtitan/train.py
+    profile: torchtitan
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: scripts/run_llama3_debugmodel_2card.sh
+    overlay_args:
+      - --module llama3
+      - --config llama3_debugmodel
+      - --comm.mode default
+      - --parallelism.spmd-backend full_dtensor
+      - --training.dtype bfloat16
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/llama3_debugmodel_2card
+    timeout_minutes: 25
+
+  # 4) SFT example 1-card：--module llama3 --config sft_debugmodel。
+  # sft_debugmodel 是 torchtitan/models/llama3/config_registry.py:349
+  # 注册的 SFT 配置（不是独立 module），训练走 torchtitan/train.py
+  # 同一入口。复用 patch 1-5 + launcher，smoke 验证 SFT 数据通路。
+  # patch 6+7 是为了让 sft 在 NPU 上跑通而新增：
+  #   patch 6 — 删 _create_flex_attention_mask 里的
+  #     separate_full_blocks=...（torch 2.13 才有的 kwarg）；
+  #   patch 7 — 把 sft_debugmodel 写死的 attn_backend="flex" 改为
+  #     "sdpa"（flex_attention 在 torch_npu._inductor 里 import
+  #     `from triton.compiler.compiler import triton_key`，但
+  #     community triton 3.5.0 不暴露这个 API，导致 compile 失败）。
+  #     切到 sdpa 后 SFT 走 causal mask，丢文档边界 mask，但
+  #     ChatDataLoader / CrossEntropyLoss / Trainer 这些 SFT pipeline
+  #     节点仍被覆盖，smoke 仍有效。
+  - path: torchtitan/train.py
+    profile: torchtitan
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: scripts/run_sft_debugmodel_1card.sh
+    overlay_args:
+      - --module llama3
+      - --config sft_debugmodel
+      - --comm.mode default
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/sft_debugmodel_1card
+    timeout_minutes: 20
+
+unsupported:
+  # ===== 规模：8B / 70B / 405B 在本栈 OOM / 拒绝启动 =====
+  # 2026-09-15 实测证据（单卡 ASCEND_RT_VISIBLE_DEVICES=0，
+  # 32 GB × 1 卡，patches 1-7 已应用）：
+  #   - llama3_8b            rc=1
+  #       torch.OutOfMemoryError: NPU out of memory. Tried to allocate
+  #       1.96 GiB (NPU 0; 29.49 GiB total capacity; 27.96 GiB already
+  #       allocated)  — FSDP init 把 8B 参数 + AdamW state 全部加载到
+  #       单卡 HBM，超出 29.49 GiB 物理上限。
+  #   - llama3_70b           rc=1
+  #       AssertionError at torchtitan/distributed/parallel_dims.py:184
+  #       `assert dp_shard >= 1` — 70B 的 parallelism 配置要求
+  #       TP/PP 多维切分，world_size=1 直接拒绝启动。
+  #   - llama3_405b          rc=1
+  #       Float8Linear swap 失败（405B 配置内嵌 float8 layer），叠加
+  #       float8 only-on-NVIDIA 限制 — rc 与 float8 一致；即使切回
+  #       bf16 也直接 OOM（405B bf16 单卡 ~810 GB）。
+  #   - llama3_8b_first_85_pct_layers_nvfp4 / llama3_8b_mxfp8
+  #       rc=1 — ImportError: torchao NVFP4/MXFP8 prototype 缺失
+  #       （NPU 端 torchao 未 ship 这两个 prototype 模块）。
+  # 退役条件：双卡 64 GB / 4 卡 128 GB / CPU offload DTensor dispatch
+  # 修复任一达成；或 torchao 发布 NPU NVFP4/MXFP8 prototype wheel。
+  - torchtitan/models/llama3/config_registry.py:llama3_8b
+  - torchtitan/models/llama3/config_registry.py:llama3_8b_first_85_pct_layers_nvfp4
+  - torchtitan/models/llama3/config_registry.py:llama3_8b_mxfp8
+  - torchtitan/models/llama3/config_registry.py:llama3_70b
+  - torchtitan/models/llama3/config_registry.py:llama3_405b
+
+  # ===== 量化：float8 / NVFP4 在 NPU / torchao 不可用 =====
+  # 实测证据（2026-09-15）：
+  #   - llama3_debugmodel_float8 / _float8_emulate_lora / _nvfp4 /
+  #     _first_85_pct_layers_nvfp4
+  #       rc=1；具体错误：
+  #       * float8: ValueError: Failed to swap to Float8Linear because
+  #         float8 is only supported on NVIDIA SM89 or later, or AMD
+  #         gfx942 (MI300) or later. To enable testing on older
+  #         hardware, set `float8.emulate` to True in eager mode.
+  #         （torchao.float8 走 CUDA-only 算子，NPU 无 backend）
+  #       * nvfp4: ImportError: torchao is not installed or does not
+  #         provide the NVFP4 training prototype. Install a torchao
+  #         build with torchao.prototype.moe_training.nvfp4_training.
+  #         （torchao.prototype.moe_training.nvfp4_training 在本栈
+  #         torchao 0.15.0 里没 ship，NPU 端也没有替代路径）
+  #   - 同样逻辑适用 llama3_debugmodel_first_85_pct_layers_nvfp4
+  # 退役条件：torch_npu 发布 torchao.prototype.{mxfp8,nvfp4,float8}
+  # 任一 NPU 适配。
+  - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_float8
+  - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_float8_emulate_lora
+  - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_nvfp4
+  - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_first_85_pct_layers_nvfp4
+
+  # ===== Variants 受限于上游 torch 2.13+ 依赖 =====
+  # 实测证据（2026-09-15）：
+  #   - llama3_debugmodel_dist_gemm
+  #       rc=0（**单卡通过**：TP=1 时 tp_gemm_backend=dist_gemm 是
+  #       no-op，trainer.log 打 "tp_gemm_backend='dist_gemm' selected
+  #       but tensor parallelism is not active; running the stock
+  #       projections. Nothing is fused."）。
+  #       仍留 unsupported：TP≥2 的 dist_gemm 真路径走
+  #       torch.distributed._symmetric_memory（torch 2.13+ API）做
+  #       cross-process param shard；torch 2.12 无此模块。验证 TP≥2
+  #       需要 2-card runner 切到 TP=2 + dist_gemm，与 2-card debugmodel
+  #       smoke 不重叠。
+  #   - llama3_debugmodel_varlen_attn
+  #       rc=1（exitcode 1 但 root cause 在 trainer init 阶段被裁切，
+  #       rc=2 间接信号）—— 需要 varlen 包路径 + 模型端
+  #       inner_attention=VarlenAttention 走通；与上面一样涉及
+  #       torch 2.13+ 路径，未做端到端验证。
+  #   - llama3_debugmodel_flex
+  #       rc=1；ValueError: Config function 'llama3_debugmodel_flex'
+  #       not found in torchtitan.models.llama3.config_registry.
+  #       （v0.3.0 上游根本没注册这个函数；manifest 该条 stale，
+  #       不应再被引擎命中；保留以免上游再加回同名 entry。）
+  # 退役条件：torch 2.13 ABI 适配 / 上游不复活 flex debug entry。
+  - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_dist_gemm
+  - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_varlen_attn
+  - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_flex
+
+  # ===== qwen3 族：分三类失败（triton_key / OOM / 文件缺失） =====
+  # 实测证据（2026-09-15）：
+  #
+  # (A) triton_key compile 失败 —— 默认 attn_backend="flex"
+  #     （torchtitan/models/qwen3/__init__.py:615）走 torch.compile
+  #     → torch_npu._inductor.codegen.common:24
+  #     `from triton.compiler.compiler import triton_key`，但
+  #     community triton 3.5.0 wheel 没暴露这个 API。
+  #     影响条目：qwen3_debugmodel, qwen3_debugmodel_moe_param_groups,
+  #     qwen3_debugmodel_non_fused_qkv, qwen3_moe_debug
+  #
+  # (B) Float backend of FlexAttention 仅 Hopper/Blackwell
+  #     （config_utils.py 里写死的硬编码 ValueError）——
+  #     qwen3_debugmodel_flex_flash
+  #
+  # (C) 模型本身超 32 GB HBM：
+  #     - qwen3_14b  rc=1 OOM 142 MiB / 28.74 GiB 已分配
+  #     - qwen3_30b_a3b rc=1 OOM 770 MiB / 28.28 GiB 已分配
+  #     - qwen3_32b    rc=1 OOM 502 MiB / 28.68 GiB 已分配
+  #     - sft_qwen3_8b_math rc=1 OOM 2.32 GiB / 28.20 GiB 已分配
+  #       （与 llama3_8b 同款 CPU offload 活锁 + 单卡 OOM 困境）
+  #
+  # (D) 依赖外部资源：
+  #     - qwen3_moe_deepep rc=1
+  #         ImportError: DeepEP v2 (>= 2.0.0, ElasticBuffer) is required
+  #         （DeepEP 不在 NPU 兼容列表，未安装）
+  #     - qwen3_0_6b / qwen3_1_7b rc=1
+  #         FileNotFoundError: Tokenizer path
+  #         './assets/hf/Qwen3-0.6B' does not exist
+  #         （非 debug 尺寸要求本地 Qwen3 tokenizer 资产，本栈未下载）
+  #
+  # (E) 量化条目 NVFP4 ImportError（同 llama3 量化的 B 类）：
+  #     - qwen3_debugmodel_nvfp4
+  #     - qwen3_debugmodel_first_85_pct_layers_nvfp4
+  #     - qwen3_8b_first_85_pct_layers_nvfp4
+  #
+  # 退役条件：(A) triton-ascend 暴露 triton_key 或 qwen3 patch 1+2
+  # 默认 sdpa；(B) NPU 适配 Flash-3；(C) 双卡/四卡 runner 上线；
+  # (D) 资产预下载；(E) torchao NVFP4 prototype。
+  - torchtitan/models/qwen3/config_registry.py:qwen3_debugmodel
+  - torchtitan/models/qwen3/config_registry.py:qwen3_debugmodel_flex_flash
+  - torchtitan/models/qwen3/config_registry.py:qwen3_debugmodel_nvfp4
+  - torchtitan/models/qwen3/config_registry.py:qwen3_debugmodel_first_85_pct_layers_nvfp4
+  - torchtitan/models/qwen3/config_registry.py:qwen3_debugmodel_moe_param_groups
+  - torchtitan/models/qwen3/config_registry.py:qwen3_debugmodel_non_fused_qkv
+  - torchtitan/models/qwen3/config_registry.py:qwen3_moe_debug
+  - torchtitan/models/qwen3/config_registry.py:qwen3_moe_deepep
+  - torchtitan/models/qwen3/config_registry.py:qwen3_0_6b
+  - torchtitan/models/qwen3/config_registry.py:qwen3_1_7b
+  - torchtitan/models/qwen3/config_registry.py:qwen3_8b_first_85_pct_layers_nvfp4
+  - torchtitan/models/qwen3/config_registry.py:qwen3_14b
+  - torchtitan/models/qwen3/config_registry.py:qwen3_30b_a3b
+  - torchtitan/models/qwen3/config_registry.py:qwen3_32b
+  - torchtitan/models/qwen3/config_registry.py:sft_qwen3_8b_math
+
+  # ===== qwen3_5 族：模块根本未挂到 train.py 的 config_registry 调度链 =====
+  # 实测证据（2026-09-15）：9 个 entry 全部 rc=1，错误一致：
+  #   ImportError: Cannot import config_registry for module 'qwen3_5'
+  #   from torchtitan.models, torchtitan.experiments, or
+  #   torchtitan.experiments.rl.examples
+  # 即 torchtitan/models/qwen3_5/ 目录存在（config_registry.py 在）
+  # 但没被 torchtitan/train.py 的 MODULES 列表注册；调用
+  # `--module qwen3_5` 直接走 dispatcher 拒绝路径。这与 RoPE /
+  # RMSNorm / FFN kernel 的 NPU 兼容性无关——manifest 上一版说的
+  # "kernel 未验证" 假设不成立：是 dispatcher wiring 缺失。
+  # 影响条目（9 个）：
+  #   qwen35_debugmodel, _varlen_attn, _moe, _0_8b, _2b, _4b,
+  #   _9b, _27b, _35b_a3b
+  # 退役条件：上游把 qwen3_5 加入 train.py MODULES，或在
+  # torchtitan/models/qwen3_5/__init__.py 暴露 model_registry 入口。
+  - torchtitan/models/qwen3_5/config_registry.py:qwen35_debugmodel
+  - torchtitan/models/qwen3_5/config_registry.py:qwen35_debugmodel_varlen_attn
+  - torchtitan/models/qwen3_5/config_registry.py:qwen35_debugmodel_moe
+  - torchtitan/models/qwen3_5/config_registry.py:qwen35_0_8b
+  - torchtitan/models/qwen3_5/config_registry.py:qwen35_2b
+  - torchtitan/models/qwen3_5/config_registry.py:qwen35_4b
+  - torchtitan/models/qwen3_5/config_registry.py:qwen35_9b
+  - torchtitan/models/qwen3_5/config_registry.py:qwen35_27b
+  - torchtitan/models/qwen3_5/config_registry.py:qwen35_35b_a3b
+
+  # ===== gpt_oss 族：debugmodel 是 triton_key / 量化编译错；>=20B OOM =====
+  # 实测证据（2026-09-15）：
+  #   - gpt_oss_debugmodel / _flex rc=1（rc=2 间接信号，root cause 在
+  #     compile 阶段被裁切）；flex_attention 走 triton_key 失败
+  #     （同 qwen3 A 类）。
+  #   - gpt_oss_20b rc=1 OOM 1014 MiB / 28.79 GiB 已分配
+  #   - gpt_oss_120b rc=1 OOM 7.91 GiB / 26.20 GiB 已分配
+  # 退役条件：triton-ascend 暴露 triton_key；>=20B 需要 64 GB+ HBM。
+  - torchtitan/models/gpt_oss/config_registry.py:gpt_oss_debugmodel
+  - torchtitan/models/gpt_oss/config_registry.py:gpt_oss_debugmodel_flex
+  - torchtitan/models/gpt_oss/config_registry.py:gpt_oss_20b
+  - torchtitan/models/gpt_oss/config_registry.py:gpt_oss_120b
+
+  # ===== deepseek_v3 族：MoE + MTP + EP dispatcher =====
+  # 实测证据（2026-09-15）：
+  #   - deepseek_v3_debugmodel / _mtp / _16b / _671b rc=1（rc=2 间接
+  #     信号，root cause 在 triton_key compile 阶段被裁切）。
+  #   - deepseek_v3_debugmodel_mxfp8 / _671b_float8 rc=1
+  #       ImportError MXFP8 / ValueError float8 only-NVIDIA-SM89
+  #   - deepseek_v3_debugmodel_hybridep / _16b_hybridep rc=1
+  #       ImportError: cannot import name 'CustomClassBase' from
+  #       'torch._library.opaque_object' （DeepEP/HybridEP 用 torch 2.13+
+  #       opaque_object API；2.12 已迁到别处，import 即 fail）
+  #   - deepseek_v3_debugmodel_minimal_async_ep / _16b_minimal_async_ep
+  #       rc=1 ValueError: MinimalAsyncEPTokenDispatcher.Config
+  #       requires expert parallelism (expert_parallel_degree > 1)
+  #       （配置要求 EP>1，单卡 world_size=1 拒绝）
+  # 退役条件：DeepEP NPU 适配；expert_parallel>=2 在多卡 runner；
+  # CustomClassBase 路径回退；torchao MXFP8/float8 NPU 适配。
+  - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_debugmodel
+  - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_debugmodel_mtp
+  - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_debugmodel_mxfp8
+  - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_debugmodel_hybridep
+  - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_debugmodel_minimal_async_ep
+  - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_16b
+  - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_16b_hybridep
+  - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_16b_minimal_async_ep
+  - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_671b
+  - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_671b_float8
+
+  # ===== kimi 族：模块未挂到 train.py 的 config_registry 调度链 =====
+  # 实测证据（2026-09-15）：3 个 entry 全部 rc=1，错误一致：
+  #   ImportError: Cannot import config_registry for module 'kimi_k2_7'
+  #   from torchtitan.models, torchtitan.experiments, or
+  #   torchtitan.experiments.rl.examples
+  # 同 qwen3_5：torchtitan/models/kimi_k2_7/ 目录存在但 dispatcher
+  # 没注册。注释里 "kimi_k2_5 有 vision encoder" 是真假设——但实际
+  # 连普通 LLM 路径都跑不通。
+  # 影响条目：kimi_k2_5_debugmodel, kimi_vl_a3b, kimi_k2_5
+  # 退役条件：上游把 kimi_k2_7 加入 train.py MODULES。
+  - torchtitan/models/kimi_k2_7/config_registry.py:kimi_k2_5_debugmodel
+  - torchtitan/models/kimi_k2_7/config_registry.py:kimi_vl_a3b
+  - torchtitan/models/kimi_k2_7/config_registry.py:kimi_k2_5
+
+  # ===== flux 族：HF 网络阻断 + OOM + MXFP8 缺 =====
+  # 实测证据（2026-09-15）：
+  #   - flux_debugmodel rc=124（timeout）
+  #       卡在 huggingface.co/google/t5-v1_1-xxl/resolve/main/
+  #       tokenizer_config.json 下载重试上：'(MaxRetryError
+  #       ("HTTPSConnectionPool(host='huggingface.co', port=443):
+  #       Max retries exceeded with url: ... (Caused by
+  #       ConnectTimeoutError)"))' 反复抛。China runner 拉不动 HF。
+  #       不是 NPU 问题——是网络问题。先用镜像或预下载资产。
+  #   - flux_dev / flux_schnell rc=1 OOM 254 MiB / 28.40 GiB 已分配
+  #       （full-size DiT 体积即便 dev 也要 12+ GB / step）
+  #   - flux_schnell_mxfp8 / flux_dev_mxfp8 rc=1
+  #       ImportError: torchao is not installed. Please install it to
+  #       use MXFP8 linear layers.
+  # 退役条件：HF 镜像或预下载资产；>=flux_dev/schnell 多卡 HBM；
+  # torchao MXFP8 NPU 适配。
+  - torchtitan/models/flux/config_registry.py:flux_debugmodel
+  - torchtitan/models/flux/config_registry.py:flux_dev
+  - torchtitan/models/flux/config_registry.py:flux_schnell
+  - torchtitan/models/flux/config_registry.py:flux_schnell_mxfp8
+  - torchtitan/models/flux/config_registry.py:flux_dev_mxfp8
+
+  # ===== muse_glimmer 族：缺 torchvision + OOM =====
+  # 实测证据（2026-09-15）：
+  #   - muse_glimmer_debugmodel / _flex rc=1（rc=2 间接信号，root
+  #     cause 在 triton_key compile 阶段被裁切）。
+  #   - muse_glimmer_debugmodel_mm / _30b_mm rc=1
+  #       ModuleNotFoundError: No module named 'torchvision'
+  #       （multimodal 路径要 torchvision 处理图像）
+  #   - muse_glimmer_30b rc=1 OOM 508 MiB / 28.81 GiB 已分配
+  # 退役条件：triton-ascend 暴露 triton_key；vision 路径加 torchvision
+  # 依赖；>=30b 多卡 HBM。
+  - torchtitan/models/muse_glimmer/config_registry.py:muse_glimmer_debugmodel
+  - torchtitan/models/muse_glimmer/config_registry.py:muse_glimmer_debugmodel_mm
+  - torchtitan/models/muse_glimmer/config_registry.py:muse_glimmer_30b
+  - torchtitan/models/muse_glimmer/config_registry.py:muse_glimmer_30b_mm
+
+  # ===== RL 系列：依赖未安装的第三方 =====
+  # 实测证据（2026-09-15）：
+  #   - rl/train.py rc=1
+  #       ModuleNotFoundError: No module named 'monarch'
+  #       （line 35: from monarch.actor import default_bootstrap_cmd,
+  #       HostMesh, ProcMesh, this_host）
+  #   - rl/generate.py rc=1
+  #       ModuleNotFoundError: No module named 'vllm'
+  #       （line 27: from vllm import EngineArgs, LLMEngine,
+  #       SamplingParams）
+  # 注释里说的 "vllm-ascend ABI 对齐 torch 2.10" 是在 vLLM 真装上后
+  # 才相关；当前栈连 vllm + monarch 都没装，import 阶段就 fail。
+  # 退役条件：monarch + vllm-ascend（torch 2.12 ABI）安装到位。
+  - torchtitan/experiments/rl/train.py
+  - torchtitan/experiments/rl/generate.py
+
+  # ===== Forge / graph_trainer / torchft / transformers_modeling_backend =====
+  # 实测证据（2026-09-15）：
+  #   - forge/example_train.py rc=1
+  #       ImportError: attempted relative import with no known parent
+  #       package
+  #       （line 28: from .engine import ForgeEngine；该文件以 `python
+  #       torchtitan/experiments/forge/example_train.py` 跑时缺 parent
+  #       package context。即使改 `python -m torchtitan.experiments.
+  #       forge.example_train` 也未必解决——ForgeEngine 内部还要
+  #       torch.compile + cudagraph pool，跟之前的预期一致。）
+  #   - graph_trainer/precompile_main.py rc=1（用 --module llama3
+  #       --config llama3_debugmodel 重跑）
+  #       AttributeError: 'CompileConfig' object has no attribute 'mode'
+  #       （line 338: mode = config.compile.mode；graph_trainer 用的
+  #       CompileConfig 与主 trainer 的不一样，attribute 漂移；这是
+  #       上游 graph_trainer 实验性代码与主线 trainer 的 API 漂移，
+  #       不是 NPU 专属问题。）
+  #   - torchft/llama3_torchft_debugmodel
+  #       rc=0 但**没真跑**：实验目录里没有 CLI 入口。`python -m
+  #       torchtitan.experiments.torchft.trainer` 只 import 模块、
+  #       定义类、退出 0。trainer.py 是类定义，没有 main()/没有
+  #       if __name__，没有 argparse；唯一调用点是 tests/integration_
+  #       tests.py。需要给 torchft 包写一个 CLI wrapper 才能跑 smoke。
+  #   - transformers_modeling_backend/transformers_modeling_backend_*
+  #       rc=1（6 个 entry 全部相同模式）
+  #       '(MaxRetryError("HTTPSConnectionPool(host='huggingface.co',
+  #       port=443): Max retries exceeded with url: /Qwen/Qwen3-.../
+  #       resolve/main/config.json ...)")'
+  #       China runner 直接拉不动 HF。debugmodel 拉 Qwen3-4B-Instruct
+  #       -2507，moe 拉 Qwen3-30B-A3B，sft 拉 Qwen3-0.6B / 4B。
+  #       注释里说的 "HF AutoModel.from_pretrained 在本栈未验证"
+  #       是更下游的问题——前置条件（HF 连通）都还不满足。
+  # 退役条件：
+  #   forge    — torch_npu + cudagraph NPU 等价物 + ForgeEngine 解析
+  #   graph    — graph_trainer 与主线 CompileConfig 字段对齐 + aclgraph
+  #   torchft  — 给 trainer.py 加 CLI wrapper
+  #   tmb      — HF 镜像 / 预下载 Qwen 资产 + HF AutoModel NPU 端到端验证
+  - torchtitan/experiments/forge/example_train.py
+  - torchtitan/experiments/graph_trainer/precompile_main.py
+  - torchtitan/experiments/torchft/llama3/config_registry.py:llama3_torchft_debugmodel
+  - torchtitan/experiments/transformers_modeling_backend/config_registry.py:transformers_modeling_backend_debugmodel
+  - torchtitan/experiments/transformers_modeling_backend/config_registry.py:transformers_modeling_backend_debugmodel_moe
+  - torchtitan/experiments/transformers_modeling_backend/config_registry.py:transformers_modeling_backend_full_moe
+  - torchtitan/experiments/transformers_modeling_backend/config_registry.py:transformers_modeling_backend_full
+  - torchtitan/experiments/transformers_modeling_backend/config_registry.py:transformers_modeling_backend_sft_full
+  - torchtitan/experiments/transformers_modeling_backend/config_registry.py:transformers_modeling_backend_sft_debugmodel
+
+  # ===== SFT 大模型配置 =====
+  # sft_qwen3_8b_math (qwen3 registry 内置 SFT 配置) 已在 qwen3 段
+  # 列入（OOM 2.32 GiB / 28.20 GiB 已分配，与 llama3_8b 同困境）。
+  # 保留注释提醒：当前唯一的 SFT smoke 入口是
+  # supported 段的 #4（sft_debugmodel 1-card）。
+  # 退役条件：8B offload 路径修复后。

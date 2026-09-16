@@ -30,10 +30,6 @@ jobs:
       container_options: ''
       timeout_minutes: 120
       upstream_repo: tensorflow/tensorflow
-      # TF Adapter 9.1.0 supports the legacy TensorFlow 1.15 line, not
-      # TensorFlow's latest 2.x release. Keep result metadata honest by
-      # resolving and recording this exact upstream tag.
-      fixed_ref: v1.15.0
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/tensorflow/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/tensorflow/docs/Quick-start-Ascend.md
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

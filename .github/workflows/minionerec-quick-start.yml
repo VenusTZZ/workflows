@@ -54,7 +54,6 @@ jobs:
         --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
       timeout_minutes: 120
       upstream_repo: AkaliKong/MiniOneRec
-      fixed_ref: main
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/minionerec/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/minionerec/docs/Quick-start-Ascend.md
       test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

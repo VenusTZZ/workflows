@@ -18,16 +18,14 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # Bring-up phase: keep the schedule disabled until a few manual
-  # rounds are green (same policy as trl-examples.yml). Re-enable:
-  # schedule:
-  #   - cron: '30 */6 * * *'
+  schedule:
+    - cron: '30 */6 * * *'
   workflow_dispatch:
     inputs:
       target_ref:
-        description: Branch, tag, or SHA to test (defaults to main)
+        description: Branch, tag, or SHA to test (empty = latest upstream release; falls back to main on API failure)
         required: false
-        default: main
+        default: ''
         type: string
 
 # Engine jobs query the GitHub Job API (validate-results); called

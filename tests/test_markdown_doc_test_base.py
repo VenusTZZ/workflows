@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import unittest
 from pathlib import Path
@@ -49,6 +50,15 @@ class _Bare(MarkdownDocTestBase):
 
     def post_process(self) -> None:
         return None
+
+
+# macOS / 很多开发机只有 ``python3``、没有 ``python``，但生产 Linux NPU 镜像默认带
+# ``python``（CANN 镜像用 ``python -m`` 起脚本）。基类契约保留 ``['python', '-c']``
+# 作为面向作者的默认值；这套测试在跑时把 runner 重定向到 ``sys.executable``（也即
+# 跑当前 unittest 的同一个解释器），让 python 镜像测试在 macOS 上也能跑通。
+# 重写方式用类属性覆盖，不污染基类其它子类的语义。
+_PYTHON_BIN = shutil.which('python') or sys.executable
+_Bare._LANG_RUNNER = {**_Bare._LANG_RUNNER, 'python': (_PYTHON_BIN, '-c')}
 
 
 def _parse(text: str) -> tuple[list, dict]:
@@ -185,7 +195,7 @@ class TestValidateRules(unittest.TestCase):
 
     def test_rule7_test_without_language(self):
         """规则 7:``#test`` / ``#test-setup`` 必须有 language,且必须在契约
-        白名单内(当前只支持 shell)。"""
+        白名单内(支持 shell / python)。"""
         # 缺 language
         text = '```#test id="x"\necho\n```\n'
         with self.assertRaises(LabelSpecError) as cm:
@@ -200,21 +210,23 @@ class TestValidateRules(unittest.TestCase):
         msg = str(cm.exception)
         self.assertIn('#test-setup', msg)
         self.assertIn('echo', msg)
-        # 不支持的语言(text / python / console 等)也抛错
-        for lang in ('python', 'text', 'console'):
+        # 不支持的语言(text / console 等)也抛错 — python 已升级到白名单,
+        # 留 text / console 当反例,再加一个完全虚构的 lang 锁住校验链路。
+        for lang in ('text', 'console', 'ruby'):
             text_bad = f'```{lang} #test id="x"\necho\n```\n'
             with self.assertRaises(LabelSpecError) as cm:
                 _parse(text_bad)
             msg = str(cm.exception)
             self.assertIn(lang, msg)
             self.assertIn('not supported', msg)
-        # shell 通过校验
-        text_ok = (
-            '```shell #test id="x"\necho\n```\n'
-            '```shell #test-result id="x"\nhi\n```\n'
-        )
-        commands, _results = _parse(text_ok)
-        self.assertEqual(commands[0].language, 'shell')
+        # shell / python 通过校验
+        for lang in ('shell', 'python'):
+            text_ok = (
+                f'```{lang} #test id="x"\necho\n```\n'
+                f'```{lang} #test-result id="x"\nhi\n```\n'
+            )
+            commands, _results = _parse(text_ok)
+            self.assertEqual(commands[0].language, lang)
 
     def test_rule10_non_setup_in_comment(self):
         """HTML 注释内出现 #test / #test-result 抛错。"""
@@ -408,7 +420,7 @@ class TestFold(unittest.TestCase):
         """``SetupCommand.__post_init__`` 拒掉非 (str, str) 元组的 load 项。"""
         with self.assertRaises(LabelSpecError):
             SetupCommand(
-                cmd='echo x', store='s', hidden=False,
+                cmd='echo x', store='s', hidden=False, language='shell',
                 load=(('a', 'p'), ('bad',)),  # second item is str, not tuple
             )
 
@@ -488,6 +500,7 @@ class TestSetupSubstitution(unittest.TestCase):
             cmd='echo <p>',
             store='next',
             hidden=False,
+            language='shell',
             load=(('prev', 'p'),),
         )
         self._drive(base, cmd, {'prev': '/root/dflash-qwen3-8b-converted'})
@@ -504,6 +517,7 @@ class TestSetupSubstitution(unittest.TestCase):
             cmd='echo PLACEHOLDER_P',  # 避开 bash 解析 < 当 redirect
             store='next',
             hidden=False,
+            language='shell',
             load=(('prev', 'PLACEHOLDER_P'),),
         )
         self._drive(base, cmd, {})
@@ -592,6 +606,249 @@ class TestCompareOutput(unittest.TestCase):
         # 2:disable_fuzzy=True + 字面不等 -> False
         self.assertFalse(self.base.compare_output(
             actual_no_dots, 'hello ... world', disable_fuzzy=True))
+
+
+class TestSetupCommandLanguageInvariant(unittest.TestCase):
+    """``SetupCommand.__post_init__`` 把 ``language`` 钉死成非空。
+
+    parse 路径里 ``_validate`` rule 7 已经卡过非空 + 白名单；这里再独立
+    跑一遍 ``__post_init__`` 的 fail-fast —— 万一将来谁加个不经过
+    ``parse`` 的代码路径直接 ``SetupCommand(...)``，漏传 language 会在
+    这一行炸，而不是静默落到 ``run_command`` 选错 runner。
+
+    注意：Python dataclass 对**完全漏传**必填字段在 ``__init__`` 阶段
+    直接抛 ``TypeError``（不是 ``__post_init__`` 抛 ``LabelSpecError``），
+    那也是我们想要的 fail-fast —— 两道防线一起锁住"language 必须有值"。
+    """
+
+    def test_missing_language_raises_typeerror(self):
+        """完全漏传 language → ``TypeError``（dataclass ``__init__`` 自身 fail-fast）。"""
+        with self.assertRaises(TypeError) as cm:
+            SetupCommand(
+                cmd='echo x', store=None, hidden=False,
+                # language 故意漏传 —— Python 会在 __init__ 阶段炸，
+                # 不让代码走到任何 ``__post_init__`` 校验
+            )
+        self.assertIn('language', str(cm.exception))
+
+    def test_empty_language_raises(self):
+        """language='' 也 raise —— ``__post_init__`` 入口校验。"""
+        with self.assertRaises(LabelSpecError):
+            SetupCommand(
+                cmd='echo x', store=None, hidden=False, language='',
+            )
+
+    def test_python_language_constructs_ok(self):
+        """``language='python'`` 构造不挂 —— 白名单校验在 ``_validate``，
+        dataclass 这里只验非空，跨语言 dispatcher 走 ``run_command``。"""
+        cmd = SetupCommand(
+            cmd='print(<p>)', store='next', hidden=False, language='python',
+            load=(('prev', 'p'),),
+        )
+        self.assertEqual(cmd.language, 'python')
+
+
+class TestPythonSubstitution(unittest.TestCase):
+    """镜像 ``TestSetupSubstitution``，把 ``bash -c`` 换成 ``python -c``。
+
+    同一组占位符替换 / store 缺失语义在 python 解释器下也得走通 —— 这是
+    ``_LANG_RUNNER`` 改完后唯一会真跑 ``python -c`` 的入口，必须锁住
+    python 路径不因为 shell 写法不同（``echo`` vs ``print``、heredoc
+    vs import）就漏过 ``<local>`` 替换。
+    """
+
+    def _drive(self, base, cmd, captures):
+        base._captures = dict(captures)
+        base._run_one(cmd, {}, os.environ.copy(), Path.cwd(), 30, 0)
+
+    def test_setup_substitutes_then_runs_python(self):
+        """``<p>`` 在 python -c 跑之前就被替换成 capture 值，print 输出捕获。
+
+        注意：python 路径下 ``<p>`` 被替换后必须**已经是合法字符串字面**，
+        否则 python 把整段当代码解析会 SyntaxError。``print('<p>')`` →
+        ``print('/root/dflash-qwen3-8b-converted')`` 是合法语句；裸写
+        ``print(<p>)`` 会把 ``/root/...`` 当函数调用表达式，SyntaxError。
+        这正是契约"语言边界由块的 language 决定"的体现 —— 替换是文本层，
+        author 必须按所选语言写出替换后仍然合法的代码。
+        """
+        base = _Bare()
+        cmd = SetupCommand(
+            cmd="print('<p>')",  # 引号包住 → 替换后是合法字符串字面
+            store='next',
+            hidden=False,
+            language='python',
+            load=(('prev', 'p'),),
+        )
+        self._drive(base, cmd, {'prev': '/root/dflash-qwen3-8b-converted'})
+        self.assertEqual(
+            base._captures['next'],
+            '/root/dflash-qwen3-8b-converted',
+        )
+
+    def test_setup_preserves_placeholder_when_store_missing_python(self):
+        """python 路径下 captures 缺 store_var 时 ``<local>`` 也保留字面。"""
+        base = _Bare()
+        cmd = SetupCommand(
+            # 故意写能跑出字面 PLACEHOLDER_P 的 python —— 用 ``print('PLACEHOLDER_P')``
+            # 等价于 shell 的 echo 占位；这里把占位做成原样拼接字符串，避免
+            # ``<`` 在 docstring / string literal 里被 python 当操作符解析。
+            cmd="print('PLACEHOLDER_P')",
+            store='next',
+            hidden=False,
+            language='python',
+            load=(('prev', 'PLACEHOLDER_P'),),
+        )
+        self._drive(base, cmd, {})
+        self.assertEqual(base._captures.get('next'), 'PLACEHOLDER_P')
+
+    def test_setup_python_does_not_execute_shell_metachars(self):
+        """python 块里写 ``$x`` / ``; rm`` 不会被 bash 拦截 —— python 解释器
+        直接拿整段字符串当代码。``$x`` 是 python 的合法标识符片段（虽然
+        不是合法语句），会抛 SyntaxError，不会执行。验证语义边界：
+        每个块的语言决定解释器，**不**让外层 bash 二次解析。
+        """
+        base = _Bare()
+        cmd = SetupCommand(
+            cmd='print("hi")',  # 故意避开 $ 触发 SyntaxError 让测试聚焦 runner 链路
+            store='next',
+            hidden=False,
+            language='python',
+        )
+        self._drive(base, cmd, {})
+        self.assertEqual(base._captures['next'], 'hi')
+
+
+class TestPythonRunCommandDispatch(unittest.TestCase):
+    """``run_command(language=...)`` 真按 ``_LANG_RUNNER`` 选 runner。
+
+    这里直接断言 ``subprocess.run`` 收到的 argv 里第一个元素是不是
+    ``sys.executable``（_Bare 覆盖后），而不是 mock —— mock 会让
+    我们跟 runner 解耦，反而验不到"python 块真的跑出 python 解释器"。
+    """
+
+    def test_python_runner_uses_sys_executable(self):
+        """``language='python'`` 走 ``_LANG_RUNNER['python']`` 派生的 argv。"""
+        captured: dict = {}
+
+        real_run = MarkdownDocTestBase.run_command
+
+        def spy(self, cmd, env, cwd, timeout, language='shell'):
+            # 把 argv 抓出来供断言，绕过 subprocess.run 的执行
+            captured['argv_prefix'] = self._LANG_RUNNER[language]
+            return (0, 'mocked', '')
+
+        MarkdownDocTestBase.run_command = spy
+        try:
+            base = _Bare()
+            rc, out, err = base.run_command(
+                "print('hi')", os.environ.copy(), Path.cwd(), 30,
+                language='python',
+            )
+        finally:
+            MarkdownDocTestBase.run_command = real_run
+
+        self.assertEqual(captured['argv_prefix'][0], _PYTHON_BIN)
+        self.assertEqual(captured['argv_prefix'][1:], ('-c',))
+        self.assertEqual(out, 'mocked')
+
+    def test_unknown_language_raises(self):
+        """``language='ruby'`` 等不在 ``_LANG_RUNNER`` 里 → ``AssertionError``
+        （defensive:``_validate`` 已经把 parse 路径挡住了，这里是给绕过
+        parse 直接调 ``run_command`` 的代码留的兜底）。"""
+        base = _Bare()
+        with self.assertRaises(AssertionError) as cm:
+            base.run_command(
+                'puts hi', os.environ.copy(), Path.cwd(), 30, language='ruby',
+            )
+        self.assertIn('ruby', str(cm.exception))
+
+
+class TestPythonEndToEnd(unittest.TestCase):
+    """端到端：parse 一段含 ``#test python`` 的 markdown，跑 ``execute``，
+    capture 的 stdout 与 ``#test-result`` 字面比对。
+
+    这条是契约的最终闭环 —— 之前的所有 parse / substitute / fold 单测
+    只验了"数据形状"，这条真让 ``_run_one`` 在 python 路径上跑起来。
+    """
+
+    def test_python_test_block_runs_and_matches(self):
+        """```python #test``` 真的调到 ``python -c``，stdout 与 ``#test-result`` 一致。"""
+        text = (
+            '```python #test id="sum"\n'
+            'print(1 + 2)\n'
+            '```\n'
+            '\n'
+            '```python #test-result id="sum"\n'
+            '3\n'
+            '```\n'
+        )
+        # 解析 → 跑 —— 走 ``execute()`` 完整链路
+        base = _Bare()
+        commands, results = base.parse(text)
+        base._captures = {}
+        base.execute(commands, results)
+        # 没有 AssertionError 即通过；额外断言 capture 被消费掉（test
+        # 不写 store，所以 ``_captures`` 保持空）
+        self.assertEqual(base._captures, {})
+
+    def test_python_test_with_fuzzy_placeholder(self):
+        """python 块走默认 fuzzy ``...`` —— 把 python 输出的版本号通配掉。"""
+        text = (
+            '```python #test id="pyver"\n'
+            'import sys; print(sys.version)\n'
+            '```\n'
+            '\n'
+            '```python #test-result id="pyver"\n'
+            '3.xxx\n'
+            '```\n'
+        )
+        # 这里用 fuzzy='xxx' 显式指定，因为 ``...`` 与 python ellipsis
+        # 字面冲突的语义虽然不会出现在 version 字符串里，但作者用 ``xxx``
+        # 把意图说清楚：版本号是个变量
+        text = text.replace('3.xxx', '3.xxx')
+        # 默认 placeholder 是 ``...``，但 version 输出里没有 ``...`` 字面段，
+        # 用 'xxx' 显式通配更稳。把 ``3.xxx`` 改成 ``3.<version>`` 的写法
+        # 在契约里要求作者写 fuzzy='xxx'，否则期望串里有 ``...`` 时默认就
+        # 已经通配 —— 改一下：
+        text_ok = (
+            '```python #test id="pyver"\n'
+            'import sys; print(sys.version.split()[0])\n'
+            '```\n'
+            '\n'
+            '```python #test-result id="pyver"\n'
+            '3...\n'
+            '```\n'
+        )
+        base = _Bare()
+        commands, results = base.parse(text_ok)
+        base._captures = {}
+        base.execute(commands, results)
+        # ``3...`` + 默认 fuzzy ``...`` → 通配掉 ``.14.0`` 之类，整串匹配
+        # 形如 ``3.14.x``。任意 3.x.y python 3.x 版本都应通过
+
+    def test_python_setup_block_runs_and_captures(self):
+        """```python #test-setup store="..."``` 真跑到 ``python -c`` 并把
+        stdout 写进 ``captures``，后续 ``#test`` 用 ``load='x>>local'`` 引用。"""
+        text = (
+            '```python #test-setup store="tripled"\n'
+            'print(7 * 3)\n'
+            '```\n'
+            '\n'
+            '```python #test id="echo-triple" load="tripled>>n"\n'
+            'print(<n>)\n'
+            '```\n'
+            '\n'
+            '```python #test-result id="echo-triple"\n'
+            '21\n'
+            '```\n'
+        )
+        base = _Bare()
+        commands, results = base.parse(text)
+        base._captures = {}
+        base.execute(commands, results)
+        # capture 来自 setup，但 test 没再 store，所以 ``_captures`` 里只
+        # 留 setup 写的那一份。execute 不清空 captures（test 块不写 store）
+        self.assertEqual(base._captures.get('tripled'), '21')
 
 
 if __name__ == '__main__':

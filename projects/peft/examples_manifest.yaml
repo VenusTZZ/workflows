@@ -43,8 +43,6 @@ supported:
       - --max_steps 1                   # 默认整 epoch：1 步压到 CI 规模
       - --logging_steps 1               # 默认 5：确保 1 步内也有日志
       - --dataset_num_proc 1            # 避免 datasets 多进程在 CI 容器的不稳定
-      - --eval_strategy no              # 默认 epoch：跳过评估省时
-      - --save_strategy no              # 默认 epoch：不落 checkpoint
       - --report_to none                # 关闭 wandb 等外部上报（未装会报错）
       - --output_dir ${CI_OUTPUT_DIR}   # 默认仓内相对路径：输出必须进 CI 输出目录
     timeout_minutes: 90
@@ -63,8 +61,8 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --base_model_name_or_path ${SFT_MODEL_PATH}   # HfArgumentParser 必填：注入 setup 预下载的 0.5B
-      - --dataset_field text label   # 默认 None 会崩（example 自身缺陷）：imdb 的输入/输出列名
-      - --loss_type nll   # trl 1.12 默认 chunked_nll：与 peft 预包装模型的 partial lm_head 冲突（coder 实测）
+      - --dataset_field text label   # upstream bug：ScriptArguments(SFTConfig) dataclass 默认 None，但 miss_finetuning.py:89 直接 dataset_field[0]/[1] 取下标，CUDA 也一样 TypeError（纯 Python 逻辑与硬件无关）。text=imdb 评论, label=0/1 情感
+      - --loss_type nll   # 绕开 trl 1.12+ 默认 chunked_nll：trl sft_trainer.py:1331 用 isinstance(output_embeddings, BaseTunerLayer) 检测到 peft 包了 lm_head 直接 raise ValueError（纯 PyTorch patch，CUDA 同问题，NPU 是首跑通这条路径的环境）；nll 走标准 cross-entropy 跳过整个 chunked patch 路径，与 peft partial head 共存
     timeout_minutes: 30
 
   # MiCA：同上配方（Qwen2.5-0.5B + imdb 1% + nll）
@@ -114,22 +112,22 @@ supported:
       - --num_epochs 1   # 默认 100：压到单 epoch
     timeout_minutes: 45
 
-  # Supertuning：Qwen2.5-0.5B + guanaco 完整 1 epoch（308 步 exit 0）
+  # Supertuning：Qwen2.5-0.5B + guanaco 真实全量（9846 样本 ÷ batch2×grad_accum16
+  # = 308 优化步，coder 实测 ~13 分钟）。数据经 setup 从仓内 seed 预热 hub 缓存
+  # （见 setup_example.sh guanaco seed 块——hdc 临时，缓存热后回退）。
   - path: examples/supertuning_finetuning/supertuning_finetuning.py
     profile: peft
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --base_model ${SFT_MODEL_PATH}   # 默认 meta-llama/Llama-3.2-1B（gated + 大）：换 0.5B
-      - --batch_size 2   # 默认 1：guanaco 全 epoch 308 步，batch 2 控制时长（coder 实测 ~13 分钟）
+      - --batch_size 2   # 默认 1：控时长
     timeout_minutes: 45
 
 # ===== unsupported（每条附理由：coder npu-3 2026-09-14 逐例验证 / 静态分析） =====
 unsupported:
   # Mixtral-8x7B（MoE ~47B）超出 2×32G；且 7B 系已见 FA 内核问题
   - examples/KappaTune/experiments_kappatune_peft.py
-  - examples/adamss_finetuning/glue_adamss_asa_example.py
-  - examples/adamss_finetuning/glue_adamss_asa_manual_example.py
   # vit-base + StanfordCars：训练 63%+ 无错误但全量 ~84 分钟超 CI 预算，候选
   - examples/adamss_finetuning/image_classification_adamss_asa.py
   # Mistral-7B：7B 家族代表 dora 实测 FA 内核崩，同架构预期同因
@@ -138,7 +136,6 @@ unsupported:
   - examples/arrow_multitask/arrow_phi3_mini.py
   # HTTP 客户端，需先部署 BDLoRA 路由服务
   - examples/bdlora_finetuning/chat.py
-  - examples/beft_finetuning/beft_finetuning.py
   # 需预训练 ControlNet 权重 + SD 推理，未验证
   - examples/boft_controlnet/eval.py
   # 同上
@@ -231,8 +228,6 @@ unsupported:
   - examples/lora_ga_finetuning/lora_ga_finetuning.py
   # Llama-3-8B：单卡 32G 紧张（8B 家族实测 HBM 溢出）
   - examples/lorafa_finetune/lorafa_finetuning.py
-  - examples/mica_finetuning/mica_finetuning.py
-  - examples/miss_finetuning/miss_finetuning.py
   # 训练循环已验证（roberta+mrpc），5 epoch 全量未跑完，候选
   - examples/monteclora_finetuning/sequence_classification_finetune_monteclora.py
   # SD dreambooth + bitsandbytes
@@ -247,14 +242,12 @@ unsupported:
   - examples/pissa_finetuning/pissa_finetuning.py
   # 版本敏感：trl 1.10 可跑（exit 0）、1.12 backward 崩，与 mica/miss 配方冲突
   - examples/psoft_finetuning/psoft_finetuning.py
-  - examples/pvera/confidence_interval_generation.py
   # GPTQ（exllama CUDA kernel）
   - examples/qalora_finetuning/qalora_gptq_finetuning.py
   # llama-7b：家族代表 dora 实测 flash-attention 内核崩（aclnn 错误 207001），单卡 32G
   - examples/randlora_finetuning/randlora_finetuning.py
   # llama-7b：家族代表 dora 实测 flash-attention 内核崩（aclnn 错误 207001），单卡 32G
   - examples/road_finetuning/road_finetuning.py
-  - examples/sequence_classification/peft_no_lora_accelerate.py
   # Llama-2-70b：超出单机卡容量
   - examples/sft/run_peft_deepspeed.sh
   # Llama-2-70b：超出单机卡容量
@@ -279,7 +272,6 @@ unsupported:
   - examples/stable_diffusion/inc_flux_lora_hpu.py
   # SD dreambooth + bitsandbytes
   - examples/stable_diffusion/train_dreambooth.py
-  - examples/supertuning_finetuning/supertuning_finetuning.py
   # NPU 硬阻塞（coder 实测）：backward NPU 内核错误（nll 绕过 trl patch 后仍崩）
   - examples/unilora_finetuning/unilora_finetuning.py
   # 同 glora（已验证可训，无法压规模）
