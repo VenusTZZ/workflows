@@ -1,0 +1,89 @@
+# CI 专用 Agentic-Rollout smoke：Sokoban 单环境多轮交互，1 NPU vLLM-Ascend，无训练/backward。
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+
+exp_name: roll-ci-agentic-rollout
+seed: 42
+logging_dir: ${CI_OUTPUT_DIR}/logs
+output_dir: ${CI_OUTPUT_DIR}/output
+render_save_dir: ~
+system_envs:
+  USE_MODELSCOPE: "1"
+  MODEL_DOWNLOAD_TYPE: MODELSCOPE
+
+checkpoint_config:
+  type: file_system
+  output_dir: ${CI_OUTPUT_DIR}/ckpt
+
+num_gpus_per_node: 1
+max_steps: 1
+save_steps: 10
+logging_steps: 1
+
+track_with: stdout
+
+rollout_batch_size: 1
+sequence_length: 256
+
+pretrain: ${oc.env:ROLL_MODEL_PATH}
+
+actor_infer:
+  model_args:
+    disable_gradient_checkpointing: true
+    dtype: bf16
+  generating_args:
+    max_new_tokens: 32
+    top_p: 0.99
+    top_k: 100
+    num_beams: 1
+    temperature: 0.99
+    num_return_sequences: 1
+  data_args:
+    template: qwen2_5
+  strategy_args:
+    strategy_name: vllm
+    strategy_config:
+      gpu_memory_utilization: 0.8
+      block_size: 16
+      load_format: auto
+      max_model_len: 256
+      enforce_eager: true
+  device_mapping: [0]
+
+train_env_manager:
+  format_penalty: -0.15
+  max_env_num_per_worker: 1
+  num_env_groups: 1
+  group_size: 1
+  tags: [SimpleSokoban]
+  num_groups_partition: [1]
+
+max_tokens_per_step: 32
+max_actions_per_traj: 2
+
+custom_envs:
+  SimpleSokoban:
+    env_type: sokoban
+    max_steps: ${max_actions_per_traj}
+    max_tokens_per_step: ${max_tokens_per_step}
+    env_manager_cls: roll.pipeline.agentic.env_manager.traj_env_manager.TrajEnvManager
+    agent_runner_cls: null
+    use_thread_lock: true
+    agent_system_template: "You are a helpful assistant. You are a good game player. You are aiming to get high reward in the game."
+    agent_template: |
+      Turn {turn_idx}:
+      Observation:
+      {observation}
+      Strictly follow this format:
+      1. output format is '<answer> [your answer] </answer>' with no extra text.
+      2. You have {actions_left} actions left.
+      3. Max response length: {max_response_length} words (tokens).
+      Decide the next action:
+    env_config:
+      action_pattern: <answer>(.*?)</answer>
+      max_steps: ${max_actions_per_traj}
+      format_penalty: -0.15
+      dim_room: [6, 6]
+      num_boxes: 1

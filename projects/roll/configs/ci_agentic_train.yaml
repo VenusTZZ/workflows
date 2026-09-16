@@ -1,0 +1,152 @@
+# CI 专用 Agentic train smoke：Sokoban + Qwen2.5-0.5B，2 NPU（FSDP2 训练 / vLLM 推断分置）。
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+
+exp_name: roll-ci-agentic-train
+seed: 42
+logging_dir: ${CI_OUTPUT_DIR}/logs
+output_dir: ${CI_OUTPUT_DIR}/output
+system_envs:
+  USE_MODELSCOPE: "1"
+  MODEL_DOWNLOAD_TYPE: MODELSCOPE
+
+checkpoint_config:
+  type: file_system
+  output_dir: ${CI_OUTPUT_DIR}/ckpt
+
+num_gpus_per_node: 2
+max_steps: 1
+save_steps: 10
+logging_steps: 1
+eval_steps: -1
+resume_from_checkpoint: false
+
+track_with: stdout
+
+rollout_batch_size: 2
+val_batch_size: 2
+sequence_length: 256
+
+advantage_clip: 0.2
+ppo_epochs: 1
+adv_estimator: grpo
+init_kl_coef: 0.0
+whiten_advantages: true
+entropy_loss_coef: 0
+max_grad_norm: 1.0
+
+pretrain: ${oc.env:ROLL_MODEL_PATH}
+reward_pretrain: ${oc.env:ROLL_MODEL_PATH}
+
+actor_train:
+  model_args:
+    attn_implementation: fa2
+    disable_gradient_checkpointing: false
+    dtype: bf16
+    model_type: ~
+  training_args:
+    learning_rate: 1.0e-6
+    weight_decay: 0
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 1
+    warmup_steps: 0
+    lr_scheduler_type: constant
+  data_args:
+    template: qwen2_5
+  strategy_args:
+    strategy_name: fsdp2_train
+    strategy_config:
+      fsdp_size: 1
+      param_dtype: bf16
+      reduce_dtype: bf16
+      reshard_after_forward: true
+      offload_policy: false
+  device_mapping: [0]
+  infer_batch_size: 1
+
+actor_infer:
+  model_args:
+    disable_gradient_checkpointing: true
+    dtype: bf16
+  generating_args:
+    max_new_tokens: 32
+    top_p: 0.99
+    top_k: 100
+    num_beams: 1
+    temperature: 0.99
+    num_return_sequences: 1
+  data_args:
+    template: qwen2_5
+  strategy_args:
+    strategy_name: vllm
+    strategy_config:
+      gpu_memory_utilization: 0.8
+      block_size: 16
+      load_format: auto
+      max_model_len: 256
+      enforce_eager: true
+  device_mapping: [1]
+
+reference:
+  model_args:
+    attn_implementation: fa2
+    disable_gradient_checkpointing: true
+    dtype: bf16
+    model_type: ~
+  data_args:
+    template: qwen2_5
+  strategy_args:
+    strategy_name: hf_infer
+    strategy_config: ~
+  device_mapping: [0]
+  infer_batch_size: 1
+
+reward_normalization:
+  grouping: traj_group_id
+  norm_mean_type: group
+  norm_std_type: group
+
+train_env_manager:
+  format_penalty: -0.15
+  max_env_num_per_worker: 2
+  num_env_groups: 1
+  group_size: 2
+  tags: [SimpleSokoban]
+  num_groups_partition: [1]
+
+val_env_manager:
+  max_env_num_per_worker: 1
+  num_env_groups: 1
+  group_size: 1
+  tags: [SimpleSokoban]
+  num_groups_partition: [1]
+
+max_tokens_per_step: 32
+max_actions_per_traj: 2
+
+custom_envs:
+  SimpleSokoban:
+    env_type: sokoban
+    max_steps: ${max_actions_per_traj}
+    max_tokens_per_step: ${max_tokens_per_step}
+    env_manager_cls: roll.pipeline.agentic.env_manager.traj_env_manager.TrajEnvManager
+    agent_runner_cls: null
+    use_thread_lock: true
+    agent_system_template: "You are a helpful assistant. You are a good game player. You are aiming to get high reward in the game."
+    agent_template: |
+      Turn {turn_idx}:
+      Observation:
+      {observation}
+      Strictly follow this format:
+      1. output format is '<answer> [your answer] </answer>' with no extra text.
+      2. You have {actions_left} actions left.
+      3. Max response length: {max_response_length} words (tokens).
+      Decide the next action:
+    env_config:
+      action_pattern: <answer>(.*?)</answer>
+      max_steps: ${max_actions_per_traj}
+      format_penalty: -0.15
+      dim_room: [6, 6]
+      num_boxes: 1
