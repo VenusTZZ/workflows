@@ -6,15 +6,15 @@ hydra:
 
 exp_name: roll-ci-agentic-train
 seed: 42
-logging_dir: ${CI_OUTPUT_DIR}/logs
-output_dir: ${CI_OUTPUT_DIR}/output
+logging_dir: ${oc.env:CI_OUTPUT_DIR}/logs
+output_dir: ${oc.env:CI_OUTPUT_DIR}/output
 system_envs:
   USE_MODELSCOPE: "1"
   MODEL_DOWNLOAD_TYPE: MODELSCOPE
 
 checkpoint_config:
   type: file_system
-  output_dir: ${CI_OUTPUT_DIR}/ckpt
+  output_dir: ${oc.env:CI_OUTPUT_DIR}/ckpt
 
 num_gpus_per_node: 2
 max_steps: 1

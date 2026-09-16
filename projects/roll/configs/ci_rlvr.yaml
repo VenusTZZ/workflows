@@ -7,15 +7,15 @@ hydra:
 pg_variant: ppo
 exp_name: roll-ci-rlvr
 seed: 42
-logging_dir: ${CI_OUTPUT_DIR}/logs
-output_dir: ${CI_OUTPUT_DIR}/output
+logging_dir: ${oc.env:CI_OUTPUT_DIR}/logs
+output_dir: ${oc.env:CI_OUTPUT_DIR}/output
 system_envs:
   USE_MODELSCOPE: "1"
   MODEL_DOWNLOAD_TYPE: MODELSCOPE
 
 checkpoint_config:
   type: file_system
-  output_dir: ${CI_OUTPUT_DIR}/ckpt
+  output_dir: ${oc.env:CI_OUTPUT_DIR}/ckpt
 
 track_with: stdout
 
@@ -75,7 +75,7 @@ actor_train:
       - ci_math_8.jsonl
     domain_interleave_probs:
       math_rule: 1
-    dataset_dir: ${FIXTURE_DIR}
+    dataset_dir: ${oc.env:FIXTURE_DIR}
     messages: messages
     interleave_probs: "1.0"
     preprocessing_num_workers: 1

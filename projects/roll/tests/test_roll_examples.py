@@ -123,6 +123,8 @@ class RollProjectTests(unittest.TestCase):
         for name in ('ci_agentic_train', 'ci_agentic_rollout', 'ci_rlvr'):
             path = PROJECT / 'configs' / f'{name}.yaml'
             text = path.read_text(encoding='utf-8')
+            self.assertNotIn('${CI_OUTPUT_DIR}', text, name)
+            self.assertNotIn('${FIXTURE_DIR}', text, name)
             cfg = yaml.safe_load(text)
             self.assertEqual(cfg['max_steps'], 1, name)
             lowered = text.lower()
@@ -130,6 +132,7 @@ class RollProjectTests(unittest.TestCase):
                 self.assertNotIn(token, lowered, (name, token))
             self.assertIn('vllm', lowered, name)
             self.assertIn('ROLL_MODEL_PATH', text, name)
+            self.assertIn('${oc.env:CI_OUTPUT_DIR}', text, name)
 
         train = yaml.safe_load(
             (PROJECT / 'configs/ci_agentic_train.yaml').read_text(
