@@ -301,7 +301,15 @@ write_launchers() {
 # 1-rank self-barriers, no actual cross-card traffic. Patches 1-5 from
 # projects/torchtitan/docs/Quick-start-Ascend.md §"兼容性补丁" are
 # applied by setup_example.sh; this launcher only injects torchrun.
+# TORCH_NPU_DEVICE_CAPABILITY=9.0 makes torch_npu's shim
+# `torch.cuda.get_device_capability` return (9, 0) for every device
+# (including the freshly-built rng_state tensor in DTensor's
+# OffsetBasedRNGTracker whose `.device` attribute is unset at this
+# point). Without the env var, c10d's `broadcast` path computes
+# `torch.cuda.get_device_capability(tensor.device)[0] >= 9`, hits
+# `None[0]`, and aborts the very first `init_weights` step.
 set -euo pipefail
+export TORCH_NPU_DEVICE_CAPABILITY=9.0
 cd "${TARGET_ROOT:?TARGET_ROOT is required}"
 exec torchrun --nproc_per_node=1 \
     --rdzv_backend c10d \
@@ -318,7 +326,10 @@ LAUNCHER
 # (Quick-start §"限制四": default spmd_types backend needs torch >=2.13)
 # and --training.dtype bfloat16 to verify mixed precision on HCCL
 # all-reduce. Patches 1-5 applied by setup_example.sh.
+# TORCH_NPU_DEVICE_CAPABILITY=9.0 — see 1-card launcher for the
+# DTensor / c10d broadcast reasoning.
 set -euo pipefail
+export TORCH_NPU_DEVICE_CAPABILITY=9.0
 cd "${TARGET_ROOT:?TARGET_ROOT is required}"
 exec torchrun --nproc_per_node=2 \
     --rdzv_backend c10d \
@@ -337,7 +348,10 @@ LAUNCHER
 # --config llama3_debugmodel_ce_loss which is the same CrossEntropyLoss
 # wiring the patch sets up for llama3_debugmodel. Keeping a separate
 # launcher so the manifest path documents the config switch.
+# TORCH_NPU_DEVICE_CAPABILITY=9.0 — see 1-card launcher for the
+# DTensor / c10d broadcast reasoning.
 set -euo pipefail
+export TORCH_NPU_DEVICE_CAPABILITY=9.0
 cd "${TARGET_ROOT:?TARGET_ROOT is required}"
 exec torchrun --nproc_per_node=1 \
     --rdzv_backend c10d \
@@ -355,7 +369,10 @@ LAUNCHER
 # -m torchtitan.train with --module llama3 --config sft_debugmodel.
 # Patches 1-5 cover it identically to llama3_debugmodel because
 # both use the llama3 model + CE loss.
+# TORCH_NPU_DEVICE_CAPABILITY=9.0 — see 1-card launcher for the
+# DTensor / c10d broadcast reasoning.
 set -euo pipefail
+export TORCH_NPU_DEVICE_CAPABILITY=9.0
 cd "${TARGET_ROOT:?TARGET_ROOT is required}"
 exec torchrun --nproc_per_node=1 \
     --rdzv_backend c10d \
