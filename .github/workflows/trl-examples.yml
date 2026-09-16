@@ -17,9 +17,9 @@ on:
         default: huggingface/trl
         type: string
       target_ref:
-        description: Branch, tag, or SHA in the target repository (empty = latest release; falls back to main)
-        required: false
-        default: ''
+        description: Branch, tag, or SHA in the target repository
+        required: true
+        default: main
         type: string
 
 concurrency:
@@ -152,41 +152,12 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            REPO="${INPUT_REPO:-$UPSTREAM_REPO}"
-            REF=""
-            REASON=""
-            if [ -n "$INPUT_REF" ]; then
-              REF="$INPUT_REF"
-              REASON="explicit"
-            else
-              # Manual with empty ref: query the latest upstream
-              # release tag. Mirrors examples-template.yml's decide
-              # step so trl behaves the same as peft / accelerate /
-              # torchtitan. Falls back to main on API failure or
-              # no release.
-              RESP_FILE=$(mktemp)
-              HTTP_CODE=$(curl -sSL --retry 3 -o "$RESP_FILE" -w '%{http_code}' \
-                "https://api.github.com/repos/$REPO/releases/latest" || true)
-              TAG=""
-              if [ "$HTTP_CODE" = "200" ]; then
-                TAG=$(jq -r '.tag_name // empty' "$RESP_FILE")
-              fi
-              rm -f "$RESP_FILE"
-              if [ -n "$TAG" ]; then
-                REF="$TAG"
-                REASON="latest-release"
-              else
-                REF="main"
-                REASON="main-fallback"
-                echo "::warning::failed to fetch latest release for $REPO (HTTP $HTTP_CODE) - falling back to main"
-              fi
-            fi
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "trigger=workflow_dispatch" >> "$GITHUB_OUTPUT"
-            echo "reason=$REASON" >> "$GITHUB_OUTPUT"
-            echo "target_repo=$REPO" >> "$GITHUB_OUTPUT"
-            echo "target_ref=$REF" >> "$GITHUB_OUTPUT"
-            echo "resolved repo=$REPO ref=$REF reason=$REASON (manual)"
+            echo "reason=manual" >> "$GITHUB_OUTPUT"
+            echo "target_repo=${INPUT_REPO:-$UPSTREAM_REPO}" >> "$GITHUB_OUTPUT"
+            echo "target_ref=${INPUT_REF:-main}" >> "$GITHUB_OUTPUT"
+            echo "resolved repo=${INPUT_REPO:-$UPSTREAM_REPO} ref=${INPUT_REF:-main} (manual)"
             exit 0
           fi
           CHANGED="false"
