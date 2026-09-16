@@ -25,9 +25,9 @@ on:
   workflow_dispatch:
     inputs:
       target_ref:
-        description: Branch, tag, or SHA to test (defaults to main)
+        description: Branch, tag, or SHA to test (defaults to v0.6.1)
         required: false
-        default: main
+        default: v0.6.1
         type: string
 
 # Engine jobs query the GitHub Job API (validate-results); called

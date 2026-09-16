@@ -4,14 +4,17 @@
 # torchtune itself is installed from TARGET_ROOT (the release checkout
 # under test), so the guarded tag is exactly the code that runs.
 #
-# Dependency line (2026-09-15, coder hdc-stable-npu-4 逐例验证):
-#   torch 2.9.0+cpu + torch_npu 2.9.0.dev20251120 + torchao <0.16
-#   (torchao 0.15.0 与 torch 2.9.0+cpu ABI 匹配) + omegaconf
+# Dependency line (2026-09-16, coder hdc-stable-npu-4 逐例验证):
+#   torch 2.12.0+cpu + torch_npu 2.12.0 + torchao 0.13.0 + omegaconf
 #   + transformers 4.57.1 + tokenizers + safetensors + modelscope
 # - transformers 4.57.1：与 torchtune v0.6.x 的 LlamaModel / Qwen2
 #   forward 签名匹配；5.x 已重命名部分属性
-# - torchao<0.16：quantize recipe 走 torchao.quantization.quantize_；
-#   0.15.0 与 torch 2.9.0+cpu 兼容（更高版本会报 C++ ABI 不匹配）
+# - torchao 0.13.0：v0.6.x common_utils.py:19 从 torchao.dtypes.nf4tensor
+#   import NF4Tensor；0.14.0+ 删了 dtypes 子模块，0.15+ 把 NF4Tensor
+#   重命名成 Int4Tensor，0.18+ 才在 torchao.quantization 重新暴露
+#   NF4Tensor（但只给 main 分支用）。pin exact version 防止 CI 漂到
+#   坏版本——之前 pin torchao<0.16 解析到 0.15.0，CI 跑 main 时 setup
+#   直接 ImportError 挂掉
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -55,12 +58,12 @@ except urllib.error.HTTPError:
 ensure_torch_stack() {
   # Same torch line as torchtune quick-start (CANN 9.1.0 pairing):
   # torch 2.9.0 + torch_npu 2.9.0. Pin via Huawei ascend index.
-  if python -c "
-import torch, torch_npu
-raise SystemExit(
-    0 if torch.__version__.startswith('2.9.0')
-    and torch_npu.__version__.startswith('2.9.0') else 1)
-"; then
+  # Skip if torch is already installed (any 2.x) to avoid downgrade:
+  # the previous version-pinned check forced a 2.12.0+cpu image down to
+  # 2.9.0, which broke the ABI alignment and pulled torchao cpp ext
+  # warnings. Trust whatever the image preinstalled; fall through to
+  # install only when torch is missing entirely.
+  if python -c "import torch" 2>/dev/null; then
     echo "reusing image torch stack ($(python -c 'import torch; print(torch.__version__)'))"
     return
   fi
@@ -94,9 +97,23 @@ setup_torchtune() {
   # PIP_CONSTRAINT keeps CUDA metapackages out (constraints-npu.txt).
   echo "installing torchtune from $TARGET_ROOT"
   python -m pip install -e "$TARGET_ROOT"
+  # torchao 0.13.0 has torchao.dtypes.nf4tensor.NF4Tensor (v0.6.x common_utils.py:19
+  # imports from that path); 0.14.0+ removed the dtypes submodule and 0.15+
+  # renamed NF4Tensor→Int4Tensor in torchao.quantization. 0.18+ re-exposed
+  # NF4Tensor under quantization, but that path is only used by torchtune main,
+  # not v0.6.x. Pin exactly so CI doesn't drift to a broken version.
   python -m pip install "transformers==4.57.1" "omegaconf>=2.3,<3" \
-    "torchao<0.16" tokenizers safetensors tqdm pyyaml
-  python -c "import torchtune, torchao, omegaconf, transformers; print('torchtune', torchtune.__version__, '/ torchao', torchao.__version__, '/ transformers', transformers.__version__)"
+    "torchao==0.13.0" tokenizers safetensors tqdm pyyaml
+  # importlib.metadata.version returns the real install tag for both
+  # editable installs (where __version__ is empty string) and wheel
+  # installs. torchtune.__version__ is "" by default in the source
+  # tree; reading it directly would print a confusing blank.
+  python -c "
+import importlib.metadata as md
+import torchao, omegaconf, transformers
+import torchtune  # noqa: just to confirm the import chain
+print('torchtune', md.version('torchtune'), '/ torchao', torchao.__version__, '/ transformers', transformers.__version__)
+"
 
   # Pre-download the example model from ModelScope (China-reachable)
   # because runners cannot reach HuggingFace. The local snapshot dir
