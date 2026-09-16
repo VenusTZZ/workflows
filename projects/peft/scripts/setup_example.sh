@@ -181,6 +181,48 @@ for ms_id, hf_id in MODELS:
     print(f"planted {ms_id} -> {hf_id}@{sha[:8]}")
 PY
 
+  # guanaco (supertuning's default dataset) exists only on HF — no
+  # ModelScope mirror — and its files are xet-backed: the mirror 302s
+  # them to cas-bridge, unreachable from the runners. hdc-only
+  # temporary: seed the hub cache from repo-committed copies so
+  # load_dataset("timdettmers/openassistant-guanaco") resolves fully
+  # locally (9846 train / 518 test, verified end-to-end). COPY, not
+  # symlink — the workspace checkout is per-job, the cache must
+  # outlive it. Pinned to the revision the files were fetched from;
+  # if upstream moves, the cache misses and the run fails loudly
+  # (re-seed then). Revert this block and seed/ once the runner
+  # caches are warm.
+  python - <<'PY'
+import os
+import shutil
+from pathlib import Path
+
+SEED_DIR = Path(os.environ["PROJECT_ROOT"]) / "seed" / "guanaco"
+HF_ID = "timdettmers/openassistant-guanaco"
+# revision the seed files were fetched from (2026-09-16)
+SHA = "831dabac2283d99420cda0b673d7a2a43849f17a"
+SIZES = {
+    "openassistant_best_replies_train.jsonl": 20877686,
+    "openassistant_best_replies_eval.jsonl": 1105272,
+}
+hub_root = Path(os.environ.get("HF_HOME", Path.home() / ".cache/huggingface")) / "hub"
+snap = hub_root / f"datasets--{HF_ID.replace('/', '--')}" / "snapshots" / SHA
+need = [n for n in SIZES if not (snap / n).is_file()]
+if not need:
+    print(f"guanaco cache already seeded @{SHA[:8]}")
+else:
+    snap.mkdir(parents=True, exist_ok=True)
+    refs = snap.parent / "refs"
+    refs.mkdir(exist_ok=True)
+    # no trailing newline: hub compares the string to the snapshot dir name
+    (refs / "main").write_text(SHA)
+    for name in need:
+        shutil.copy2(SEED_DIR / name, snap / name)
+        got = (snap / name).stat().st_size
+        assert got == SIZES[name], f"{name}: expected {SIZES[name]} bytes, got {got}"
+    print(f"seeded {HF_ID}@{SHA[:8]} ({sum(SIZES.values()) / 1e6:.1f}MB)")
+PY
+
   # Prefetch every dataset / metric the examples load, with the exact
   # runtime call so the run step is a pure cache hit (small files are
   # mirror-proxied and reliable; the win is failing here, fast and
