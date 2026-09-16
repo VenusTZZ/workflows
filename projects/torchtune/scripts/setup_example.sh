@@ -101,7 +101,10 @@ setup_torchtune() {
   # Pre-download the example model from ModelScope (China-reachable)
   # because runners cannot reach HuggingFace. The local snapshot dir
   # is exported as TT_MODEL_PATH for overlay_args to reference.
-  python -m pip install modelscope
+  # Pinned to the doc's verified line: modelscope>=1.38 splits the hub
+  # code into modelscope-hub, and the fresh 1.40.1 wheel's loose
+  # ">=0.4.2" floor breaks import when the mirror lags on hub 0.4.3.
+  python -m pip install "modelscope==1.37.0"
   python - <<'PY'
 import os
 # Non-TTY CI logs: throttle tqdm refreshes instead of disabling.

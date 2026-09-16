@@ -125,7 +125,11 @@ print('peft', peft.__version__)
   # example from ModelScope (China-reachable; HF download is gated).
   # The snapshot path is exported as LLM_MODEL_PATH for overlay_args
   # to consume.
-  python -m pip install modelscope
+  # Pinned: modelscope>=1.38 splits the hub code into modelscope-hub,
+  # and the fresh 1.40.1 wheel's loose ">=0.4.2" floor breaks import
+  # when the mirror lags on hub 0.4.3. 1.37.0 is the last pre-split
+  # line, verified by the sibling quick-start docs.
+  python -m pip install "modelscope==1.37.0"
   python - <<'PY'
 import os
 # Non-TTY CI logs: throttle tqdm refreshes instead of disabling.
