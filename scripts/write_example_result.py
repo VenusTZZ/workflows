@@ -2,7 +2,7 @@
 """Publish result.json for one run-example matrix leg.
 
 The validate-results job (GitHub-hosted runner) queries the GitHub Job
-API for the corresponding run-example (<path>) job's conclusion,
+API for the corresponding run-example (<name>) job's conclusion,
 normalizes it (success / cancelled pass through; anything else,
 including a missing conclusion, is a failure), and writes the
 machine-readable result artifact consumed by external machines
@@ -12,7 +12,7 @@ stays on GitHub-hosted infrastructure.
 
 Reads from the environment:
     GH_TOKEN / GITHUB_REPOSITORY / GITHUB_RUN_ID    auth + API address
-    EXPECTED_JOB_NAME    display name: 'run-example (<path>)'
+    EXPECTED_JOB_NAME    display name: 'run-example (<name>)'
     TRIGGER / TARGET_REPO / TARGET_REF / EXAMPLE_PATH / IMAGE
 Writes: --output (default result.json), fields per
 schemas/result.schema.json. Exit 1 if the expected job cannot be
@@ -43,9 +43,9 @@ def job_matches(name: str, expected: str) -> bool:
     """Exact match, or suffix match for called-workflow name prefixes.
 
     Inside a reusable workflow github.job is unprefixed
-    ('run-example (<path>)'), but the Jobs API prefixes every job name
+    ('run-example (<name>)'), but the Jobs API prefixes every job name
     with the caller's workflow name ('peft-examples / run-example
-    (<path>)'); chained reusable workflows nest further prefixes.
+    (<name>)'); chained reusable workflows nest further prefixes.
     """
     return name == expected or name.endswith(f' / {expected}')
 

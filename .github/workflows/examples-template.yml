@@ -182,7 +182,7 @@ jobs:
             --manifest "workflows/projects/${{ inputs.project }}/examples_manifest.yaml"
 
   run-example:
-    name: run-example (${{ matrix.example.path }})
+    name: run-example (${{ matrix.example.name }})
     needs: [monitor, manifest-check]
     if: needs.manifest-check.outputs.has_supported == 'true'
     runs-on: ${{ matrix.example.runner }}
@@ -242,7 +242,7 @@ jobs:
             2>&1 | tee "$GITHUB_WORKSPACE/output/train.log"
 
   validate-results:
-    name: publish-result (${{ matrix.example.path }})
+    name: publish-result (${{ matrix.example.name }})
     needs: [monitor, manifest-check, run-example]
     if: always() && needs.manifest-check.outputs.has_supported == 'true'
     runs-on: ubuntu-latest
@@ -263,7 +263,7 @@ jobs:
           TRIGGER: ${{ needs.monitor.outputs.trigger }}
           EXAMPLE_PATH: ${{ matrix.example.path }}
           IMAGE: ${{ matrix.example.image }}
-          EXPECTED_JOB_NAME: run-example (${{ matrix.example.path }})
+          EXPECTED_JOB_NAME: run-example (${{ matrix.example.name }})
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
