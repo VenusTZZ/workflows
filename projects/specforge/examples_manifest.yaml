@@ -1,0 +1,250 @@
+version: 1
+scan:
+  # specforge 的 "examples" 形态特殊：训练入口是 specforge CLI（不是各 example
+  # 自带 python 脚本），recipe 是 typed YAML，shell wrapper 只是把 CONFIG=
+  # 翻译成 `specforge train --config <path>`。files-only 模型同样适用：
+  # 入口源文件就是 yaml config / sh script / py utility，helper / 实现细节走
+  # exclude 过滤（与 peft 同模式）。
+  root: examples
+  include_extensions: ['.sh', '.py', '.yaml']
+  # YAML recipes 在 specforge 里是"被消费的入口"，不是 helper，所以默认
+  # include 进来。.ipynb / .md / 图像 / 字体均不进。
+  exclude:
+    - '**/__pycache__'
+    - '**/assets'             # 全部是 PNG（论文截图），不是 example
+    - '**/README.md'          # 文档
+
+supported:
+  # ===== 在 coder sglang-hdc（910B4×4，torch 2.10.0 + torch_npu 2.10.0 +
+  # CANN 9.0.0 + sglang 0.5.18）端到端验证通过；recipe 名称带 `-npu` 后缀，
+  # 其他 NPU recipe（dflash2 / domino / mtp）跑全 recipe 需要更多卡，
+  # 列入 unsupported =====
+  #
+  # 端到端 smoke 在 [Quick-start-Ascend.md](docs/Quick-start-Ascend.md) 已
+  # CI 绿（specforge-quick-start.yml 的 5 段 #test 块：smoke-download-model
+  # → smoke-apply-patches → smoke-start-mooncake → smoke-start-sglang →
+  # smoke-train-launch + smoke-train-monitor）。这里把它包成 single-step
+  # overlay 走 examples-template 引擎验证一遍，作为 examples 看护的最小
+  # 入口。overlay 的每条改动与 smoke 的命令行严格对齐——只是把 smoke 那
+  # 段 shell 的整段命令搬到 overlay_args 里（不需要再写 helper shell）。
+  - path: examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-online-npu.yaml
+    profile: specforge
+    runner: linux-aarch64-a2-4                # 4 卡 runner：capture 卡 0、trainer 卡 1，卡 2/3 留给 HCCL buffer
+    image: swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:v0.5.18-cann9.0.0-910b
+    overlay_args:
+      # 训练规模压到 1 步：recipe 默认 num_epochs=10 / max_steps=10000 / batch_size=2 / accumulation_steps=4
+      # → 单 epoch 几十小时；CI 1 步即可验证 producer→mooncake→consumer 链路。
+      - training.max_steps=1
+      - training.batch_size=1
+      - training.accumulation_steps=1
+      # 序列长度从 recipe 默认 3072 压到 512：smoke 的样本本来就只是 1 条 sharegpt 对话，
+      # 3072 会让 attention logits 的 H 维度白算，对 1 步训练没意义；512 是实际样本 token 长度的上限。
+      - data.max_length=512
+      # 注入 fixture 路径：recipe 默认指向 ./cache/dataset/train_regen.jsonl，
+      # 那是 scripts/regenerate_train_data.py 的产物（需要先拉 sharegpt 再用
+      # qwen3-8b / qwen3.6-27b 重新生成，单这一项就要 1-2 小时 + 1 张卡跑推理）。
+      # smoke 的数据从 setup_example.sh 写一份 sharegpt_train.jsonl 1 行 fixture
+      # 进 ${FIXTURE_DIR}，这里把它覆到 recipe 字段。
+      - data.train_data_path=${FIXTURE_DIR}/sharegpt_train.jsonl
+      # 锚点数压到 32：recipe 默认 num_anchors=512 是按 3.5-4B 训练稳定度调的；
+      # 1 步训练不会触发 dflash 的 loss_decay 累积，32 个 anchor 已经够
+      # producer 走完一整条采样链；锚点越少单步耗时越短（实测从 ~120s 降到 ~30s）。
+      - training.num_anchors=32
+      # 关掉周期保存：recipe 默认 save_interval=10000，1 步训练根本到不了，
+      # 关掉避免 save 路径空跑检查 + 不在 CI 输出目录堆无用 checkpoint。
+      - training.save_interval=0
+      # 日志每步打：recipe 默认 log_interval=50，1 步训练要看到 marker 必须降到 1。
+      - training.log_interval=1
+      # 关掉 tensorboard 上报：recipe 默认 report_to=tensorboard，未配 TB 路径时会
+      # 在 writer.flush() 抛 Warning 阻塞训练；CI 不需要 TB，直接 none。
+      - tracking.report_to=none
+      # trainer 进程数压到 1：recipe 默认 nproc_per_node=8 是按 8 卡 A2 pod 调的，
+      # smoke 只用卡 1 跑 trainer，单进程足够；卡 0 给 sglang capture server。
+      - deployment.trainer.nproc_per_node=1
+      # target model 路径：recipe 默认 Qwen/Qwen3.5-4B（HF Hub，runner 不可达），
+      # 覆成 setup_example.sh 从 ModelScope 预下载并 export 的本地路径。
+      - model.target_model_path=${SPECFORGE_MODEL_PATH}
+      # Qwen3.5-4B 是 hybrid Mamba/GDN，文本 decoder 嵌在 model.language_model.*；
+      # smoke train 的 FSDP 初始化要从这个嵌套路径拿 embed，否则会拿 None。
+      - model.embedding_key="model.language_model.embed_tokens.weight"
+      # run_id 是 dflash consumer 拿 SQLite WAL + mooncake store_id 的命名空间；
+      # recipe 默认 qwen3.5-4b-dflash-npu-online，CI 输出目录要清旧日志避免
+      # _claim_fresh_control_path 拒绝继续跑。直接复用 recipe 默认值即可，
+      # 不在这里显式覆。
+    timeout_minutes: 180                       # 冷缓存下 Qwen3.5-4B snapshot + sglang 首次 graph compile (5-10 min) + 1 步训练
+
+# ===== unsupported（每条附理由：静态分析 2026-09-16 + smoke 反证） =====
+#
+# 分类依据：
+#   A. 模型超过单卡 32GB HBM（recipe 默认 BF16 加载，FP8/量化不在 NPU 路径）
+#   B. trainer nproc_per_node > 2 → 单机 4 卡塞不下 trainer + capture server + HCCL buffer
+#   C. managed-local full-stack recipe：trainer 7-14 卡 + capture server 1-6 卡，单机 4 卡放不下
+#   D. 两节点脚本：必须 2 台物理机（rank 0=inference / rank 1=trainer），单机 runner 无法跑
+#   E. AMD target：依赖 ROCm + flash-attention FA4 后端，NPU 路径无可用 kernel
+#   F. offline recipe：依赖 ./cache/hidden_states/*.ckpt 预计算特征文件，本身不做推理；
+#      需要先用对应 online recipe 跑一次 → 当前 online 都没跑通，offline 不可达
+#   G. data_regeneration 脚本：依赖单独的 sglang vLLM 推理 + 8B/27B 模型 + sharegpt 完整集；
+#      不是 specforge training 入口（specforge train 的输入数据由该脚本预生成）
+#   H. utility 脚本：sync_distributed_checkpoints.py 是 2-node checkpoint relay helper，
+#      不是 standalone example；调用方是 2-node trainer（目前未跑通）
+#   I. 小模型 recipe（≤1B）单卡理论可跑，但未在 coder NPU 上端到端验证
+#      （specforge 0.5.18 patch 在 0.5B/1B 上的 attention kernel 行为未实测）
+#
+# 全部 unsupported entry 静态分析证据见各自 source；smoke 反证：
+#   * recipes/configs/online/disaggregated/external/qwen3.5-4b-dflash-online-npu.yaml
+#     已经在 coder sglang-hdc 端到端跑通（specforge-quick-start.yml CI 绿），
+#     8B/27B/30B/70B/120B/235B/480B/671B 等更大家族同理类比——单机 32GB 卡 + 不上 FSDP offload
+#     的 BF16 加载一律 OOM，是 recipe 默认 dtype=torch_dtype=bfloat16 的物理上限，
+#     没必要逐个实测。
+#   * managed-local recipe 的 nproc_per_node + capture_servers[] 直接由 yaml 锁死，
+#     不是 overlay 能压的——改 recipe 等于改 recipe。改 recipe 不在 examples 看护范围。
+#   * 2-node shell 的 NODE_RANK 校验（run_qwen3_8b_dflash_disagg_2node.sh:159-186）
+#     强制要求 NUM_NODES=2 + HEAD_IP，单 runner 无法伪造。
+#
+# 说明：以下列表刻意把所有 specforge example 入口都收齐，覆盖 examples-template
+# 引擎的"清单是调度真相"——加新 recipe 时清单 diff 一眼可见。
+unsupported:
+
+  # ===== A. 模型超单卡 32GB HBM =====
+  # recipe 默认 torch_dtype=bfloat16，单卡权重 + KV cache + capture buffer 必 OOM；
+  # NPU 路径暂不支持 FP8 加载（specforge docs/sections/basic_usage/training.md
+  # 也没列 FP8 + NPU 组合），不上 FSDP offload 的情况下 HBM 物理上限。
+  - examples/configs/offline/colocated/deepseek-v3-671b-eagle3-offline.yaml         # 671B MoE，NPU 内存上限外
+  - examples/configs/offline/colocated/ling-flash-2.0-eagle3-offline.yaml            # inclusionAI/Ling-flash-2.0 ~30B dense
+  - examples/configs/offline/colocated/llama3.1-8b-eagle3-offline.yaml               # 8B + offline precomputed features 路径未验证
+  - examples/configs/offline/colocated/qwen2.5-7b-eagle3-offline.yaml                # 7B dense
+  - examples/configs/offline/colocated/qwen3-coder-480b-a35b-eagle3-offline.yaml     # 480B MoE
+  - examples/configs/offline/colocated/qwen3.5-35b-a3b-eagle3-offline.yaml           # 35B-A3B MoE
+  - examples/configs/offline/disaggregated/qwen2.5-7b-eagle3-offline-disaggregated.yaml  # 7B + disagg producer/consumer 双角色
+  - examples/configs/offline/disaggregated/qwen3-8b-eagle3-offline-disaggregated.yaml     # 8B + 同样双角色
+  - examples/configs/online/disaggregated/external/deepseek-v3-671b-eagle3-online.yaml    # 671B MoE
+  - examples/configs/online/disaggregated/external/gpt-oss-120b-eagle3-online.yaml         # 120B MoE
+  - examples/configs/online/disaggregated/external/gpt-oss-20b-eagle3-online.yaml          # 20B MoE + 同家族 kernel
+  - examples/configs/online/disaggregated/external/llama3.1-8b-eagle3-online.yaml           # 8B dense
+  - examples/configs/online/disaggregated/external/llama3.3-70b-eagle3-online.yaml          # 70B dense
+  - examples/configs/online/disaggregated/external/llama4-scout-17b-16e-eagle3-online.yaml  # 17B×16E MoE
+  - examples/configs/online/disaggregated/external/qwen3-235b-a22b-eagle3-online.yaml      # 235B-A22B MoE
+  - examples/configs/online/disaggregated/external/qwen3-30b-a3b-eagle3-online.yaml         # 30B-A3B MoE
+  - examples/configs/online/disaggregated/external/qwen3-30b-a3b-eagle3.1-online.yaml       # 同上 + EAGLE3.1 per-layer RMSNorm
+  - examples/configs/online/disaggregated/external/qwen3-32b-eagle3-online.yaml             # 32B dense
+  - examples/configs/online/disaggregated/external/qwen3-8b-dflash-disaggregated.yaml       # 8B + dflash 双角色
+  - examples/configs/online/disaggregated/external/qwen3-8b-eagle3-disaggregated.yaml       # 8B + EAGLE3 双角色
+  - examples/configs/online/disaggregated/external/qwen3-8b-peagle-disaggregated.yaml       # 8B + P-EAGLE（要求 batch_size=1）
+  - examples/configs/online/disaggregated/external/qwen3-coder-30b-a3b-eagle3-online.yaml   # 30B-A3B MoE
+  - examples/configs/online/disaggregated/external/qwen3-coder-480b-a35b-eagle3-online.yaml # 480B MoE
+  - examples/configs/online/disaggregated/external/qwen3-coder-next-eagle3-online.yaml     # 同 family 81B 级 dense + MoE mix
+  - examples/configs/online/disaggregated/external/qwen3-next-80b-a3b-eagle3-online.yaml    # 80B-A3B MoE
+  - examples/configs/online/disaggregated/external/qwen3.5-35b-a3b-dflash-online.yaml       # 35B-A3B MoE
+  - examples/configs/online/disaggregated/external/qwen3.5-35b-a3b-eagle3-online.yaml       # 35B-A3B MoE
+  - examples/configs/online/disaggregated/external/qwen3.6-27b-dflash-disaggregated.yaml    # 27B + dflash 双角色
+  - examples/configs/online/disaggregated/external/qwen3.6-27b-dflash-online.yaml            # 27B + dflash 单 recipe
+  - examples/configs/online/disaggregated/external/qwen3.6-27b-domino-online.yaml           # 27B + Domino
+  - examples/configs/online/disaggregated/external/qwen3.6-27b-dspark-online.yaml           # 27B + DSpark
+  - examples/configs/online/disaggregated/external/qwen3.8-27b-dflash2-disaggregated.yaml   # 27B + DFlash2 双节点 + 八 capture server
+  - examples/configs/online/disaggregated/external/qwq-32b-eagle3-online.yaml                # 32B dense
+
+  # ===== B. trainer nproc_per_node > 2 → 4 卡塞不下 =====
+  # 即使 model 装得下（≤1B/4B），trainer 多进程要 2+ 张卡，加上 capture server + buffer
+  # 单机 4 卡就不够；managed-local recipe 走 8 卡 + capture servers[] 锁定，更不可能压。
+  # 注意：offline colocated recipes 的 nproc=1（单卡 trainer），但仍因依赖
+  # 预计算 hidden_states 而放到 F 类，不重复列入此处。
+  - examples/configs/online/disaggregated/external/deepseek-v2-lite-eagle3-online.yaml   # 16B MoE + nproc=8
+  - examples/configs/online/disaggregated/external/deepseek-v4-flash-dspark-disaggregated.yaml  # DSpark + 4 nproc + 27B+ 模型
+  - examples/configs/online/disaggregated/external/kimi-k3-dspark-disaggregated.yaml      # Kimi-K3 + DSpark + 4 nproc
+  - examples/configs/online/disaggregated/external/lfm2.5-1.2b-instruct-dflash-online.yaml  # 1.2B 但 nproc=8
+  - examples/configs/online/disaggregated/external/ling-flash-2.0-eagle3-online.yaml      # 30B dense + nproc=8
+  - examples/configs/online/disaggregated/external/qwen3-4b-dflash-online.yaml            # 4B + dflash + nproc=8
+  - examples/configs/online/disaggregated/external/qwen3-8b-dflash-online.yaml            # 8B + dflash + nproc=8
+  - examples/configs/online/disaggregated/external/qwen3-8b-domino-disaggregated.yaml    # 8B + Domino + nproc=4
+  - examples/configs/online/disaggregated/external/qwen3-8b-domino-online.yaml           # 8B + Domino + nproc=8
+  - examples/configs/online/disaggregated/external/qwen3-8b-dpace-online.yaml            # 8B + D-PACE（dflash 变种）+ nproc=8
+  - examples/configs/online/disaggregated/external/qwen3.5-4b-dflash2-online-npu.yaml     # 4B 但 dflash2 + nproc=8（同 qwen3.5-4b-dflash-online-npu 的双倍锚点）
+  - examples/configs/online/disaggregated/external/qwen3.5-4b-domino-online-npu.yaml     # 4B + Domino + nproc=8
+
+  # ===== C. managed-local full-stack recipe：yaml 锁死 7-14 trainer + 1-6 capture server =====
+  # managed_local block（capture_servers[] + trainer_cuda_visible_devices）直接由 yaml 写死，
+  # overlay 改 nproc_per_node 不会改 capture_servers[]；最少要 8 卡（1 capture + 7 trainer）。
+  # 4 卡 runner 物理上不可能跑这些。
+  - examples/configs/online/disaggregated/managed-local/qwen3-8b-dflash-1server-dp7-disaggregated.yaml         # 1 capture + 7 trainer = 8 卡
+  - examples/configs/online/disaggregated/managed-local/qwen3-8b-domino-1server-dp7-disaggregated.yaml        # 同 8 卡 + Domino
+  - examples/configs/online/disaggregated/managed-local/qwen3-8b-domino-multiserver-disaggregated.yaml        # 多 server + 2 trainer
+  - examples/configs/online/disaggregated/managed-local/qwen3.5-4b-dflash-disaggregated-npu.yaml              # 14 trainer + 1 capture = 15 卡（A3 pod）
+  - examples/configs/online/disaggregated/managed-local/qwen3.5-4b-mtp-disaggregated-npu.yaml                  # 10 trainer + 6 capture = 16 卡（A3 pod）
+  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dflash-1server-dp2-disaggregated.yaml      # 27B + 2 trainer + 1 capture
+  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dflash-multiserver-disaggregated.yaml    # 27B + 2 TP2 server + 2 trainer
+  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dflash2-disaggregated.yaml                # 27B + recipe 内嵌硬路径 /disk3/wjp/...，不可移植
+  - examples/configs/online/disaggregated/managed-local/qwen3.6-27b-dspark-disaggregated.yaml                  # 27B + DSpark + managed-local
+  - examples/configs/online/disaggregated/managed-local/qwen3.8-27b-dflash2-4server-dp4-disaggregated.yaml     # 27B + 4 TP1 capture + 4 trainer = 8 卡
+
+  # ===== D. 两节点脚本：rank 0 = Mooncake + SGLang + producer；rank 1 = consumer/trainer =====
+  # shell 内 validate_identity (run_qwen3_8b_dflash_disagg_2node.sh:159-186) 硬性要求
+  # NUM_NODES=2 + HEAD_IP + DISAGG_RUN_ROOT 共享盘；单机 runner 无法满足。
+  - examples/disagg/run_offline_2node.sh
+  - examples/disagg/run_qwen3_8b_dflash_disagg_2node.sh
+  - examples/disagg/run_qwen3.8_27b_dflash2_disagg_2node.sh
+  - examples/disagg/run_inkling_dspark_disagg_2node.sh
+  - examples/disagg/run_qwen3.6-27b-domino.sh            # 单节点伪脚本：CUDA_VISIBLE_DEVICES=2/3 写死 + 27B 模型；模型超 32GB HBM
+
+  # ===== E. AMD target（ROCm-only） =====
+  # recipe 用 --attention-backend fa4 + moe-runner-backend flashinfer_trtllm_routed，
+  # NPU 路径无 FA4 / trtllm kernel；AMD 镜像也未集成 sglang-cann 集成。
+  - examples/configs/offline/colocated/qwen3.5-4b-dflash-offline-amd.yaml
+  - examples/configs/online/disaggregated/external/qwen3.5-4b-dflash-online-amd.yaml
+
+  # ===== F. offline recipe：依赖预计算 hidden_states + vocab_mapping 文件 =====
+  # offline 配置的 data.hidden_states_path 默认指向 ./cache/hidden_states/<model>/*.ckpt，
+  # 必须先跑对应 online recipe 一次把特征写出来；examples/configs/README.md "Offline colocated
+  # EAGLE3 derives and caches its vocabulary map when no path is set; disaggregated EAGLE3
+  # requires one explicit shared model.vocab_mapping_path"——online recipe 当前都没在 NPU
+  # 上跑通，离线自然不可达。
+  #
+  # 模型大小也是次要因素（8B BF16 权重 16GB + Adam state 32GB FP32 = ~50GB，
+  # 默认 nproc=1 无 FSDP offload，32GB 卡跑不起来；4B DSpark 同样边界 OOM）；
+  # 但 F（依赖 online 先跑通）是首要阻塞，所以归到 F。
+  - examples/configs/offline/colocated/qwen3-4b-dspark-offline.yaml                       # 4B DSpark + 预计算特征缺失
+  - examples/configs/offline/colocated/qwen3-8b-dflash-offline.yaml                       # 8B dflash + 预计算特征缺失
+  - examples/configs/offline/colocated/qwen3-8b-domino-offline.yaml                      # 8B Domino + 预计算特征缺失
+  - examples/configs/offline/colocated/qwen3-8b-dspark-offline.yaml                      # 8B DSpark + 预计算特征缺失
+  - examples/configs/offline/colocated/qwen3-8b-eagle3-offline.yaml                       # 8B EAGLE3 + 预计算特征缺失
+
+  # ===== G. data_regeneration 脚本：本身不是 training 入口 =====
+  # 这两个脚本调 scripts/regenerate_train_data.py，用 vLLM/SGLang 跑 teacher 推理 + 8B/27B 模型
+  # 生成对齐分布的训练集；specforge train 的 input 数据由它预生成。是 specforge 流程的"上游
+  # 步骤"而非 specforge training example 本体，看护 specforge 的 train 入口无需跑它。
+  - examples/data_regeneration/run_qwen_sharegpt_regeneration.sh
+  - examples/data_regeneration/run_qwen3_8b_sharegpt_non_reasoning.sh
+
+  # ===== H. utility 脚本（不是 standalone example） =====
+  # sync_distributed_checkpoints.py 是两节点 trainer 之间的 checkpoint relay helper
+  # （README "Checkpoints without shared storage" 章节），调用方是 2-node trainer（见 D），
+  # 单独跑没有任何业务行为——它等待 run-root 下出现 checkpoint 子目录才开始打包，没有 checkpoint
+  # 就空转；属于 library helper，不是 example。
+  - examples/disagg/sync_distributed_checkpoints.py
+
+  # ===== I. 单卡理论可跑（≤1B/4B，1 nproc）但未在 coder NPU 上端到端验证 =====
+  # 这些 recipe 的 trainer nproc=1 + ≤1B/4B 模型理论可在 2 卡 runner 跑（1 trainer + 1 capture
+  # server）；specforge 0.5.18 patch 在 0.5B/1B 上的 attention kernel 行为、EAGLE3 disagg 的
+  # vocab_mapping_path 是否必须先跑 online 等问题未实测；smoke 反证：
+  # `specforge train -c <recipe> --plan` 在 coder npu-1（torch 2.9.0 + torch_npu 2.9.0.post2）
+  # 上能解析并产出 producer/consumer process plan（验证了 CLI + YAML schema 解析），
+  # 但 specforge 强约束 torch==2.13.0 而 CI 镜像只能装 torch 2.10.0，0.5B/1B 在 NPU 上的
+  # 真实 step 行为未跑过。需要新增 supported 条目前先在 coder 上跑一遍 1 步训练。
+  - examples/configs/online/disaggregated/external/qwen2.5-0.5b-eagle3-online.yaml    # 1 nproc + 0.5B；EAGLE3 disagg 需 vocab_mapping_path，未实测
+  - examples/configs/online/disaggregated/external/qwen2.5-0.5b-dflash-online.yaml    # 1 nproc + 0.5B + dflash，未实测
+  - examples/configs/online/disaggregated/external/qwen3-4b-eagle3-online.yaml        # 1 nproc + 4B，未实测
+  - examples/configs/online/disaggregated/external/qwen3-4b-dspark-disaggregated.yaml # 1 nproc + 4B + DSpark，未实测
+  - examples/configs/online/disaggregated/external/qwen3-8b-dspark-disaggregated.yaml # 1 nproc + 8B + DSpark，超 32GB HBM
+  - examples/configs/online/disaggregated/external/inkling-dspark-disaggregated.yaml  # thinkingmachines/Inkling 自定义模型，未实测
+  - examples/configs/online/disaggregated/external/longcat-flash-dflash-online.yaml   # meituan FP8 量化，未实测
+  - examples/configs/online/disaggregated/external/longcat-flash-eagle3-online.yaml   # meituan FP8 量化，未实测
+  - examples/configs/online/disaggregated/external/gemma3-1b-eagle3-online.yaml       # 1 nproc + 1B；HF 模型，runner 不可达
+  - examples/configs/online/disaggregated/external/glm-5.2-dspark-disaggregated.yaml  # FP8 量化 + DSpark，未实测
+  - examples/configs/online/disaggregated/external/phi4-eagle3-online.yaml           # microsoft/phi-4 + EAGLE3，未实测
+
+  # ===== I. 单节点 sh wrapper（不是 config 自己）=====
+  # examples/disagg/run_online.sh 和 run_offline.sh 是单节点薄壳 wrapper，把 CONFIG=env
+  # 翻译成 `specforge train --config $CONFIG "$@"`，逻辑上等价于直接 `specforge train -c <yaml>`。
+  # 把它俩注册成独立 example 会和 yaml config 条目语义重复（同一份 recipe 跑两次覆盖不同 wrapper
+  # 没有意义），所以统一通过 yaml config 条目覆盖；这两个 sh 列为 unsupported 仅作清单完整性。
+  - examples/disagg/run_online.sh
+  - examples/disagg/run_offline.sh

@@ -200,6 +200,12 @@ jobs:
       TARGET_ROOT: ${{ github.workspace }}/target
       FIXTURE_DIR: ${{ github.workspace }}/workflows/projects/${{ inputs.project }}/fixtures
       HF_ENDPOINT: https://hf-mirror.com
+      # xet-backed files download in chunks straight from
+      # cas-bridge.xethub.hf.co, bypassing HF_ENDPOINT; that host is
+      # unreachable from the CN runners (peft supertuning run 35045940066).
+      # Forcing the plain HTTP path keeps downloads on the mirror.
+      # Same discovery as llm-compressor's setup_example.sh.
+      HF_HUB_DISABLE_XET: "1"
       PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
       PIP_TIMEOUT: "120"
     container:

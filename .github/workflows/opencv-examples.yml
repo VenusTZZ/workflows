@@ -1,0 +1,73 @@
+# opencv examples guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/examples-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, upstream repo, dispatch input forwarding, and matrix
+# parallelism. The guard loop (monitor / manifest-check / run-example
+# matrix / validate-results / save-monitor-state) lives in the engine.
+#
+# === Status (2026-09-16) ===
+# bring-up: schedule is DISABLED (per the peft / trl bring-up policy).
+# The engine's manifest-check will fail until either:
+#   (A) ``upstream_repo`` is repointed at a fork (e.g.
+#       cosdt-ci-test/opencv) that contains
+#       ``examples/quickstart_*.py|sh`` mirroring
+#       projects/opencv/examples/ here, OR
+#   (B) the engine gains a "pre-check sync" step that copies
+#       workflows/projects/opencv/examples/ into the target tree
+#       before the manifest-check.
+# Until then, only manual dispatch on a setup where the target tree
+# already has the example scripts (e.g. via setup_example.sh copying
+# them in) will work. The local-coder verification in this commit
+# (recorded in projects/opencv/examples_manifest.yaml comments) does
+# exactly that copy + run pattern and confirms all 8 examples exit 0.
+#
+# Once (A) or (B) is in place, re-enable the cron:
+#   schedule:
+#     - cron: '0 */6 * * *'
+
+name: opencv-examples
+
+concurrency:
+    # schedule runs serialize; each manual run gets its own group so a
+    # dispatch is never blocked behind a scheduled run.
+    group: ${{ github.event_name == 'schedule' && 'opencv-examples-schedule' || format('manual-{0}', github.run_id) }}
+    # false: a run cancelled mid-way loses its outcome writeback, and
+    # the outcome is what drives the next cycle's retry.
+    cancel-in-progress: false
+
+on:
+    # Bring-up phase: schedule disabled until the fork-or-engine-sync
+    # question is resolved (see file header).
+    workflow_dispatch:
+        inputs:
+            target_ref:
+                description: Branch, tag, or SHA to test
+                required: false
+                default: main
+                type: string
+
+# Engine jobs query the GitHub Job API (validate-results) — actions:read
+# must be granted here; called workflows inherit caller permissions.
+permissions:
+    actions: read
+    contents: read
+
+jobs:
+    opencv-examples:
+        uses: ./.github/workflows/examples-template.yml
+        with:
+            project: opencv
+            # TODO(bring-up): when the example scripts land in a fork,
+            # point this at the fork (e.g. cosdt-ci-test/opencv). For
+            # now, pointing at opencv/opencv triggers the
+            # "supported example missing from target tree" warning,
+            # which the engine surfaces as a manifest-check failure.
+            upstream_repo: opencv/opencv
+            target_ref: ${{ inputs.target_ref }}
+            # 2 (not 4): the opencv DNN inference + CANN unit tests
+            # both want a single NPU; 2 parallel jobs x ~1 NPU each
+            # keeps the runner healthy. The CPU quickstart 9a-9e are
+            # all <2s each and can absorb into the same wall-clock
+            # window as the longer NPU legs.
+            max_parallel: 2
