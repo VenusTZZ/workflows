@@ -5,16 +5,15 @@
 # under test), so the guarded tag is exactly the code that runs.
 #
 # Dependency line (2026-09-16, coder hdc-stable-npu-4 逐例验证):
-#   torch 2.12.0+cpu + torch_npu 2.12.0 + torchao 0.13.0 + omegaconf
-#   + transformers 4.57.1 + tokenizers + safetensors + modelscope
+#   torch 2.12.0+cpu + torch_npu 2.12.0 + transformers 4.57.1
+#   + omegaconf + tokenizers + safetensors + modelscope
 # - transformers 4.57.1：与 torchtune v0.6.x 的 LlamaModel / Qwen2
 #   forward 签名匹配；5.x 已重命名部分属性
-# - torchao 0.13.0：v0.6.x common_utils.py:19 从 torchao.dtypes.nf4tensor
-#   import NF4Tensor；0.14.0+ 删了 dtypes 子模块，0.15+ 把 NF4Tensor
-#   重命名成 Int4Tensor，0.18+ 才在 torchao.quantization 重新暴露
-#   NF4Tensor（但只给 main 分支用）。pin exact version 防止 CI 漂到
-#   坏版本——之前 pin torchao<0.16 解析到 0.15.0，CI 跑 main 时 setup
-#   直接 ImportError 挂掉
+# - torchao pin 由 setup_torchtune() 内部按 checkout 探测动态决定：
+#   v0.6.x 走 torchao.dtypes.nf4tensor（pin 0.13.0），main HEAD 走
+#   torchao.quantization（pin 0.18.0）。两个路径互不兼容，所以 pin
+#   不能写死——CI 跑 release 时 setup 选 0.13.0，跑 main 时选 0.18.0
+#   （setup_example.sh 内 probe common_utils.py:19 import line）
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -90,20 +89,72 @@ prepare_fixtures() {
 }
 
 setup_torchtune() {
-  # torchtune from the guarded release checkout, plus the verified
-  # dependency line (2026-09-15, coder hdc-stable-npu-4 逐例验证):
-  #   transformers 4.57.1 + omegaconf + torchao<0.16 + tokenizers
-  #   + safetensors + tqdm + pyyaml + modelscope
-  # PIP_CONSTRAINT keeps CUDA metapackages out (constraints-npu.txt).
+  # torchtune from the guarded checkout. The torchao pin is decided
+  # dynamically because the NF4Tensor import path in
+  # torchtune/modules/common_utils.py:19 has moved three times:
+  #
+  #   torchao 0.10-0.13 : torchao.dtypes.nf4tensor.NF4Tensor  (v0.6.x)
+  #   torchao 0.14-0.17 : dtypes submodule deleted; quantization
+  #                       renamed NF4Tensor -> Int4Tensor. Anything
+  #                       importing NF4Tensor breaks here.
+  #   torchao 0.18+     : torchao.quantization.NF4Tensor
+  #                       re-exposed (main HEAD post PR #2960).
+  #
+  # Picking the wrong line is fatal — v0.6.x + torchao 0.18 throws
+  # ModuleNotFoundError on import; main + torchao 0.13 throws the
+  # same. There is no single torchao that satisfies both import paths,
+  # so we must probe the actual checkout before pinning.
   echo "installing torchtune from $TARGET_ROOT"
   python -m pip install -e "$TARGET_ROOT"
-  # torchao 0.13.0 has torchao.dtypes.nf4tensor.NF4Tensor (v0.6.x common_utils.py:19
-  # imports from that path); 0.14.0+ removed the dtypes submodule and 0.15+
-  # renamed NF4Tensor→Int4Tensor in torchao.quantization. 0.18+ re-exposed
-  # NF4Tensor under quantization, but that path is only used by torchtune main,
-  # not v0.6.x. Pin exactly so CI doesn't drift to a broken version.
   python -m pip install "transformers==4.57.1" "omegaconf>=2.3,<3" \
-    "torchao==0.13.0" tokenizers safetensors tqdm pyyaml
+    tokenizers safetensors tqdm pyyaml
+
+  # Probe which NF4Tensor import path the torchtune checkout uses, then
+  # install the matching torchao exact pin. Probe runs against the
+  # editable-installed source, so it reflects whatever ref the engine
+  # checked out (release tag OR main HEAD).
+  local import_path torchao_pin
+  import_path="$(python -c "
+import importlib.util, pathlib
+p = pathlib.Path('$TARGET_ROOT') / 'torchtune' / 'modules' / 'common_utils.py'
+src = p.read_text() if p.exists() else ''
+for line in src.splitlines():
+    s = line.strip()
+    if s.startswith('from torchao') and 'NF4Tensor' in s:
+        print(s)
+        break
+else:
+    print('NF4Tensor_NOT_IMPORTED')
+")"
+  echo "torchtune common_utils.py NF4Tensor import: $import_path"
+  case "$import_path" in
+    "from torchao.dtypes.nf4tensor import NF4Tensor")
+      torchao_pin="torchao==0.13.0"
+      ;;
+    "from torchao.quantization import NF4Tensor")
+      # 0.18.0 re-exposed NF4Tensor under torchao.quantization; main
+      # HEAD depends on the exact 0.18 series (later 0.18.x keep the
+      # symbol but pin to whatever the upstream test grid currently
+      # passes — 0.18.0 is the first stable release with the re-add).
+      torchao_pin="torchao==0.18.0"
+      ;;
+    "NF4Tensor_NOT_IMPORTED")
+      # Newer torchtune may drop NF4Tensor entirely. Default to a
+      # neutral recent torchao and let setup proceed; recipe failures
+      # downstream will surface real reasons rather than setup noise.
+      echo "WARN: common_utils.py does not import NF4Tensor; skipping torchao pin"
+      torchao_pin=""
+      ;;
+    *)
+      echo "FATAL: unexpected NF4Tensor import line: $import_path" >&2
+      exit 1
+      ;;
+  esac
+  if [ -n "$torchao_pin" ]; then
+    echo "pinning $torchao_pin (matched import path)"
+    python -m pip install "$torchao_pin"
+  fi
+
   # importlib.metadata.version returns the real install tag for both
   # editable installs (where __version__ is empty string) and wheel
   # installs. torchtune.__version__ is "" by default in the source

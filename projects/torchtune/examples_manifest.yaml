@@ -18,11 +18,14 @@ supported:
   # ===== 已在 coder hdc-stable-npu-4（910B4×2, torch 2.9.0, torch_npu 2.9.0,
   # CANN 9.x）端到端跑通（setup_example.sh 实跑 + recipe exit 0），依赖线 pin
   # 见 setup_example.sh 注释 =====
-  # 验证日期：2026-09-16；torchtune checkout=v0.6.1（workflow default）；
-  # 关键 pin：torchao==0.13.0（NF4Tensor 在 torchao.dtypes.nf4tensor；
-  # 0.14.0+ 删了 dtypes，0.15+ 把 NF4Tensor 改名 Int4Tensor，
-  # 0.18+ 才在 torchao.quantization 重新暴露——但那个路径只给 main 分支用，
-  # v0.6.x 的 common_utils.py:19 走的是 dtypes 路径）。
+  # 验证日期：2026-09-16；torchtune checkout=v0.6.1（latest release，engine
+  # monitor 自动取）；workflow_dispatch default=main（匹配 peft/torchtitan 模式，
+  # main HEAD 受 torch ABI 限制不在本镜像通过——见 setup_example.sh 注释）。
+  # 关键 pin：setup_torchtune() 动态探测 common_utils.py:19 的 NF4Tensor
+  # import line：
+  #   v0.6.x  → torchao.dtypes.nf4tensor（pin torchao==0.13.0）
+  #   main    → torchao.quantization（pin torchao==0.18.0，需 torch>=2.11；
+  #             当前 torch 2.9.0+cpu NPU 镜像下 main HEAD setup 必失败）
 
   # LoRA SFT：Qwen2.5-0.5B + 50 行 alpaca，1 step，1 卡 ~12 秒
   - path: recipes/lora_finetune_single_device.py
