@@ -97,14 +97,22 @@ files:
 
 ## peft 的现状（实测 ModelScope API 后，2026-09-16）
 
-peft examples 所需的 5 个模型 + 4 个数据集里：
+peft 9 个 supported 例的 model/dataset 来源，按例分别走哪条路：
 
-- **5 个模型（roberta-base / bert-base-uncased / mt0-small / dinov2-base /
-  Qwen2.5-0.5B）+ 2 个数据集（nyu-mll/glue、modelscope/imdb）**：
-  ModelScope 都有镜像，setup_example.sh 的 `modelscope.snapshot_download`
-  一次性拉到本机再 symlink plant 到 `~/.cache/huggingface/hub/`，runner
-  上 `from_pretrained(<hf_id>)` / `load_dataset(<hf_id>, ...)` 命中本地
-  缓存，不走网络（注意 imdb 的命名是 `modelscope/imdb` 不是 `imdb`）
-- **beans、gtfintechlab/financial_phrasebank_sentences_allagree**：
-  ModelScope 没有，**只能走本目录**（cache-seed/peft/manifest.yaml
-  已列）——本机代理下 → bundle_cache.py stage → push → runner 解出
+| 例 | model 路径来源 | dataset 路径来源 |
+|---|---|---|
+| sft | overlay `--model_name_or_path ${SFT_MODEL_PATH}`（Qwen0.5B 本地） | overlay fixture `ci_sft_8.jsonl` |
+| miss / mica | overlay `--base_model_name_or_path ${SFT_MODEL_PATH}` | 硬编码 `imdb`（setup 预下）|
+| supertuning | overlay `--base_model ${SFT_MODEL_PATH}` | overlay fixture `ci_supertuning_8.jsonl` |
+| beft | 硬编码 `bigscience/mt0-small`（setup plant） | 硬编码 `gtfintechlab/financial_phrasebank...` → **cache-seed** |
+| pvera | 硬编码 `facebook/dinov2-base`（setup plant） | 硬编码 `beans` → **cache-seed** |
+| sequence_classification | overlay `--model_name_or_path ${BERT_BASE_UNCASED_PATH}` | `glue/mrpc`（setup 预下）|
+| adamss ×2 | overlay `--model_name_or_path ${ROBERTA_BASE_PATH}` | `glue/mrpc` 或 `glue/cola`（setup 预下）|
+
+**setup_example.sh 只 plant 真正硬编码的**：mt0-small（beft）、dinov2-base
+（pvera），其它 model 走 overlay 传本地路径；dataset 用 `load_dataset(...)`
+预热 cache。
+
+**本目录只装 ModelScope 没有的 2 个**：
+- `beans`（~162MB parquet）
+- `gtfintechlab/financial_phrasebank_sentences_allagree`（~196KB）

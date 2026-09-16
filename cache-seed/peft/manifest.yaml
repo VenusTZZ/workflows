@@ -7,10 +7,17 @@
 #   ✗  beans                      ModelScope 没有
 #   ✗  gtfintechlab/financial_phrasebank_sentences_allagree   ModelScope 没有
 #
-# 所以本目录需要 stage 的只有下面这 2 个数据集；其余走 setup_example.sh
-# 里的 modelscope.snapshot_download。
+# 所以本目录需要 stage 的只有下面这 2 个数据集。
+# - 5 个 model 走 setup_example.sh 里 modelscope.snapshot_download：
+#     Qwen2.5-0.5B / roberta-base / bert-base-uncased 由 overlay
+#     传 ${SFT_MODEL_PATH} / ${ROBERTA_BASE_PATH} / ${BERT_BASE_UNCASED_PATH}
+#     走本地路径（无需 plant）；
+#     bigscience/mt0-small（beft）/ facebook/dinov2-base（pvera）脚本硬编码
+#     hub_id，setup 阶段 symlink plant 到 ~/.cache/huggingface/hub/
+# - nyu-mll/glue（mrpc/cola）+ modelscope/imdb 走 setup 阶段的
+#   load_dataset(...) 预热 cache
 #
-# 用法（仅这两个）：
+# 下面这两个走本目录（cache-seed 通用流程）：
 #   huggingface-cli download beans --repo-type dataset
 #   huggingface-cli download gtfintechlab/financial_phrasebank_sentences_allagree --repo-type dataset
 #

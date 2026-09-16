@@ -137,17 +137,21 @@ MODEL_CACHE = Path(os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cac
 HUB_ROOT = Path(os.path.expanduser("~/.cache/huggingface/hub"))
 HF_API = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/") + "/api"
 
-# (ms_id, hf_hub_id or None, kind) — kind is "model" or "dataset".
-# hf_id=None means: skip planting, just expose local path (for Qwen).
-TO_PLANT = [
-    ("Qwen/Qwen2.5-0.5B",               None,                     "model"),
-    ("AI-ModelScope/roberta-base",      "roberta-base",           "model"),
-    ("AI-ModelScope/bert-base-uncased", "bert-base-uncased",      "model"),
-    ("bigscience/mt0-small",            "bigscience/mt0-small",   "model"),
-    ("facebook/dinov2-base",            "facebook/dinov2-base",   "model"),
-    ("modelscope/imdb",                 "stanfordnlp/imdb",       "dataset"),
-    ("nyu-mll/glue",                    "nyu-mll/glue",           "dataset"),
+# (1) snapshot_download → env var: 例里 overlay 传 ${VAR}，
+#     from_pretrained(<local_path>) 直接吃本地，无需 plant
+TO_ENV = [
+    ("Qwen/Qwen2.5-0.5B",               "SFT_MODEL_PATH"),         # sft/miss/mica/supertuning
+    ("AI-ModelScope/roberta-base",      "ROBERTA_BASE_PATH"),      # adamss x2（overlay 注入）
+    ("AI-ModelScope/bert-base-uncased", "BERT_BASE_UNCASED_PATH"), # sequence_classification
 ]
+
+# (2) snapshot_download + plant: 例里硬编码 hub_id（beft/pvera），
+#     from_pretrained(<hub_id>) 必须命中本地 cache，否则会去打 xet
+TO_PLANT = [
+    ("bigscience/mt0-small",  "bigscience/mt0-small"),   # beft_finetuning.py 硬编码
+    ("facebook/dinov2-base",  "facebook/dinov2-base"),   # pvera/...py 硬编码
+]
+
 
 def fetch_sha(hf_id, kind):
     url = f"{HF_API}/{kind}s/{hf_id}"
@@ -155,13 +159,11 @@ def fetch_sha(hf_id, kind):
     r.raise_for_status()
     return r.json().get("sha") or r.json().get("oid")
 
-def plant(ms_id, hf_id, kind):
-    src = Path(snapshot_download(ms_id, cache_dir=str(MODEL_CACHE), repo_type=kind))
-    if hf_id is None:
-        return src
-    sha = fetch_sha(hf_id, kind)
-    repo_kind = "models" if kind == "model" else "datasets"
-    repo_dir = HUB_ROOT / f"{repo_kind}--{hf_id.replace('/', '--')}"
+
+def plant_model(ms_id, hf_id):
+    src = Path(snapshot_download(ms_id, cache_dir=str(MODEL_CACHE)))
+    sha = fetch_sha(hf_id, "model")
+    repo_dir = HUB_ROOT / f"models--{hf_id.replace('/', '--')}"
     snap_dir = repo_dir / "snapshots" / sha
     snap_dir.mkdir(parents=True, exist_ok=True)
     (repo_dir / "refs").mkdir(exist_ok=True)
@@ -171,39 +173,61 @@ def plant(ms_id, hf_id, kind):
     for item in src.rglob("*"):
         if not item.is_file():
             continue
-        rel = item.relative_to(src)
-        dest = snap_dir / rel
+        dest = snap_dir / item.relative_to(src)
+        dest.parent.mkdir(parents=True, exist_ok=True)
         if dest.exists() or dest.is_symlink():
             continue
-        dest.parent.mkdir(parents=True, exist_ok=True)
         try:
             dest.symlink_to(item.resolve())
         except FileExistsError:
-            pass  # sibling leg already planted it
-    print(f"planted {ms_id} -> {hf_id}@{sha[:8]}", flush=True)
-    return src
+            pass
+    print(f"planted {hf_id}@{sha[:8]}", flush=True)
 
-qwen_path = None
-failures = []
-for ms_id, hf_id, kind in TO_PLANT:
+
+failures: list[str] = []
+
+# (1) snapshot → env var
+for ms_id, var_name in TO_ENV:
     try:
-        path = plant(ms_id, hf_id, kind)
-        if hf_id is None:
-            qwen_path = path
+        local = Path(snapshot_download(ms_id, cache_dir=str(MODEL_CACHE)))
+        with open(os.environ["GITHUB_ENV"], "a") as fh:
+            fh.write(f"{var_name}={local}\n")
+        print(f"{var_name}={local}", flush=True)
     except Exception as exc:
-        failures.append(f"{ms_id}: {type(exc).__name__}: {exc}")
-        print(f"FAIL {ms_id}: {exc}", flush=True)
+        failures.append(f"{ms_id} (env): {type(exc).__name__}: {exc}")
+        print(f"FAIL {ms_id} (env): {exc}", flush=True)
 
-if qwen_path is not None:
-    with open(os.environ["GITHUB_ENV"], "a") as fh:
-        fh.write(f"SFT_MODEL_PATH={qwen_path}\n")
-    print("SFT_MODEL_PATH=", qwen_path, flush=True)
+# (2) snapshot + plant
+for ms_id, hf_id in TO_PLANT:
+    try:
+        plant_model(ms_id, hf_id)
+    except Exception as exc:
+        failures.append(f"{ms_id} (plant): {type(exc).__name__}: {exc}")
+        print(f"FAIL {ms_id} (plant): {exc}", flush=True)
+
+# (3) 预热 dataset：miss/mica 硬编码 imdb 1%；adamss/no_lora 用 glue mrpc，
+#     adamss_manual 默认 cola。用 load_dataset 复刻 runtime 调用 → 纯 cache hit。
+# 注意：beans、financial_phrasebank 不在这里——ModelScope 没有，走 cache-seed/peft
+try:
+    from datasets import load_dataset
+    for label, args, kwargs in [
+        ("imdb-1pct",  ("imdb",),            {"split": "train[:1%]"}),
+        ("glue-mrpc",  ("glue", "mrpc"),     {}),
+        ("glue-cola",  ("glue", "cola"),     {}),
+    ]:
+        try:
+            load_dataset(*args, **kwargs)
+            print(f"prefetched {label}: {args} {kwargs}", flush=True)
+        except Exception as exc:
+            failures.append(f"dataset {label}: {type(exc).__name__}: {exc}")
+            print(f"FAIL dataset {label}: {exc}", flush=True)
+except ImportError:
+    print("datasets not installed; cannot prefetch", file=sys.stderr, flush=True)
 
 if failures:
-    print(f"modelscope plant incomplete: {failures}", file=sys.stderr, flush=True)
-    # Don't fail setup on planting errors — examples that need planted
-    # content will surface the real failure when they actually try to
-    # load. Hard-exiting here would hide whether pip install worked.
+    print(f"setup_peft incomplete: {failures}", file=sys.stderr, flush=True)
+    # Don't fail setup on prefetch errors — examples that need the data
+    # will surface the real failure when they actually try to load.
 PY
 }
 
