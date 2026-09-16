@@ -38,8 +38,8 @@ Python 3.xxx
 **安装 torch 与 torch_npu。** 装完校验 NPU 运行时，is_available 须为 True。
 
 ```shell #test id="install-torch"
-pip install torch==2.10.0 torchvision==0.25.0
-pip install --no-deps torch-npu==2.10.0.post4
+pip install torch==2.10.0 torchvision==0.25.0 >/dev/null 2>&1
+pip install --no-deps torch-npu==2.10.0.post4 >/dev/null 2>&1
 python -c "import torch, torch_npu; print('torch', torch.__version__); print('torch_npu', torch_npu.__version__); print('is_available', torch.npu.is_available()); print('count', torch.npu.device_count())"
 ```
 
@@ -55,12 +55,12 @@ count 1
 **从源码安装 vLLM 与 vLLM-Ascend。** vLLM 策略为 ROLL 提供高吞吐 rollout，昇腾运行时由 vLLM-Ascend 插件提供，两包版本必须配套。装完用 triton-ascend 顶替 CUDA 版 triton，再 import 验证。
 
 ```shell #test id="install-vllm"
-git clone -b v0.23.0 https://github.com/vllm-project/vllm.git vllm-src
-git clone -b v0.23.0rc1 https://github.com/vllm-project/vllm-ascend.git vllm-ascend-src
-cd vllm-src && VLLM_TARGET_DEVICE=empty pip install -e . && cd ..
-cd vllm-ascend-src && git submodule update --init --recursive && pip install -r requirements.txt --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi && SOC_VERSION=ascend910b1 pip install -e . --no-build-isolation --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi && cd ..
-pip uninstall -y triton
-pip install --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi triton-ascend==3.2.1
+git clone -b v0.23.0 https://github.com/vllm-project/vllm.git vllm-src &&
+git clone -b v0.23.0rc1 https://github.com/vllm-project/vllm-ascend.git vllm-ascend-src &&
+cd vllm-src && VLLM_TARGET_DEVICE=empty pip install -e . >/dev/null 2>&1 && cd .. &&
+cd vllm-ascend-src && git submodule update --init --recursive >/dev/null 2>&1 && pip install -r requirements.txt --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi >/dev/null 2>&1 && SOC_VERSION=ascend910b1 pip install -e . --no-build-isolation --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi >/dev/null 2>&1 && cd .. &&
+pip uninstall -y triton >/dev/null 2>&1 &&
+pip install --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi triton-ascend==3.2.1 >/dev/null 2>&1 &&
 python -c "import vllm, vllm_ascend; print('vllm', vllm.__version__)"
 ```
 
@@ -73,12 +73,12 @@ vllm xxx
 **克隆仓库并安装依赖。** PyPI 上的 roll 包名与本项目无关，从 GitHub 源码安装。在仓库内安装官方 agentic 依赖清单，按昇腾镜像配套 transformers 版本，补齐 agentic 环境注册所需的两个包，最后可编辑模式安装 ROLL 并校验环境管理模块可导入。
 
 ```shell #test id="install-roll"
-git clone https://github.com/alibaba/ROLL.git
-pip install -r ROLL/requirements_common.txt
-pip install "transformers==4.57.6" "tensorboard==2.20.0"
-pip install reasoning-gym==0.1.23
-pip install --no-deps gem-llm==0.0.4
-pip install -e ./ROLL
+git clone https://github.com/alibaba/ROLL.git &&
+pip install -r ROLL/requirements_common.txt >/dev/null 2>&1 &&
+pip install "transformers==4.57.6" "tensorboard==2.20.0" >/dev/null 2>&1 &&
+pip install reasoning-gym==0.1.23 >/dev/null 2>&1 &&
+pip install --no-deps gem-llm==0.0.4 >/dev/null 2>&1 &&
+pip install -e ./ROLL >/dev/null 2>&1 &&
 python -c "import roll.pipeline.agentic.env_manager.traj_env_manager; print('roll ok')"
 ```
 
@@ -239,17 +239,19 @@ cd ROLL && python examples/start_agentic_pipeline.py --config_path agentic_froze
 ```
 
 ```shell #test-result id="run-agentic"
+...
 pipeline complete!
+...
 ```
 
 **校验训练产物。** 训练指标写入 output/tensorboard，校验事件文件存在。
 
 ```shell #test id="verify-output"
-ls ROLL/output/tensorboard
+ls ROLL/output/tensorboard/events*
 ```
 
 ```shell #test-result id="verify-output" fuzzy='xxx'
-events.out.tfevents.xxx
+ROLL/output/tensorboard/events.out.tfevents.xxx
 ```
 
 ## 更多用法
