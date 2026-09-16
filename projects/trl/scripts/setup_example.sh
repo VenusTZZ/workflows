@@ -98,43 +98,65 @@ prepare_fixtures() {
 }
 
 setup_peft_lora() {
-  # Covers the small-model LoRA examples (DPO/TPO). Installs TRL from the
-  # target checkout with the peft extra; Pillow is needed by the VLM
-  # processor of dpo_reduce_hallucinations. trackio/kernels from the
-  # upstream dependency headers are skipped because CI passes
-  # --report_to none and the default attention implementation.
-  echo "installing TRL from source at $TARGET_ROOT with peft extra"
-  python -m pip install -e "$TARGET_ROOT[peft]"
-  python -m pip install Pillow
+  # DPO / TPO LoRA examples. Dependencies aligned to /// script block.
+  # Union: trl[peft], Pillow>=9.4.0, torchvision, trackio, kernels
+  echo "=> installing TRL from ${TARGET_ROOT} with extra deps"
+  python -m pip install -e "${TARGET_ROOT}[peft]"
+  python -m pip install "Pillow>=9.4.0" torchvision trackio kernels
   python -c "import trl; print('TRL version:', trl.__version__)"
-
-  # Pre-download example model weights from ModelScope (China-reachable)
-  # because runners cannot reach HuggingFace. The returned local snapshot
-  # dirs are exported as env vars for the example (overlay_args in
-  # examples_manifest.yaml reference them via ${VAR}).
-  # Pinned to the doc's verified line: modelscope>=1.38 splits the hub
-  # code into modelscope-hub, and the fresh 1.40.1 wheel's loose
-  # ">=0.4.2" floor breaks import when the mirror lags on hub 0.4.3.
-  python -m pip install "modelscope==1.37.0"
-  python - <<'PY'
-import os
-# Non-TTY CI logs: throttle tqdm refreshes instead of disabling, so
-# download progress is visible but not one line per MB. Tune via env.
+  
+  echo "=> downloading models from ModelScope"
+  ms_download_models \
+    "DPO_MODEL_PATH=Qwen/Qwen2.5-VL-3B-Instruct" \
+    "TPO_MODEL_PATH=Qwen/Qwen3-0.6B"
+}
+ms_download_models() {
+  # modelscope>=1.38 splits its hub code into modelscope-hub. Pin the last
+  # pre-split release because the runner's pip mirror may only expose a hub
+  # version that is too old for the latest modelscope wheel.
+  python -m pip install -q "modelscope==1.37.0"
+  TQDM_MININTERVAL="${TQDM_MININTERVAL:-15}" python - "$@" <<'PY'
+import os, sys
 os.environ.setdefault("TQDM_MININTERVAL", os.environ.get("TQDM_MININTERVAL", "15"))
 from modelscope import snapshot_download
-
 MODEL_CACHE = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
-mapping = {
-    "DPO_MODEL_PATH": "Qwen/Qwen2.5-VL-3B-Instruct",
-    "TPO_MODEL_PATH": "Qwen/Qwen3-0.6B",
-}
-for env_name, model_id in mapping.items():
+for pair in sys.argv[1:]:
+    env_name, model_id = pair.split("=", 1)
     local = snapshot_download(model_id, cache_dir=MODEL_CACHE)
     with open(os.environ["GITHUB_ENV"], "a") as fh:
         fh.write(f"{env_name}={local}\n")
 PY
 }
 
+setup_gold_distill() {
+  # GOLD 跨 tokenizer logit 蒸馏(gold_chatbot_arena)。
+  # 声明块: trl @ git+..., peft, trackio
+  # (trl 装被测本地 checkout 代替 git+ 源; peft 被 [peft] extra 覆盖)。
+  echo "=> installing TRL from ${TARGET_ROOT} with peft extra"
+  python -m pip install -e "${TARGET_ROOT}[peft]"
+  python -m pip install trackio
+  python -c "import trl; print('TRL version:', trl.__version__)"
+  
+  echo "=> downloading models from ModelScope"
+  ms_download_models \
+    "GOLD_STUDENT_PATH=LLM-Research/Llama-3.2-1B-Instruct" \
+    "GOLD_TEACHER_PATH=Qwen/Qwen2-1.5B-Instruct"
+}
+
+setup_self_distill() {
+  # SSD / SDFT / SDPO self-distillation. Union of /// script deps:
+  # trl, peft, trackio, kernels, math-verify, latex2sympy2_extended
+  # (trl from local checkout; peft covered by [peft] extra).
+  echo "=> installing TRL from ${TARGET_ROOT} with extra deps"
+  python -m pip install -e "${TARGET_ROOT}[peft]"
+  python -m pip install trackio kernels math-verify latex2sympy2_extended
+  python -c "import trl; print('TRL version:', trl.__version__)"
+  
+  echo "=> downloading models from ModelScope"
+  ms_download_models \
+    "SSD_MODEL_PATH=Qwen/Qwen2.5-0.5B-Instruct" \
+    "SDPO_MODEL_PATH=Qwen/Qwen2.5-0.5B-Instruct"
+}
 supported_profiles() {
   declare -F | awk '/^declare -f setup_/ { sub(/^declare -f setup_/, ""); print }' | paste -sd' ' -
 }
@@ -143,6 +165,7 @@ if ! declare -F "setup_${PROFILE}" >/dev/null 2>&1; then
   echo "unknown profile: ${PROFILE} (supported: $(supported_profiles))" >&2
   exit 1
 fi
+
 
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
 GITHUB_WORKSPACE="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"

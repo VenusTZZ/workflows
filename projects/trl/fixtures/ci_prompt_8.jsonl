@@ -1,0 +1,8 @@
+{"prompt": [{"role": "user", "content": "Write a Python function that returns the n-th Fibonacci number."}]}
+{"prompt": [{"role": "user", "content": "Write a Python function that checks whether a string is a palindrome."}]}
+{"prompt": [{"role": "user", "content": "Write a Python function that flattens a nested list into a flat list."}]}
+{"prompt": [{"role": "user", "content": "Write a Python function that returns the factorial of a non-negative integer."}]}
+{"prompt": [{"role": "user", "content": "Write a Python function that reverses the words in a sentence."}]}
+{"prompt": [{"role": "user", "content": "Write a Python function that removes duplicate items while keeping order."}]}
+{"prompt": [{"role": "user", "content": "Write a Python function that counts the frequency of each word in a string."}]}
+{"prompt": [{"role": "user", "content": "Write a Python function that merges two sorted lists into one sorted list."}]}

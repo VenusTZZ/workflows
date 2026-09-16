@@ -34,6 +34,12 @@ mkdir -p "$CI_OUTPUT_DIR"
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
+
+# hf-mirror is the CI network path for the few examples whose dataset is a
+# HuggingFace id (GOLD chatbot_arena, SDPO gsm8k); it does not change the
+# example script. Local-jsonl fixtures (DPO/TPO/SSD/SDFT) ignore HF_ENDPOINT.
+export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+
 python -c "import torch, torch_npu; print('NPU available:', torch.npu.is_available(), 'devices:', torch.npu.device_count())"
 
 expand_overlay() {
