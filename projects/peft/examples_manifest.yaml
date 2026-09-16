@@ -119,7 +119,8 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --base_model ${SFT_MODEL_PATH}   # 默认 meta-llama/Llama-3.2-1B（gated + 大）：换 0.5B
-      - --batch_size 2   # 默认 1：guanaco 全 epoch 308 步，batch 2 控制时长（coder 实测 ~13 分钟）
+      - --data_path ${TARGET_ROOT}/fixtures/ci_supertuning_8.jsonl   # 默认 timdettmers/openassistant-guanaco：该仓文件已转 xet 存储，hf-mirror 的 resolve 对 xet 文件 302 直指 cas-bridge.xethub.hf.co（runner 不可达，HF_HUB_DISABLE_XET 也救不了 plain 路径；ModelScope 无此数据集）。换 8 行真实样本 fixture（{"text": "### Human:...### Assistant:..."} 同上游 schema），run_example.sh 的 load_dataset 垫片会映射 train/test 双 split
+      - --batch_size 2   # 默认 1：控时长
     timeout_minutes: 45
 
 # ===== unsupported（每条附理由：coder npu-3 2026-09-14 逐例验证 / 静态分析） =====

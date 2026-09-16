@@ -85,7 +85,22 @@ ensure_torch_stack() {
   # line (torch 2.12.0 + torch_npu 2.12.0 + CANN 9.1.0 - per
   # projects/torchtitan/docs/Quick-start-Ascend.md and the case doc
   # docs/case-torchtitan-v0.3.0-torch2.12-npu.md). Otherwise install
-  # via aliyun (torch wheel) + ascend (torch_npu wheel) dual-source.
+  # torch + torch_npu via separate indices.
+  #
+  # Why not `pip install -i aliyun torch==2.12.0`: aliyun (and the
+  # cluster pip cache, both PyPI mirrors) only host the CUDA torch
+  # wheel, whose METADATA declares
+  # `Requires-Dist: cuda-toolkit==13.0.2`. That conflicts with
+  # constraints-npu.txt's `cuda-toolkit<0` and the resolver dies with
+  # ResolutionImpossible. The CPU variant is `torch==2.12.0+cpu`
+  # (PEP 440 local-version label) and is published ONLY at
+  # https://download.pytorch.org/whl/cpu/ - never on PyPI / aliyun /
+  # huaweicloud / cluster cache. So pip must fetch the CPU wheel
+  # directly from pytorch.org instead of going through any index.
+  # We pin the cp312 / manylinux_2_28 / aarch64 filename because the
+  # CI image is cann:9.1.0-...-py3.12 on ubuntu22.04 arm64 (verified
+  # in projects/torchtitan/tests/test_quick_start_ascend.py +
+  # examples_manifest.yaml image field).
   if python -c "
 import torch, torch_npu
 raise SystemExit(
@@ -94,8 +109,24 @@ raise SystemExit(
 " 2>/dev/null; then
     echo "reusing image torch stack ($(python -c 'import torch; print(torch.__version__)'))"
   else
-    echo "installing torch==2.12.0 torch_npu==2.12.0"
-    pip install -i "$ALIYUN_PIP_INDEX" torch==2.12.0
+    echo "installing torch==2.12.0+cpu (direct URL from pytorch.org) + torch_npu==2.12.0"
+    # Direct URL: pip downloads the specific +cpu wheel file and
+    # resolves its (pure-Python) deps from whichever index is active.
+    # No cuda-toolkit appears in the dependency set so the constraint
+    # file never triggers. Coder verified the URL returns 200 with
+    # Content-Length 150023160 (~143 MB) - the file exists.
+    pip install --no-deps \
+      'https://download.pytorch.org/whl/cpu/torch-2.12.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl'
+    # Pull torch's pure-Python deps (filelock, typing-extensions,
+    # networkx, sympy, jinja2, fsspec) from aliyun so the import
+    # chain `import torch` -> `filelock` -> ... succeeds. Confirmed
+    # via `unzip -p ... torch-2.12.0+cpu.dist-info/METADATA |
+    # grep Requires-Dist` on 2026-09-16: the +cpu wheel declares
+    # none of these as Requires-Dist on cuda-toolkit / nvidia-*,
+    # so the resolver is safe under constraints-npu.txt.
+    pip install -i "$ALIYUN_PIP_INDEX" \
+      'filelock' 'typing-extensions>=4.10.0' 'setuptools<82' \
+      'sympy>=1.13.3' 'networkx>=2.5.1' 'jinja2' 'fsspec>=0.8.5'
     pip_ascend torch_npu==2.12.0
   fi
 }
@@ -160,8 +191,25 @@ apply_compat_patches() {
   # Patch 4: ChunkedLossWrapper -> CrossEntropyLoss. The wrapper
   # does backward-inside-forward which leaks meta tensors on NPU
   # (case doc §2.5); CE loss is mathematically equivalent for the
-  # smoke. The sed uses `c\` to replace the matched range in-place.
-  if ! grep -q 'global_vocab_size=decoder_vocab_size' torchtitan/models/llama3/config_registry.py; then
+  # smoke. The sed `/start/,/end/c\` matches the FIRST occurrence in
+  # the file (sed's default for non-numeric addresses) - this is the
+  # llama3_debugmodel config at line 37; later occurrences at lines
+  # 187/260/312/361 belong to other configs and must stay intact.
+  #
+  # Guard pattern MUST distinguish unpatched from patched state.
+  # The previous guard `grep -q 'global_vocab_size=decoder_vocab_size'`
+  # matched the unpatched file too (line 39 is
+  # `loss_fn=CrossEntropyLoss.Config(global_vocab_size=..., ...)`
+  # inside the unpatched ChunkedLossWrapper), so the patch silently
+  # no-op'd on every run. Caught only when running setup_example.sh
+  # end-to-end on 2026-09-16 - the original 4 supported verifications
+  # applied patches by hand and never exercised this codepath.
+  # The post-patch signature at 8-space indent
+  # `        loss=CrossEntropyLoss.Config(` does not exist in
+  # upstream v0.3.0 (which has ChunkedLossWrapper.Config at that
+  # indent; the only top-level CrossEntropyLoss is at 4-space indent
+  # inside `config.loss = CrossEntropyLoss.Config(` at line 178).
+  if ! grep -q '^        loss=CrossEntropyLoss.Config($' torchtitan/models/llama3/config_registry.py; then
     sed -i '/^        loss=ChunkedLossWrapper.Config($/,/^        ),$/c\        loss=CrossEntropyLoss.Config(\n            global_vocab_size=decoder_vocab_size(model_spec),\n        ),' torchtitan/models/llama3/config_registry.py
     echo "patched ChunkedLossWrapper -> CrossEntropyLoss in torchtitan/models/llama3/config_registry.py"
   fi

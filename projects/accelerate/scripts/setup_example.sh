@@ -4,11 +4,11 @@
 # accelerate itself is installed from TARGET_ROOT (the release checkout
 # under test), so the guarded tag is exactly the code that runs.
 #
-# The upstream examples/requirements.txt is deliberately NOT installed:
-# it pins huggingface_hub>=0.20.0 + accelerate + evaluate + schedulefree;
-# the latter is only needed by examples/by_feature/schedule_free.py
-# (which is in our unsupported list). We install the checkout plus the
-# minimal NLP+CV stack instead.
+# The upstream examples/requirements.txt is deliberately NOT installed
+# wholesale: we install the checkout plus the minimal NLP+CV+inference
+# stack instead. schedulefree (by_feature/schedule_free.py) joins the
+# NLP profile; fire / webdataset / av / diffusers
+# (inference/distributed/*) belong to the accelerate-infer profile.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -60,7 +60,8 @@ raise SystemExit(
     0 if torch.__version__.startswith('2.9.0')
     and torch_npu.__version__.startswith('2.9.0') else 1)
 "; then
-    echo "reusing image torch stack ($(python -c 'import torch; print(torch.__version__)'))"
+    echo "reusing image torch stack (" \
+      "$(python -c 'import torch; print(torch.__version__)'))"
     return
   fi
   echo "installing torch==2.9.0 torch_npu==2.9.0.post2"
@@ -98,6 +99,22 @@ from datasets import load_dataset
 ds = load_dataset("nyu-mll/glue", "mrpc")
 print("mrpc splits:", {k: len(v) for k, v in ds.items()})
 PY
+
+  # Extra NLP assets for the newer supported entries:
+  # - HuggingFaceTB/SmolLM-360M + Salesforce/wikitext wikitext-2-v1
+  #   (by_feature/gradient_accumulation_for_autoregressive_models.py;
+  #   upstream switched it from GPT-2+ELI5 to this small combo)
+  python - <<'PY'
+import os
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+from transformers import AutoModelForCausalLM, AutoTokenizer
+AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-360M")
+AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM-360M")
+from datasets import load_dataset
+ds = load_dataset("Salesforce/wikitext", "wikitext-2-v1")
+print("smollm OK, wikitext-2 splits:", {k: len(v) for k, v in ds.items()})
+PY
 }
 
 # Pre-download the Oxford-IIT Pet Dataset used by cv_example.py +
@@ -110,7 +127,8 @@ PY
 # `^(.*)_\d+\.jpg$` used to extract the class label).
 prepare_pets_data() {
   local dst="$TARGET_ROOT/fixtures/pets/images"
-  if [[ -d "$dst" ]] && [[ "$(ls -A "$dst" 2>/dev/null | wc -l)" -gt 1000 ]]; then
+  if [[ -d "$dst" ]] \
+     && [[ "$(ls -A "$dst" 2>/dev/null | wc -l)" -gt 1000 ]]; then
     echo "reusing pets dataset at $dst ($(ls "$dst" | wc -l) files)"
     return
   fi
@@ -148,9 +166,21 @@ setup_accelerate-nlp() {
   python -m pip install -e "$TARGET_ROOT" "torch==2.9.0" "torch_npu==2.9.0.post2"
   # scikit-learn is needed by the `evaluate` library's glue metric (sklearn's
   # f1_score, matthews_corrcoef); not a direct dep of evaluate or transformers
-  # so it must be listed explicitly.
-  python -m pip install transformers datasets evaluate safetensors scikit-learn "torch==2.9.0"
-  python -c "import torch, torch_npu; assert torch.__version__.startswith('2.9.0'), f'torch drifted to {torch.__version__}'; import accelerate, transformers, datasets, evaluate, sklearn; print('accelerate', accelerate.__version__, '/ transformers', transformers.__version__, '/ datasets', datasets.__version__, '/ torch', torch.__version__, '/ sklearn', sklearn.__version__)"
+  # so it must be listed explicitly. schedulefree is pure Python (no native
+  # extension) and only by_feature/schedule_free.py imports it.
+  python -m pip install \
+    transformers datasets evaluate safetensors scikit-learn schedulefree "torch==2.9.0"
+  python -c "
+import torch, torch_npu
+assert torch.__version__.startswith('2.9.0'), \
+    f'torch drifted to {torch.__version__}'
+import accelerate, transformers, datasets, evaluate, sklearn
+print('accelerate', accelerate.__version__,
+      '/ transformers', transformers.__version__,
+      '/ datasets', datasets.__version__,
+      '/ torch', torch.__version__,
+      '/ sklearn', sklearn.__version__)
+"
   prepare_nlp_assets
 }
 
@@ -160,12 +190,69 @@ setup_accelerate-cv() {
   # torchvision ≤ 0.28.0 (matches torch 2.9.0 ABI; v0.29+ requires Stable ABI
   # symbols that torch 2.9 lacks — see `torchvision-v29-stable-abi` memory).
   python -m pip install "torchvision==0.24.0" "torch==2.9.0" timm
-  python -c "import torch, torch_npu; assert torch.__version__.startswith('2.9.0'), f'torch drifted to {torch.__version__}'; import timm, torchvision; print('timm', timm.__version__, '/ torchvision', torchvision.__version__)"
+  python -c "
+import torch, torch_npu
+assert torch.__version__.startswith('2.9.0'), \
+    f'torch drifted to {torch.__version__}'
+import timm, torchvision
+print('timm', timm.__version__,
+      '/ torchvision', torchvision.__version__)
+"
   prepare_pets_data
 }
 
+# Pre-download inference assets for the accelerate-infer profile
+# (examples/inference/distributed/*). snapshot_download fetches without
+# instantiating, so the 16G llava weights do not spike host RAM. All via
+# the HF mirror (engine sets HF_ENDPOINT; set default for local runs).
+# HF_HUB_DISABLE_XET is exported above: Xet-backed repos (SD v1.5 etc.)
+# cannot reconstruct chunks through the mirror (401).
+prepare_infer_assets() {
+  python - <<'PY'
+import os
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+from huggingface_hub import snapshot_download
+for repo, repo_type in [
+    ("microsoft/phi-2", "model"),
+    ("llava-hf/LLaVA-NeXT-Video-7B-hf", "model"),
+    ("malterei/LLaVA-Video-small-swift", "dataset"),
+    ("stable-diffusion-v1-5/stable-diffusion-v1-5", "model"),
+    ("facebook/mms-tts-eng", "model"),
+]:
+    path = snapshot_download(repo, repo_type=repo_type)
+    print(repo, "->", path)
+from datasets import load_dataset
+for name in ("svjack/pokemon-blip-captions-en-zh",):
+    ds = load_dataset(name)
+    print(name, "splits:", {k: len(v) for k, v in ds.items()})
+PY
+}
+
+setup_accelerate-infer() {
+  # Inference profile = NLP profile + generation/vision deps + models.
+  # torchvision: DiffusionPipeline → transformers.AutoImageProcessor pulls
+  # the torchvision op registrations; pin the same ABI-matched build as the
+  # cv profile (image's default torchvision pairs with its original torch,
+  # not our pinned 2.9.0). scipy: speech example's scipy.io.wavfile.
+  setup_accelerate-nlp
+  python -m pip install \
+    fire webdataset av diffusers scipy "torchvision==0.24.0" "torch==2.9.0"
+  python -c "
+import torch, torch_npu
+assert torch.__version__.startswith('2.9.0'), \
+    f'torch drifted to {torch.__version__}'
+import fire, webdataset, av, diffusers, scipy, torchvision
+print('av', av.__version__,
+      '/ diffusers', diffusers.__version__,
+      '/ torchvision', torchvision.__version__)
+"
+  prepare_infer_assets
+}
+
 supported_profiles() {
-  declare -F | awk '/^declare -f setup_/ { sub(/^declare -f setup_/, ""); print }' | paste -sd' ' -
+  declare -F | awk '/^declare -f setup_/ { sub(/^declare -f setup_/, ""); print }' \
+    | paste -sd' ' -
 }
 
 if ! declare -F "setup_${PROFILE}" >/dev/null 2>&1; then
@@ -176,6 +263,13 @@ fi
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
 GITHUB_WORKSPACE="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
 GITHUB_ENV="${GITHUB_ENV:?GITHUB_ENV is required}"
+
+# Xet-backed HF repos (e.g. stable-diffusion-v1-5) reconstruct chunks
+# straight from cas-server.xethub.hf.co, which hf-mirror cannot proxy
+# (observed 401 Unauthorized from China runners). Force the legacy HTTP
+# transfer path for the setup step and, via GITHUB_ENV, the run step.
+echo "HF_HUB_DISABLE_XET=1" >> "$GITHUB_ENV"
+export HF_HUB_DISABLE_XET=1
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 export PIP_CONSTRAINT="$(cd "$HERE/.." && pwd)/constraints-npu.txt"

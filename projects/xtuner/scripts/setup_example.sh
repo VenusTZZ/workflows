@@ -88,6 +88,20 @@ prepare_fixtures() {
 }
 
 setup_xtuner-llm() {
+  # scikit-image pulls GUI opencv-python 5.x as a transitive dep, whose
+  # cv2.abi3.so links libxcb.so.1 / libGL.so.1 — missing from the lean
+  # CANN runner image. Install the system libs before pip so any post-
+  # install `import cv2` (mmengine pulls cv2 via naive_visualization_hook)
+  # doesn't crash with libxcb.so.1 not found. Confirmed by CI run
+  # 35050200236 (2026-09-16); same fix is in projects/xtuner/docs/
+  # Quick-start-Ascend.md (apt-get install libgl1 libglib2.0-0).
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "installing system libs (libgl1 libglib2.0-0) for opencv-python 5.x"
+    apt-get update -qq && apt-get install -y --no-install-recommends \
+      libgl1 libglib2.0-0 2>&1 | tail -3
+  else
+    echo "skipping apt-get (no apt-get on PATH); cv2 import may fail"
+  fi
   # xtuner from the guarded release checkout, plus the verified dep
   # line from Quick-start-Ascend.md (2026-09-14 verified, coder npu-3
   # end-to-end run):
