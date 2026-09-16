@@ -2,13 +2,38 @@ version: 1
 scan:
   root: examples
   include_extensions: ['.sh', '.py']
-  # Files-only 模型（同 peft exclude 语义）：目录递归剪枝，glob 跨目录。
-  # xtuner examples/ 下只有 huggingface_trainer/{train_hf,train_lora_hf,train_qlora_hf}.py
-  # 是直接 launchable 的 Python example；examples/demo_data/* 是为 `xtuner train`
-  # 命令准备的数据/配置包（mmengine config.py + map_fn.py + data.json），不是
-  # 可独立 `python xxx.py` 启动的脚本，统一排除避免污染 unsupported 列表。
+  # xtuner/examples/ 下只有 huggingface_trainer/{train_hf,train_lora_hf,train_qlora_hf}.py
+  # 是直接 launchable 的 Python example。examples/demo_data/ 不是 example，是
+  # 给 `xtuner train` 用的 recipe 模板 + 数据（mmengine config.py + map_fn.py +
+  # data.json 三件套，4 套：single_turn / multi_turn_1 / multi_turn_2 /
+  # pretrain）。整个目录是数据/配方概念，跟 peft 里把
+  # examples/research_projects 整目录排除一个理由——不属于 example 语义层，放
+  # exclude 而不是 unsupported（unsupported 是"扫描到了但有 blocker"）。
+  #
+  # 实跑确认 4 套 demo_data 不 launchable（hdc-stable-npu-2 2026-09-15）:
+  #   ① 裸 `python examples/demo_data/<sub>/config.py` (exit_code=1):
+  #      ImportWarning: can't resolve package from __spec__ or __package__,
+  #        falling back on __name__ and __path__
+  #      from .map_fn import <sub>_map_fn as dataset_map_fn
+  #      ImportError: attempted relative import with no known parent package
+  #     （config.py 头部 `from .map_fn import ...` 是相对导入，
+  #       必须 `xtuner train -C <dir>` 把目录当 package）
+  #   ② `xtuner train examples/demo_data/<sub>/config.py` (exit_code=124, 60s timeout):
+  #      mmengine 成功 load cfg、print 出完整 train_cfg、跑到 build_dataset 阶段
+  #      试图 HEAD `https://huggingface.co/internlm/internlm-7b/resolve/main/config.json`
+  #      → MaxRetryError / ConnectTimeoutError：pod 里访问不了 huggingface.co，
+  #        而 config.py 硬编 `pretrained_model_name_or_path = "internlm/internlm-7b"`，没有
+  #        CLI override 切模型；data_files=`./data.json` 相对路径也不存在。
+  # 综合：demo_data 是 recipe templates，需要用户拷贝后改 model path + data path
+  # + 删 bnb，原始 config 不可端到端跑。端到端 NPU 验证由
+  # projects/xtuner/docs/Quick-start-Ascend.md 覆盖（`xtuner train` + 拷贝
+  # qwen1_5_1_8b_chat_qlora_custom_sft_e1 cfg 后手工删 quantization_config，
+  # 跑 plain LoRA + Qwen1.5-1.8B-Chat）。
+  #
+  # 同目录 map_fn.py（每个 demo 一份 sibling 模块）没有 __main__，本 manifest
+  # 不列；data.json / README.md 不是 .py/.sh，被 include_extensions 自然过滤。
   exclude:
-    - examples/demo_data                       # 整目录：4 套 demo 的 cfg+map_fn+data+README（single_turn / multi_turn_1/2 / pretrain）
+    - examples/demo_data                       # 4 套 demo recipe + data（不是 example）
 
 # ===== supported（coder npu-2 910B4×2, torch2.11/torch_npu2.11, CANN9.1 实跑 exit 0） =====
 supported:
@@ -61,25 +86,3 @@ unsupported:
   #   importlib.metadata.PackageNotFoundError: No package metadata was found for bitsandbytes
   # bnb 在 NPU 上无等价实现，QLoRA 不在 NPU guard 范围；改用 train_hf.py 走 plain LoRA。
   - examples/huggingface_trainer/train_qlora_hf.py
-
-  # demo_data 是 `xtuner train` 的模板 recipes，4 个 config.py 都走不通 NPU guard：
-  #   ① 裸 `python examples/demo_data/<sub>/config.py` (exit_code=1):
-  #      ImportWarning: can't resolve package from __spec__ or __package__, falling back on __name__ and __path__
-  #      from .map_fn import <sub>_map_fn as dataset_map_fn
-  #      ImportError: attempted relative import with no known parent package
-  #     （config.py 头部 `from .map_fn import ...` 是相对导入，必须 `xtuner train -C <dir>` 当 package）
-  #   ② `xtuner train examples/demo_data/<sub>/config.py` (exit_code=124, 60s timeout):
-  #      mmengine 成功 load cfg、print 出完整 train_cfg、跑到 build_dataset 阶段试图 HEAD
-  #      `https://huggingface.co/internlm/internlm-7b/resolve/main/config.json`
-  #      → MaxRetryError / ConnectTimeoutError：pod 里访问不了 huggingface.co，
-  #        而 config.py 硬编 `pretrained_model_name_or_path = "internlm/internlm-7b"`，没有
-  #        CLI override 切模型；data_files=`./data.json` 相对路径也不存在。
-  # 综合：demo_data 是模板配置，需要用户拷贝后改 model path + data path + 删 bnb，原始 config
-  # 不可端到端跑；端到端 NPU 验证由 projects/xtuner/docs/Quick-start-Ascend.md 覆盖：
-  # `xtuner train` + 拷贝 qwen1_5_1_8b_chat_qlora_custom_sft_e1 cfg 后手工删 quantization_config，
-  # 跑 plain LoRA + Qwen1.5-1.8B-Chat，与 docs test 同一回归路径。
-  # 同目录的 map_fn.py / data.json / README.md 不是 launchable 文件，已在 scan.exclude 整目录排除。
-  - examples/demo_data/single_turn/config.py
-  - examples/demo_data/multi_turn_1/config.py
-  - examples/demo_data/multi_turn_2/config.py
-  - examples/demo_data/pretrain/config.py

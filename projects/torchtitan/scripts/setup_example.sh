@@ -239,19 +239,26 @@ apply_compat_patches() {
     echo "patched separate_full_blocks kwarg removed in torchtitan/models/common/decoder.py"
   fi
 
-  # Patch 7: sft_debugmodel (torchtitan/models/llama3/config_registry.py:349)
-  # hardcodes attn_backend="flex". On the NPU stack flex_attention goes
-  # through torch.compile → torch_npu._inductor which calls
-  # `from triton.compiler.compiler import triton_key` (an unstable
-  # community-triton API not exposed in the 3.5.0 wheel pinned by our
-  # triton-ascend pin). The compile fails with ImportError before any
-  # kernel is built. Switch the SFT smoke to sdpa (causal-only): SFT
+  # Patch 7: sft_debugmodel (torchtitan/models/llama3/config_registry.py
+  # ~line 349) hardcodes attn_backend="flex". On the NPU stack
+  # flex_attention goes through torch.compile -> torch_npu._inductor
+  # which calls `from triton.compiler.compiler import triton_key` (an
+  # unstable community-triton API not exposed in the 3.5.0 wheel pinned
+  # by our triton-ascend pin). The compile fails with ImportError before
+  # any kernel is built. Switch the SFT smoke to sdpa (causal-only): SFT
   # pipeline, ChatDataLoader and CrossEntropyLoss are the things under
   # test, document masking is orthogonal. The flex path can be
-  # re-enabled later by upgrading triton or torch_npu. Idempotent:
-  # guard matches the original hard-coded "flex" line.
-  if grep -q '^        model_spec = model_registry("debugmodel", attn_backend="flex")$' torchtitan/models/llama3/config_registry.py; then
-    sed -i 's|^        model_spec = model_registry("debugmodel", attn_backend="flex")$|        model_spec = model_registry("debugmodel", attn_backend="sdpa")|' torchtitan/models/llama3/config_registry.py
+  # re-enabled later by upgrading triton or torch_npu.
+  #
+  # Guard pattern fix (2026-09-16): the original guard
+  # `'^        model_spec = model_registry(...)' ` used 8-space indent
+  # but the upstream line at v0.3.0 config_registry.py:350 is at 4-space
+  # indent (inside `def sft_debugmodel()`'s body). The guard never
+  # matched, so patch 7 was silently no-op'd on every run - same class
+  # of bug as patch 4 (see above). Caught by re-running setup_example.sh
+  # end-to-end on a fresh checkout.
+  if grep -q '^    model_spec = model_registry("debugmodel", attn_backend="flex")$' torchtitan/models/llama3/config_registry.py; then
+    sed -i 's|^    model_spec = model_registry("debugmodel", attn_backend="flex")$|    model_spec = model_registry("debugmodel", attn_backend="sdpa")|' torchtitan/models/llama3/config_registry.py
     echo "patched sft_debugmodel attn_backend flex -> sdpa in torchtitan/models/llama3/config_registry.py"
   fi
 }

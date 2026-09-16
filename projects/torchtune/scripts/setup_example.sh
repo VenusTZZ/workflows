@@ -4,14 +4,16 @@
 # torchtune itself is installed from TARGET_ROOT (the release checkout
 # under test), so the guarded tag is exactly the code that runs.
 #
-# Dependency line (2026-09-15, coder hdc-stable-npu-4 逐例验证):
-#   torch 2.9.0+cpu + torch_npu 2.9.0.dev20251120 + torchao <0.16
-#   (torchao 0.15.0 与 torch 2.9.0+cpu ABI 匹配) + omegaconf
-#   + transformers 4.57.1 + tokenizers + safetensors + modelscope
+# Dependency line (2026-09-16, coder hdc-stable-npu-4 逐例验证):
+#   torch 2.12.0+cpu + torch_npu 2.12.0 + transformers 4.57.1
+#   + omegaconf + tokenizers + safetensors + modelscope
 # - transformers 4.57.1：与 torchtune v0.6.x 的 LlamaModel / Qwen2
 #   forward 签名匹配；5.x 已重命名部分属性
-# - torchao<0.16：quantize recipe 走 torchao.quantization.quantize_；
-#   0.15.0 与 torch 2.9.0+cpu 兼容（更高版本会报 C++ ABI 不匹配）
+# - torchao pin 由 setup_torchtune() 内部按 checkout 探测动态决定：
+#   v0.6.x 走 torchao.dtypes.nf4tensor（pin 0.13.0），main HEAD 走
+#   torchao.quantization（pin 0.18.0）。两个路径互不兼容，所以 pin
+#   不能写死——CI 跑 release 时 setup 选 0.13.0，跑 main 时选 0.18.0
+#   （setup_example.sh 内 probe common_utils.py:19 import line）
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -55,12 +57,12 @@ except urllib.error.HTTPError:
 ensure_torch_stack() {
   # Same torch line as torchtune quick-start (CANN 9.1.0 pairing):
   # torch 2.9.0 + torch_npu 2.9.0. Pin via Huawei ascend index.
-  if python -c "
-import torch, torch_npu
-raise SystemExit(
-    0 if torch.__version__.startswith('2.9.0')
-    and torch_npu.__version__.startswith('2.9.0') else 1)
-"; then
+  # Skip if torch is already installed (any 2.x) to avoid downgrade:
+  # the previous version-pinned check forced a 2.12.0+cpu image down to
+  # 2.9.0, which broke the ABI alignment and pulled torchao cpp ext
+  # warnings. Trust whatever the image preinstalled; fall through to
+  # install only when torch is missing entirely.
+  if python -c "import torch" 2>/dev/null; then
     echo "reusing image torch stack ($(python -c 'import torch; print(torch.__version__)'))"
     return
   fi
@@ -87,16 +89,82 @@ prepare_fixtures() {
 }
 
 setup_torchtune() {
-  # torchtune from the guarded release checkout, plus the verified
-  # dependency line (2026-09-15, coder hdc-stable-npu-4 逐例验证):
-  #   transformers 4.57.1 + omegaconf + torchao<0.16 + tokenizers
-  #   + safetensors + tqdm + pyyaml + modelscope
-  # PIP_CONSTRAINT keeps CUDA metapackages out (constraints-npu.txt).
+  # torchtune from the guarded checkout. The torchao pin is decided
+  # dynamically because the NF4Tensor import path in
+  # torchtune/modules/common_utils.py:19 has moved three times:
+  #
+  #   torchao 0.10-0.13 : torchao.dtypes.nf4tensor.NF4Tensor  (v0.6.x)
+  #   torchao 0.14-0.17 : dtypes submodule deleted; quantization
+  #                       renamed NF4Tensor -> Int4Tensor. Anything
+  #                       importing NF4Tensor breaks here.
+  #   torchao 0.18+     : torchao.quantization.NF4Tensor
+  #                       re-exposed (main HEAD post PR #2960).
+  #
+  # Picking the wrong line is fatal — v0.6.x + torchao 0.18 throws
+  # ModuleNotFoundError on import; main + torchao 0.13 throws the
+  # same. There is no single torchao that satisfies both import paths,
+  # so we must probe the actual checkout before pinning.
   echo "installing torchtune from $TARGET_ROOT"
   python -m pip install -e "$TARGET_ROOT"
   python -m pip install "transformers==4.57.1" "omegaconf>=2.3,<3" \
-    "torchao<0.16" tokenizers safetensors tqdm pyyaml
-  python -c "import torchtune, torchao, omegaconf, transformers; print('torchtune', torchtune.__version__, '/ torchao', torchao.__version__, '/ transformers', transformers.__version__)"
+    tokenizers safetensors tqdm pyyaml
+
+  # Probe which NF4Tensor import path the torchtune checkout uses, then
+  # install the matching torchao exact pin. Probe runs against the
+  # editable-installed source, so it reflects whatever ref the engine
+  # checked out (release tag OR main HEAD).
+  local import_path torchao_pin
+  import_path="$(python -c "
+import importlib.util, pathlib
+p = pathlib.Path('$TARGET_ROOT') / 'torchtune' / 'modules' / 'common_utils.py'
+src = p.read_text() if p.exists() else ''
+for line in src.splitlines():
+    s = line.strip()
+    if s.startswith('from torchao') and 'NF4Tensor' in s:
+        print(s)
+        break
+else:
+    print('NF4Tensor_NOT_IMPORTED')
+")"
+  echo "torchtune common_utils.py NF4Tensor import: $import_path"
+  case "$import_path" in
+    "from torchao.dtypes.nf4tensor import NF4Tensor")
+      torchao_pin="torchao==0.13.0"
+      ;;
+    "from torchao.quantization import NF4Tensor")
+      # 0.18.0 re-exposed NF4Tensor under torchao.quantization; main
+      # HEAD depends on the exact 0.18 series (later 0.18.x keep the
+      # symbol but pin to whatever the upstream test grid currently
+      # passes — 0.18.0 is the first stable release with the re-add).
+      torchao_pin="torchao==0.18.0"
+      ;;
+    "NF4Tensor_NOT_IMPORTED")
+      # Newer torchtune may drop NF4Tensor entirely. Default to a
+      # neutral recent torchao and let setup proceed; recipe failures
+      # downstream will surface real reasons rather than setup noise.
+      echo "WARN: common_utils.py does not import NF4Tensor; skipping torchao pin"
+      torchao_pin=""
+      ;;
+    *)
+      echo "FATAL: unexpected NF4Tensor import line: $import_path" >&2
+      exit 1
+      ;;
+  esac
+  if [ -n "$torchao_pin" ]; then
+    echo "pinning $torchao_pin (matched import path)"
+    python -m pip install "$torchao_pin"
+  fi
+
+  # importlib.metadata.version returns the real install tag for both
+  # editable installs (where __version__ is empty string) and wheel
+  # installs. torchtune.__version__ is "" by default in the source
+  # tree; reading it directly would print a confusing blank.
+  python -c "
+import importlib.metadata as md
+import torchao, omegaconf, transformers
+import torchtune  # noqa: just to confirm the import chain
+print('torchtune', md.version('torchtune'), '/ torchao', torchao.__version__, '/ transformers', transformers.__version__)
+"
 
   # Pre-download the example model from ModelScope (China-reachable)
   # because runners cannot reach HuggingFace. The local snapshot dir
