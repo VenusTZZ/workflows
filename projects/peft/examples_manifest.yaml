@@ -99,7 +99,6 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --dataset_name mrpc   # 默认 cola；mrpc 数据量小跑得快（docstring 推荐用法）
-      - --model_name_or_path roberta-base   # 默认即 roberta-base，显式声明（也可 roberta-large，太大）
       - --num_epochs 1   # 默认 100：压到单 epoch（mrpc 3.7k 样本几分钟）
     timeout_minutes: 45
 

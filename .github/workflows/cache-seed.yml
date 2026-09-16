@@ -1,0 +1,71 @@
+# Generic runner-cache seeder - manual maintenance workflow.
+#
+# Installs everything under the repo's fixed transfer directory
+# cache-seed/ onto the runners' shared cache root (default
+# ~/.cache/huggingface; override via SHARED_CACHE_ROOT), so example
+# runs stop gambling on cas-bridge (hf-mirror 302s xet-backed weights
+# and parquets to cas-bridge.xethub.hf.co, intermittently unreachable
+# from the runner cluster - e.g. run 35062862773 pulled roberta-base
+# fine in one leg while a sibling leg timed out 5/5 on the same file).
+#
+# Single sha256 check per file (see scripts/cache_seed.py):
+#   bundle_cache.py  (staging)   streams sha256, writes manifest.yaml
+#   cache_seed.py    (delivery)  re-streams sha256 after copy/cat,
+#                                aborts on mismatch
+#
+# What moves where - see cache-seed/README.md:
+#   cache-seed/<project>/<prefix>/<file>           -> <root>/<prefix>/<file>          (cp + verify)
+#   cache-seed/<project>/<prefix>/<file>.part-*    -> <root>/<prefix>/<file>          (cat + verify)
+#
+# Idempotent - re-dispatch any time; an already-warm machine finishes
+# in minutes. The matrix fans out to cover several runner machines per
+# dispatch. Re-dispatch when: new bundles / manifest entries landed,
+# an upstream repo moved (sha drift), or the pool grew.
+
+name: cache-seed
+
+on:
+  workflow_dispatch:
+    inputs:
+      projects:
+        description: 'Comma-separated project filter under cache-seed/ (empty = all)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cache-seed
+  # idempotent, but let a running seed finish instead of cancelling
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    runs-on: linux-aarch64-a2-1
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # Idempotent copies; the scheduler spreads them over the pool.
+        slot: [1, 2, 3, 4]
+    container:
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    env:
+      # 共享缓存根；不设时 Python 走 ~/.cache/huggingface。本地 / 自建 runner
+      # 想换路径直接 export SHARED_CACHE_ROOT=/path/to/cache 覆盖即可。
+      PIP_INDEX_URL: http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple
+      PIP_TRUSTED_HOST: cache-service.nginx-pypi-cache.svc.cluster.local
+      PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
+      PIP_TIMEOUT: "120"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install seeder stack
+        run: |
+          python -m pip install -U pip
+          # huggingface_hub 仅 post_verify.kind=hf_cache 时用得到，pyyaml 读 manifest
+          python -m pip install "huggingface_hub<1.0" pyyaml
+
+      - name: Seed shared cache
+        run: python scripts/cache_seed.py --projects "${{ inputs.projects }}"

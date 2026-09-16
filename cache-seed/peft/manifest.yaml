@@ -1,0 +1,26 @@
+# cache-seed/peft/manifest.yaml
+#
+# ModelScope 实测后的结果（2026-09-16）：
+#   ✓  5 个模型都在 ModelScope（AI-ModelScope/roberta-base 等）
+#   ✓  nyu-mll/glue              在 ModelScope
+#   ✓  modelscope/imdb           在 ModelScope（注意命名）
+#   ✗  beans                      ModelScope 没有
+#   ✗  gtfintechlab/financial_phrasebank_sentences_allagree   ModelScope 没有
+#
+# 所以本目录需要 stage 的只有下面这 2 个数据集；其余走 setup_example.sh
+# 里的 modelscope.snapshot_download。
+#
+# 用法（仅这两个）：
+#   huggingface-cli download beans --repo-type dataset
+#   huggingface-cli download gtfintechlab/financial_phrasebank_sentences_allagree --repo-type dataset
+#
+#   python scripts/bundle_cache.py --project peft \
+#       --src ~/.cache/huggingface/hub/datasets--beans \
+#       --prefix hub/datasets--beans
+#
+#   python scripts/bundle_cache.py --project peft \
+#       --src ~/.cache/huggingface/hub/datasets--gtfintechlab--financial_phrasebank_sentences_allagree \
+#       --prefix hub/datasets--gtfintechlab--financial_phrasebank_sentences_allagree
+#
+# bundle_cache.py 自动算 sha256 并追加 entries 到本文件。
+files: []
