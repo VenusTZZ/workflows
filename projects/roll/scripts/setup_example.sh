@@ -134,8 +134,7 @@ model_id = os.environ["MODEL_ID"]
 cache = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
 local = snapshot_download(model_id, cache_dir=cache)
 with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
-    handle.write(f"ROLL_MODEL_PATH={local}
-")
+    handle.write(f"ROLL_MODEL_PATH={local}\n")
 print(f"ROLL_MODEL_PATH={local}")
 PY
 }
