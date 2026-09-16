@@ -157,6 +157,7 @@ TO_ENV = [
 TO_PLANT_MODEL = [
     ("bigscience/mt0-small",  "bigscience/mt0-small"),   # beft_finetuning.py 硬编码
     ("facebook/dinov2-base",  "facebook/dinov2-base"),   # pvera/...py 硬编码
+    ("AI-ModelScope/roberta-base", "roberta-base"),       # adamss_manual: argparse schema 不收 --model_name_or_path，硬编码 from_pretrained('roberta-base')，plant 到 hub cache 命中本地
 ]
 
 # (3) snapshot_download + cp plant (dataset): adamss/no_lora 用 glue mrpc，

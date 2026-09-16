@@ -109,8 +109,11 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --model_name_or_path ${ROBERTA_BASE_PATH}   # argparse 收：setup 预下，避开 hf-mirror xet
       - --num_epochs 1   # 默认 100：压到单 epoch
+    # argparse schema 不收 --model_name_or_path（model 靠 output_dir 含
+    # 'roberta-large' 选 roberta-large，否则硬编码 roberta-base）；roberta-base
+    # 走 setup cp plant 进 hub cache，从 HF 走 from_pretrained('roberta-base')
+    # 命中本地快照，不打 xet
     timeout_minutes: 45
 
   # Supertuning：Qwen2.5-0.5B + guanaco 完整 1 epoch（308 步 exit 0）
