@@ -14,3 +14,13 @@ files:
   sha256: 7c5ebc621e7fd7866d6d8a3d9226b15f474ad1cc8f06edc3f51e5a3d8314761d
 - path: hub/datasets--gtfintechlab--financial_phrasebank_sentences_allagree/refs/main
   sha256: 2978cdd2e6decff6169ebd691da5fd4ee47db50a3a6e19561db08020a80f9542
+- path: hub/datasets--stanfordnlp--imdb/snapshots/e6281661ce1c48d982bc483cf8a173c1bbeb5d31/README.md
+  sha256: 595990b17278ad1ee355a3bc34d89a5e72328490c60fcb92a24df27dfaa643d9
+- path: hub/datasets--stanfordnlp--imdb/snapshots/e6281661ce1c48d982bc483cf8a173c1bbeb5d31/plain_text/unsupervised-00000-of-00001.parquet
+  sha256: 74d14fbfcbb39fb7d299c38ca9f0ae6d231bf97108da85d620027ba437b6d52e
+- path: hub/datasets--stanfordnlp--imdb/snapshots/e6281661ce1c48d982bc483cf8a173c1bbeb5d31/plain_text/train-00000-of-00001.parquet
+  sha256: db47d16b5c297cc0dd625e519c81319c24c9149e70e8496de5475f6fa928342c
+- path: hub/datasets--stanfordnlp--imdb/snapshots/e6281661ce1c48d982bc483cf8a173c1bbeb5d31/plain_text/test-00000-of-00001.parquet
+  sha256: b52e26e2f872d282ffac460bf9770b25ac6f102cda0e6ca7158df98c94e8b3da
+- path: hub/datasets--stanfordnlp--imdb/refs/main
+  sha256: 65062b53099c7365b64cbfb58442f3961851805a6ce13fb5e5278add75353377
