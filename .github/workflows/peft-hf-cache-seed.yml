@@ -1,0 +1,196 @@
+# peft HF cache seeder - manual maintenance workflow.
+#
+# Why: the peft examples load hub-id models (roberta-base /
+# bert-base-uncased / bigscience/mt0-small / facebook/dinov2-base) and
+# hub datasets (glue, financial_phrasebank, beans, imdb) at run time.
+# Their weight/parquet files are xet-backed: hf-mirror 302s them to
+# cas-bridge.xethub.hf.co, whose connectivity from the runner cluster
+# is intermittent - every example run gambles on it (run 35062862773:
+# one leg pulled roberta-base fine, a sibling leg timed out 5/5 on the
+# same file).
+#
+# This workflow removes the gamble WITHOUT touching peft's setup: it
+# warms the persistent per-machine caches (~/.cache/huggingface,
+# ~/.cache/modelscope) directly, so later peft-examples legs on the
+# same machine resolve everything locally:
+#   1. models: downloaded from their ModelScope mirrors, then planted
+#      into the HF hub cache under the REAL latest revision -
+#      from_pretrained(<hub id>) then never touches the network for
+#      weights (sha match -> snapshot hit).
+#   2. datasets/metrics: prefetched with the exact runtime calls so
+#      load_dataset at run time is a pure cache hit.
+#
+# Idempotent - re-dispatch any time; an already-warm machine finishes
+# in a couple of minutes (hash re-validation only). The matrix fans
+# out so one dispatch probabilistically covers several runner
+# machines; dispatch again if a leg landed on an already-warm one.
+#
+# Re-dispatch when:
+#   - an upstream repo moved (sha drift -> runtime misses -> re-seed)
+#   - new examples / models join the supported list
+#   - the prefetch step failed in a bad cas-bridge window (it retries
+#     internally; the next dispatch rides a better window)
+
+name: peft-hf-cache-seed
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: peft-hf-cache-seed
+  # a cancelled seed loses nothing (idempotent) but let it finish: a
+  # dispatch overlapping the previous one just waits or double-warms
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    runs-on: linux-aarch64-a2-1
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # Idempotent copies; the scheduler spreads them over the pool.
+        slot: [1, 2, 3, 4]
+    container:
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    env:
+      HF_ENDPOINT: https://hf-mirror.com
+      HF_HUB_DISABLE_XET: "1"
+      # re-hash cached modelscope files; a corrupt cache self-heals here
+      # instead of failing example runs later
+      MODELSCOPE_ENABLE_DEFAULT_HASH_VALIDATION: "true"
+      PIP_INDEX_URL: http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple
+      PIP_TRUSTED_HOST: cache-service.nginx-pypi-cache.svc.cluster.local
+      PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
+      PIP_TIMEOUT: "120"
+    steps:
+      - name: Install downloader stack
+        run: |
+          python -m pip install -U pip
+          python -m pip install "modelscope==1.37.0" "huggingface_hub<1.0" \
+            "datasets>=4.7.0,<6" evaluate requests
+
+      - name: Plant hub-id models from ModelScope mirrors
+        run: |
+          python - <<'PY'
+import fcntl
+import os
+from pathlib import Path
+
+import requests
+from huggingface_hub import try_to_load_from_cache
+from modelscope import snapshot_download
+
+HF_ENDPOINT = os.environ.get("HF_ENDPOINT", "https://huggingface.co")
+MODEL_CACHE = Path(os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope")))
+hub_root = Path(os.environ.get("HF_HOME", Path.home() / ".cache/huggingface")) / "hub"
+
+# modelscope downloads write straight to the final path (Range-resume,
+# no temp+rename), so concurrent seeds on one machine must not race.
+# An exclusive flock serializes matrix legs sharing a host cache.
+MODEL_CACHE.mkdir(parents=True, exist_ok=True)
+lock = open(MODEL_CACHE / ".hf-cache-seed.lock", "w")
+fcntl.flock(lock, fcntl.LOCK_EX)
+print("acquired modelscope seed lock")
+
+# (modelscope mirror id, huggingface hub id the examples pass)
+MODELS = [
+    ("AI-ModelScope/roberta-base", "roberta-base"),            # adamss x2
+    ("AI-ModelScope/bert-base-uncased", "bert-base-uncased"),   # no_lora
+    ("bigscience/mt0-small", "bigscience/mt0-small"),           # beft (hardcoded)
+    ("facebook/dinov2-base", "facebook/dinov2-base"),           # pvera (hardcoded)
+]
+
+failed = []
+for ms_id, hf_id in MODELS:
+    src = Path(snapshot_download(ms_id, cache_dir=str(MODEL_CACHE)))
+    sha = requests.get(f"{HF_ENDPOINT}/api/models/{hf_id}", timeout=60).json()["sha"]
+    repo_dir = hub_root / f"models--{hf_id.replace('/', '--')}"
+    snap_dir = repo_dir / "snapshots" / sha
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    (repo_dir / "refs").mkdir(exist_ok=True)
+    # no trailing newline: hub compares the string to the snapshot
+    # folder name without stripping
+    (repo_dir / "refs" / "main").write_text(sha)
+    for item in src.rglob("*"):
+        if not item.is_file():
+            continue
+        dest = snap_dir / item.relative_to(src)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists() or dest.is_symlink():
+            continue
+        try:
+            dest.symlink_to(item.resolve())
+        except FileExistsError:
+            pass  # sibling matrix leg seeded concurrently
+    cached = try_to_load_from_cache(hf_id, "config.json")
+    weights = try_to_load_from_cache(hf_id, "model.safetensors")
+    if cached and weights:
+        print(f"planted {ms_id} -> {hf_id}@{sha[:8]} (weights resolve locally)")
+    else:
+        failed.append(hf_id)
+        print(f"FAIL {hf_id}: config={bool(cached)} weights={bool(weights)}")
+
+if failed:
+    raise SystemExit(f"plant failed: {failed}")
+print("all models planted")
+PY
+
+      - name: Prefetch datasets and metrics (runtime-exact calls)
+        run: |
+          python - <<'PY'
+import os
+import time
+
+os.environ.setdefault("TQDM_MININTERVAL", "15")
+from datasets import load_dataset
+
+# exact calls the peft examples make at run time
+DATASETS = [
+    (("glue", "mrpc"), {}),   # adamss (overlay), no_lora (hardcoded task)
+    (("glue", "cola"), {}),   # adamss manual (default)
+    (("gtfintechlab/financial_phrasebank_sentences_allagree", "5768"), {}),  # beft
+    (("beans",), {"split": "train"}),        # pvera
+    (("imdb",), {"split": "train[:1%]"}),    # miss / mica
+]
+
+
+def attempt(fn, tries=3, wait=20):
+    last = None
+    for i in range(1, tries + 1):
+        try:
+            return fn(), None
+        except Exception as exc:
+            last = exc
+            print(f"  attempt {i}/{tries} failed: {type(exc).__name__}: {exc}")
+            if i < tries:
+                time.sleep(wait)
+    return None, last
+
+
+failed = []
+for args, kwargs in DATASETS:
+    ds, err = attempt(lambda a=args, k=kwargs: load_dataset(*a, **k))
+    if err is None:
+        splits = list(ds) if hasattr(ds, "keys") else type(ds).__name__
+        print(f"prefetched {args} {kwargs}: {splits}")
+    else:
+        failed.append(str(args))
+        print(f"FAILED {args}")
+
+import evaluate
+for task in ("mrpc", "cola"):
+    _, err = attempt(lambda t=task: evaluate.load("glue", t))
+    if err is None:
+        print(f"prefetched evaluate metric glue/{task}")
+    else:
+        failed.append(f"evaluate/glue/{task}")
+        print(f"FAILED evaluate glue/{task}")
+
+if failed:
+    raise SystemExit(f"prefetch incomplete: {failed}")
+print("all datasets + metrics prefetched")
+PY
