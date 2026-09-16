@@ -115,8 +115,13 @@ setup_xtuner-llm() {
 import torch, torch_npu
 assert torch.__version__.startswith('2.11.0'), f'torch drifted to {torch.__version__}'
 assert torch_npu.__version__.startswith('2.11.0'), f'torch_npu drifted to {torch_npu.__version__}'
+# xtuner does NOT expose __version__ on the top-level module (unlike
+# peft/accelerate); it lives in xtuner/version.py. Confirmed by CI run
+# 35043584383 (xtuner.__version__ raised AttributeError; using
+# `from xtuner.version import __version__` is the correct probe).
+from xtuner.version import __version__ as xtuner_ver
 import xtuner, transformers, datasets, accelerate, peft
-print('xtuner', xtuner.__version__, '/ transformers', transformers.__version__,
+print('xtuner', xtuner_ver, '/ transformers', transformers.__version__,
       '/ datasets', datasets.__version__, '/ torch', torch.__version__)
 print('peft', peft.__version__)
 "
