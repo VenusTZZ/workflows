@@ -15,11 +15,13 @@
 | CANN | 9.1.0 | 昇腾官方 |
 | torch | 2.10.0 | PyPI（CPU 版本） |
 | torch_npu | 2.10.0.post4 | PyPI |
+| torchvision / torchaudio | 0.25.0 / 2.10.0 | PyPI |
+| vLLM | 0.23.0 | 华为 PyPI 镜像 |
+| vLLM-Ascend | 0.23.0rc1 | 华为 PyPI 镜像 |
 | triton-ascend | 3.2.1 | 华为 Ascend PyPI |
-| vLLM / vLLM-Ascend | 0.23.0 / 0.23.0rc1 | GitHub 源码 |
 | ROLL | main | GitHub 源码 |
 
-torch 与 torch_npu 版本严格配套，按 CANN 兼容矩阵选择，参考 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch)。ROLL 与 vLLM-Ascend 没有昇腾 PyPI 包，需源码安装。
+torch、torch_npu、vLLM、vLLM-Ascend 与 triton-ascend 版本严格配套，参考 [ROLL 昇腾安装文档](https://alibaba.github.io/ROLL/docs/User%20Guides/Hardware%20Support/ascend_usage/)。PyPI 上的 roll 包名与本项目无关，ROLL 需源码安装。
 
 ### 检查环境
 
@@ -35,15 +37,20 @@ Python 3.xxx
 
 ## 安装 torch NPU 栈
 
-**安装 torch 与 torch_npu。** 装完校验 NPU 运行时，is_available 须为 True。
+**安装 torch 与 torch_npu。** 使用严格配套的版本安装 NPU 运行时。
 
-```shell #test id="install-torch"
-pip install torch==2.10.0 torchvision==0.25.0 >/dev/null 2>&1
-pip install --no-deps torch-npu==2.10.0.post4 >/dev/null 2>&1
+```shell #test-setup id="install-torch"
+pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0
+pip install --no-deps torch-npu==2.10.0.post4
+```
+
+**校验 torch 版本和 NPU 可用性。**
+
+```shell #test id="verify-torch"
 python -c "import torch, torch_npu; print('torch', torch.__version__); print('torch_npu', torch_npu.__version__); print('is_available', torch.npu.is_available()); print('count', torch.npu.device_count())"
 ```
 
-```shell #test-result id="install-torch" fuzzy='xxx'
+```shell #test-result id="verify-torch" fuzzy='xxx'
 torch xxx
 torch_npu xxx
 is_available True
@@ -52,45 +59,83 @@ count 1
 
 ## 安装 vLLM-Ascend
 
-**从源码安装 vLLM 与 vLLM-Ascend。** vLLM 策略为 ROLL 提供高吞吐 rollout，昇腾运行时由 vLLM-Ascend 插件提供，两包版本必须配套。装完用 triton-ascend 顶替 CUDA 版 triton，再 import 验证。
+**从华为 PyPI 镜像安装 vLLM。** 使用预编译 ARM64 wheel 安装 rollout 引擎。
 
-```shell #test id="install-vllm"
-git clone -b v0.23.0 https://github.com/vllm-project/vllm.git vllm-src &&
-git clone -b v0.23.0rc1 https://github.com/vllm-project/vllm-ascend.git vllm-ascend-src &&
-cd vllm-src && VLLM_TARGET_DEVICE=empty pip install -e . >/dev/null 2>&1 && cd .. &&
-cd vllm-ascend-src && git submodule update --init --recursive >/dev/null 2>&1 && pip install -r requirements.txt --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi >/dev/null 2>&1 && SOC_VERSION=ascend910b1 pip install -e . --no-build-isolation --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi >/dev/null 2>&1 && cd .. &&
-pip uninstall -y triton >/dev/null 2>&1 &&
-pip install --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi triton-ascend==3.2.1 >/dev/null 2>&1 &&
-python -c "import vllm, vllm_ascend; print('vllm', vllm.__version__)"
+```shell #test-setup id="install-vllm"
+pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple vllm==0.23.0
 ```
 
-```shell #test-result id="install-vllm" fuzzy='xxx'
+**安装 ARM64 版 Triton。** 清理已有版本，再从华为 PyPI 镜像安装配套版本。
+
+```shell #test-setup id="install-triton"
+pip uninstall -y triton triton-ascend
+pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple triton==3.5.0
+```
+
+**安装 triton-ascend。** 从 Ascend 仓库安装昇腾实现。
+
+```shell #test-setup id="install-triton-ascend"
+pip install --no-deps --index-url https://repo.huaweicloud.com/ascend/repos/pypi triton-ascend==3.2.1
+```
+
+**从华为 PyPI 镜像安装 vLLM-Ascend。** 插件为 vLLM 提供昇腾 NPU 后端。
+
+```shell #test-setup id="install-vllm-ascend"
+pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple vllm-ascend==0.23.0rc1
+```
+
+**恢复 ROLL 配套的 torch NPU 栈。** vLLM 安装完成后重新固定官方版本组合。
+
+```shell #test-setup id="restore-torch-stack"
+pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0
+pip install --no-deps torch-npu==2.10.0.post4
+```
+
+**校验版本、导入链和 NPU 可用性。**
+
+```shell #test id="verify-vllm"
+python -c "import torch, torch_npu, vllm, vllm_ascend, triton; print('torch', torch.__version__); print('torch_npu', torch_npu.__version__); print('vllm', vllm.__version__); print('vllm_ascend ok'); print('triton', triton.__version__); print('is_available', torch.npu.is_available())"
+```
+
+```shell #test-result id="verify-vllm" fuzzy='xxx'
+torch 2.10.xxx
+torch_npu 2.10.xxx
 vllm xxx
+vllm_ascend ok
+triton xxx
+is_available True
 ```
 
 ## 安装 ROLL
 
-**克隆仓库并安装依赖。** PyPI 上的 roll 包名与本项目无关，从 GitHub 源码安装。在仓库内安装官方 agentic 依赖清单，按昇腾镜像配套 transformers 版本，补齐 agentic 环境注册所需的两个包，最后可编辑模式安装 ROLL 并校验环境管理模块可导入。
+**克隆仓库并安装依赖。** PyPI 上的 roll 包名与本项目无关，从 GitHub 源码安装，再补齐 agentic 示例所需的依赖。
 
-```shell #test id="install-roll"
-git clone https://github.com/alibaba/ROLL.git &&
-pip install -r ROLL/requirements_common.txt >/dev/null 2>&1 &&
-pip install "transformers==4.57.6" "tensorboard==2.20.0" >/dev/null 2>&1 &&
-pip install reasoning-gym==0.1.23 >/dev/null 2>&1 &&
-pip install --no-deps gem-llm==0.0.4 >/dev/null 2>&1 &&
-pip install -e ./ROLL >/dev/null 2>&1 &&
+```shell #test-setup id="install-roll"
+git clone https://github.com/alibaba/ROLL.git
+cd ROLL
+pip install -r requirements_common.txt
+pip install "transformers==4.57.6" "tensorboard==2.20.0"
+pip install reasoning-gym==0.1.23
+pip install --no-deps gem-llm==0.0.4
+pip install -e .
+cd ..
+```
+
+**校验 ROLL 的 agentic 环境管理模块可导入。**
+
+```shell #test id="verify-roll"
 python -c "import roll.pipeline.agentic.env_manager.traj_env_manager; print('roll ok')"
 ```
 
-```shell #test-result id="install-roll"
+```shell #test-result id="verify-roll"
 roll ok
 ```
 
 ## 运行示例：FrozenLake agentic 强化学习
 
-FrozenLake 是 ROLL 官方快速入门的示例：Qwen2.5-0.5B-Instruct 作为策略模型，在 4×4 冰面网格中逐轮输出移动方向，绕开冰洞到达终点，环境按结果返回奖励。ROLL 用 Ray 把角色编排为独立 worker 集群：actor_train 用 FSDP2 策略更新权重，actor_infer 与 reference 用 HF 推理策略分别负责生成动作和参考概率，三个角色共享同一张 NPU，GRPO 用组内采样基线替代 critic。模型权重首次运行自动下载到默认缓存 ~/.cache/modelscope。
+FrozenLake 是 ROLL 官方快速入门的示例：Qwen2.5-0.5B-Instruct 作为策略模型，在 4×4 冰面网格中逐轮输出移动方向，绕开冰洞到达终点，环境按结果返回奖励。ROLL 用 Ray 把角色编排为独立 worker 集群：actor_train 用 FSDP2 策略更新权重，actor_infer 用 vLLM 生成动作，reference 用 HF 推理计算参考概率，三个角色共享同一张 NPU，GRPO 用组内采样基线替代 critic。模型权重首次运行自动下载到默认缓存 ~/.cache/modelscope。
 
-**写入示例配置。** 单卡昇腾版配置：训练后端 fsdp2_train，推理与参考模型后端 hf_infer，设备映射只留卡 0，批量收缩，只跑 2 步。
+**写入示例配置。** 单卡昇腾版配置使用 fsdp2_train 训练、vLLM rollout 和 HF 参考模型，设备映射只留卡 0，批量收缩，只跑 2 步。
 
 ```python #test-setup id="write-config"
 from pathlib import Path
@@ -168,8 +213,11 @@ actor_infer:
   data_args:
     template: qwen2_5
   strategy_args:
-    strategy_name: hf_infer
-    strategy_config: ~
+    strategy_name: vllm
+    strategy_config:
+      gpu_memory_utilization: 0.8
+      block_size: 16
+      load_format: auto
   device_mapping: list(range(0,1))
   infer_batch_size: 1
 
@@ -235,7 +283,8 @@ print("config written", path)
 **启动训练。** 从仓库根目录运行 agentic pipeline 入口脚本，ROLL 自动拉起 Ray 集群，训练日志实时输出到终端。校验训练正常收尾。
 
 ```shell #test id="run-agentic"
-cd ROLL && python examples/start_agentic_pipeline.py --config_path agentic_frozen_lake_npu --config_name quick_start_npu
+cd ROLL
+python examples/start_agentic_pipeline.py --config_path agentic_frozen_lake_npu --config_name quick_start_npu
 ```
 
 ```shell #test-result id="run-agentic"
