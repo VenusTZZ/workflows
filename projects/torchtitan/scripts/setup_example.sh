@@ -5,11 +5,11 @@
 # This script installs the same torchtitan + CANN stack the Quick-start
 # guard covers (CANN 9.1.0 + torch 2.12.0 + torch_npu 2.12.0 +
 # triton-ascend 3.5.0+dev20260701 + the v0.3.0 release checkout + the
-# minimal pyproject deps). Then it applies the six compatibility sed
+# minimal pyproject deps). Then it applies seven compatibility sed
 # patches documented in projects/torchtitan/docs/Quick-start-Ascend.md
-# §"兼容性补丁" - all six are required for any model to reach step 1
-# on this NPU stack (limitations 1-6 in
-# docs/case-torchtitan-v0.3.0-torch2.12-npu.md).
+# §"兼容性补丁" + the sft_debugmodel-specific 6+7 added after end-to-end
+# verification on 2026-09-15. All seven are required for any supported
+# example to reach step 1 on this NPU stack.
 #
 # The patches:
 #   1. attention backend: flex -> sdpa (limitation 1, compiler wall)
@@ -20,6 +20,22 @@
 #      (limitation 3, backward NPU meta-tensor leak)
 #   5. set_pg_timeouts torch.distributed.set_timeout -> instance set_timeout
 #      (limitation 5, torch 2.13+ module-level API not in 2.12)
+#   6. drop torch 2.13-only separate_full_blocks= kwarg in
+#      _create_flex_attention_mask (decoder.py:274). Required by any
+#      config that hard-codes attn_backend="flex" (e.g. sft_debugmodel
+#      before patch 7). Without this, create_block_mask raises
+#      TypeError. Added 2026-09-15 after sft_debugmodel verification
+#      on hdc-stable-npu-4.
+#   7. flip sft_debugmodel's hard-coded attn_backend="flex" to "sdpa"
+#      (config_registry.py:349). Patch 6 makes create_block_mask succeed,
+#      but the actual flex_attention kernel compile then fails with
+#      `ImportError: cannot import name 'triton_key' from
+#      'triton.compiler.compiler'` — torch_npu's inductor backend
+#      expects a private triton API that the community triton 3.5.0
+#      wheel (pinned by triton-ascend) doesn't expose. Switching to sdpa
+#      drops document masking but keeps the SFT pipeline (ChatDataLoader,
+#      CrossEntropyLoss, Trainer) intact. Added 2026-09-15 after
+#      sft_debugmodel verification on hdc-stable-npu-4.
 # Limitation 4 (spmd_types default backend needing torch >=2.13) is not
 # a sed - it is a CLI switch (--parallelism.spmd-backend full_dtensor)
 # in multi-card overlay_args. Limitation 6 (8B scale) is not patched -
@@ -157,6 +173,38 @@ apply_compat_patches() {
   if ! grep -q 'ProcessGroup.set_timeout' torchtitan/distributed/utils.py; then
     sed -i 's|        torch.distributed.set_timeout(timeout, group)|        (group if group is not None else torch.distributed.distributed_c10d._get_default_group()).set_timeout(timeout)|' torchtitan/distributed/utils.py
     echo "patched torch.distributed.set_timeout -> ProcessGroup.set_timeout in torchtitan/distributed/utils.py"
+  fi
+
+  # Patch 6: drop the torch 2.13-only `separate_full_blocks=` kwarg in
+  # _create_flex_attention_mask. Any model that explicitly selects
+  # attn_backend="flex" (e.g. sft_debugmodel hardcodes this at
+  # torchtitan/models/llama3/config_registry.py:349) goes through
+  # create_block_mask(separate_full_blocks=...) which raises
+  # TypeError on torch 2.12. The kwarg only affects the
+  # batch-invariance optimization (separating fully-unmasked blocks
+  # from partial blocks); removing it falls back to torch 2.12's
+  # default. The trainer never enables batch invariance on this NPU
+  # stack, so the optimization was off in practice anyway. Idempotent:
+  # guard matches the original line, not a subsequent blank line.
+  if grep -q '^            separate_full_blocks=not is_in_batch_invariant_mode(),$' torchtitan/models/common/decoder.py; then
+    sed -i '/^            separate_full_blocks=not is_in_batch_invariant_mode(),$/d' torchtitan/models/common/decoder.py
+    echo "patched separate_full_blocks kwarg removed in torchtitan/models/common/decoder.py"
+  fi
+
+  # Patch 7: sft_debugmodel (torchtitan/models/llama3/config_registry.py:349)
+  # hardcodes attn_backend="flex". On the NPU stack flex_attention goes
+  # through torch.compile → torch_npu._inductor which calls
+  # `from triton.compiler.compiler import triton_key` (an unstable
+  # community-triton API not exposed in the 3.5.0 wheel pinned by our
+  # triton-ascend pin). The compile fails with ImportError before any
+  # kernel is built. Switch the SFT smoke to sdpa (causal-only): SFT
+  # pipeline, ChatDataLoader and CrossEntropyLoss are the things under
+  # test, document masking is orthogonal. The flex path can be
+  # re-enabled later by upgrading triton or torch_npu. Idempotent:
+  # guard matches the original hard-coded "flex" line.
+  if grep -q '^        model_spec = model_registry("debugmodel", attn_backend="flex")$' torchtitan/models/llama3/config_registry.py; then
+    sed -i 's|^        model_spec = model_registry("debugmodel", attn_backend="flex")$|        model_spec = model_registry("debugmodel", attn_backend="sdpa")|' torchtitan/models/llama3/config_registry.py
+    echo "patched sft_debugmodel attn_backend flex -> sdpa in torchtitan/models/llama3/config_registry.py"
   fi
 }
 

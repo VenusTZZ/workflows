@@ -31,35 +31,54 @@ supported:
       - --logging_steps 1                              # 默认 5：保证 1 步内也打日志（验证训练循环活着）
     timeout_minutes: 30
 
-# ===== unsupported（每条附理由：coder npu-2 2026-09-15 实测 / 静态分析） =====
+# ===== unsupported（每条附理由：coder npu-2 2026-09-15 实跑 exit code + 真实 traceback） =====
 unsupported:
   # 上游 sft.py bug：`build_llm_from_cfg` 在 llm_cfg 不是 dict 时跳过
   # `llm = self._dispatch_lm_model_cfg(...)` 分支，但下一行无条件引用 `llm`
   # → UnboundLocalError。train_lora_hf.py 走 build_lora_model → SupervisedFinetune(llm)
-  # 路径必然命中；CUDA 同样炸，非 NPU 专属
-  # （coder npu-2 实跑：UnboundLocalError: cannot access local variable 'llm'，
-  # torch_npu ERR99999 跟着 NPU 进程一并挂；不是 NPU 后端问题）
+  # 路径必然命中；CUDA 同样炸，非 NPU 专属。
+  # coder npu-2 实跑 (2026-09-15, exit_code=1):
+  #   File "xtuner/model/sft.py", line 143, in build_llm_from_cfg
+  #     llm = self._build_from_cfg_or_module(llm)
+  #                                          ^^^
+  #   UnboundLocalError: cannot access local variable 'llm' where it is not associated with a value
+  # torch_npu ERR99999 跟着 NPU 进程一并挂；非 NPU 后端问题，跟 [[quick-start-doc-pitfalls]] 一样
+  # 是 xtuner v0.2.0 上游代码缺陷，应提 issue。绕过办法：走 train_hf.py HF Trainer 路径（supported）。
   - examples/huggingface_trainer/train_lora_hf.py
 
-  # 同上 + bnb 4bit：xtuner.apis.model.build_qlora_model 硬编 BitsAndBytesConfig
+  # 双重 blocker：xtuner.apis.model.build_qlora_model 硬编 BitsAndBytesConfig
   # （load_in_4bit / bnb_4bit_quant_type=nf4），PyPI aarch64 无 bnb wheel，
-  # bitsandbytes 0.45.0 也未 ship npu 后端
-  # （coder 静态分析：xtuner/apis/model.py:11-47 import BitsAndBytesConfig + build_qlora_model
-  # 默认 cfg；即使 SupervisedFinetune bug 修了，bnb 也无 NPU 实现）
+  # bitsandbytes 0.45.0 也未 ship npu 后端；即使 bnb 在了，下游 SupervisedFinetune
+  # 的 UnboundLocalError（见 train_lora_hf.py）也会再次炸。
+  # coder npu-2 实跑 (2026-09-15, exit_code=1):
+  #   File "xtuner/apis/model.py", line 18, in build_qlora_model
+  #     quantization_config = BitsAndBytesConfig(
+  #   File "transformers/utils/quantization_config.py", line 419, in __init__
+  #     self.post_init()
+  #   File "transformers/utils/quantization_config.py", line 477, in post_init
+  #     if self.load_in_4bit and not version.parse(
+  #         importlib.metadata.version("bitsandbytes")) >= ...
+  #   importlib.metadata.PackageNotFoundError: No package metadata was found for bitsandbytes
+  # bnb 在 NPU 上无等价实现，QLoRA 不在 NPU guard 范围；改用 train_hf.py 走 plain LoRA。
   - examples/huggingface_trainer/train_qlora_hf.py
 
-  # demo_data 目录：每个子目录都是 mmengine config + map_fn + data.json 三件套，
-  # 用法是 `xtuner train examples/demo_data/<name>/config.py`，config.py 头部就
-  # `from .map_fn import ...` 相对导入 + `pretrained_model_name_or_path = "internlm/internlm-7b"`
-  # + BitsAndBytesConfig 4-bit——三个独立 blocker 直接断 launcher：
-  #   1. 相对导入要求 `xtuner train -C <dir>` 把目录当 package，不是裸 `python config.py`
-  #   2. InternLM-7B fp16 14 GB + adapter ~16 GB 卡，单卡 32G 紧（脚本未 NPU 实测）
-  #   3. BitsAndBytesConfig 同 train_qlora_hf，无 NPU 后端
-  # 这条路径的端到端 NPU 验证由 projects/xtuner/docs/Quick-start-Ascend.md 覆盖：
+  # demo_data 是 `xtuner train` 的模板 recipes，4 个 config.py 都走不通 NPU guard：
+  #   ① 裸 `python examples/demo_data/<sub>/config.py` (exit_code=1):
+  #      ImportWarning: can't resolve package from __spec__ or __package__, falling back on __name__ and __path__
+  #      from .map_fn import <sub>_map_fn as dataset_map_fn
+  #      ImportError: attempted relative import with no known parent package
+  #     （config.py 头部 `from .map_fn import ...` 是相对导入，必须 `xtuner train -C <dir>` 当 package）
+  #   ② `xtuner train examples/demo_data/<sub>/config.py` (exit_code=124, 60s timeout):
+  #      mmengine 成功 load cfg、print 出完整 train_cfg、跑到 build_dataset 阶段试图 HEAD
+  #      `https://huggingface.co/internlm/internlm-7b/resolve/main/config.json`
+  #      → MaxRetryError / ConnectTimeoutError：pod 里访问不了 huggingface.co，
+  #        而 config.py 硬编 `pretrained_model_name_or_path = "internlm/internlm-7b"`，没有
+  #        CLI override 切模型；data_files=`./data.json` 相对路径也不存在。
+  # 综合：demo_data 是模板配置，需要用户拷贝后改 model path + data path + 删 bnb，原始 config
+  # 不可端到端跑；端到端 NPU 验证由 projects/xtuner/docs/Quick-start-Ascend.md 覆盖：
   # `xtuner train` + 拷贝 qwen1_5_1_8b_chat_qlora_custom_sft_e1 cfg 后手工删 quantization_config，
-  # 跑 plain LoRA + Qwen1.5-1.8B-Chat，与 docs test 同一回归路径
-  # （coder 静态分析：4 个 config.py 头部 import + BitsAndBytesConfig + InternLM-7B
-  # 三件套全命中；map_fn.py / data.json / README.md 不是 launchable，已在 scan.exclude 整目录排除）
+  # 跑 plain LoRA + Qwen1.5-1.8B-Chat，与 docs test 同一回归路径。
+  # 同目录的 map_fn.py / data.json / README.md 不是 launchable 文件，已在 scan.exclude 整目录排除。
   - examples/demo_data/single_turn/config.py
   - examples/demo_data/multi_turn_1/config.py
   - examples/demo_data/multi_turn_2/config.py
