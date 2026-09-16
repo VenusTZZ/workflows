@@ -112,14 +112,15 @@ supported:
       - --num_epochs 1   # 默认 100：压到单 epoch
     timeout_minutes: 45
 
-  # Supertuning：Qwen2.5-0.5B + guanaco 完整 1 epoch（308 步 exit 0）
+  # Supertuning：Qwen2.5-0.5B + guanaco 真实全量（9846 样本 ÷ batch2×grad_accum16
+  # = 308 优化步，coder 实测 ~13 分钟）。数据经 setup 从仓内 seed 预热 hub 缓存
+  # （见 setup_example.sh guanaco seed 块——hdc 临时，缓存热后回退）。
   - path: examples/supertuning_finetuning/supertuning_finetuning.py
     profile: peft
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --base_model ${SFT_MODEL_PATH}   # 默认 meta-llama/Llama-3.2-1B（gated + 大）：换 0.5B
-      - --data_path ${TARGET_ROOT}/fixtures/ci_supertuning_8.jsonl   # 默认 timdettmers/openassistant-guanaco：该仓文件已转 xet 存储，hf-mirror 的 resolve 对 xet 文件 302 直指 cas-bridge.xethub.hf.co（runner 不可达，HF_HUB_DISABLE_XET 也救不了 plain 路径；ModelScope 无此数据集）。换 8 行真实样本 fixture（{"text": "### Human:...### Assistant:..."} 同上游 schema），run_example.sh 的 load_dataset 垫片会映射 train/test 双 split
       - --batch_size 2   # 默认 1：控时长
     timeout_minutes: 45
 

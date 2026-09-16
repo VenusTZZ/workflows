@@ -5,10 +5,12 @@
 # under test), so the guarded tag is exactly the code that runs.
 #
 # The upstream examples/requirements.txt is deliberately NOT installed
-# wholesale: we install the checkout plus the minimal NLP+CV+inference
-# stack instead. schedulefree (by_feature/schedule_free.py) joins the
-# NLP profile; fire / webdataset / av / diffusers
-# (inference/distributed/*) belong to the accelerate-infer profile.
+# wholesale: we install the checkout plus the minimal NLP+CV stack instead.
+# PARKED 2026-09-16 (same incident as the manifest PARKED block): the
+# schedulefree pip line and the SmolLM/wikitext asset block below are
+# commented out until the hf-mirror Xet issue is solved; the
+# accelerate-infer profile and its asset prefetch stay defined (unused
+# while the entries are parked).
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -100,21 +102,23 @@ ds = load_dataset("nyu-mll/glue", "mrpc")
 print("mrpc splits:", {k: len(v) for k, v in ds.items()})
 PY
 
-  # Extra NLP assets for the newer supported entries:
-  # - HuggingFaceTB/SmolLM-360M + Salesforce/wikitext wikitext-2-v1
-  #   (by_feature/gradient_accumulation_for_autoregressive_models.py;
-  #   upstream switched it from GPT-2+ELI5 to this small combo)
-  python - <<'PY'
-import os
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
-from transformers import AutoModelForCausalLM, AutoTokenizer
-AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-360M")
-AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM-360M")
-from datasets import load_dataset
-ds = load_dataset("Salesforce/wikitext", "wikitext-2-v1")
-print("smollm OK, wikitext-2 splits:", {k: len(v) for k, v in ds.items()})
-PY
+  # PARKED 2026-09-16：SmolLM-360M / wikitext-2 预下块下线。SmolLM 是
+  # Xet-backed 仓库，镜像缓存未命中时 hf-mirror 302 到 cas-bridge，
+  # CI runner 直连超时（run 35062880797 里 cv_example / complete_cv_example
+  # 因此被拖挂——cv profile 复用本函数）。其唯一使用者
+  # by_feature/gradient_accumulation_for_autoregressive_models.py 已随
+  # manifest PARKED 块下线，恢复时两处一起放开：
+  # python - <<'PY'
+  # import os
+  # os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+  # os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+  # from transformers import AutoModelForCausalLM, AutoTokenizer
+  # AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-360M")
+  # AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM-360M")
+  # from datasets import load_dataset
+  # ds = load_dataset("Salesforce/wikitext", "wikitext-2-v1")
+  # print("smollm OK, wikitext-2 splits:", {k: len(v) for k, v in ds.items()})
+  # PY
 }
 
 # Pre-download the Oxford-IIT Pet Dataset used by cv_example.py +
@@ -166,10 +170,11 @@ setup_accelerate-nlp() {
   python -m pip install -e "$TARGET_ROOT" "torch==2.9.0" "torch_npu==2.9.0.post2"
   # scikit-learn is needed by the `evaluate` library's glue metric (sklearn's
   # f1_score, matthews_corrcoef); not a direct dep of evaluate or transformers
-  # so it must be listed explicitly. schedulefree is pure Python (no native
-  # extension) and only by_feature/schedule_free.py imports it.
+  # so it must be listed explicitly.
+  # PARKED 2026-09-16: schedulefree 纯 Python 包本身无害，但其唯一使用者
+  # by_feature/schedule_free.py 已随 manifest PARKED 块下线，先不进列表。
   python -m pip install \
-    transformers datasets evaluate safetensors scikit-learn schedulefree "torch==2.9.0"
+    transformers datasets evaluate safetensors scikit-learn "torch==2.9.0"
   python -c "
 import torch, torch_npu
 assert torch.__version__.startswith('2.9.0'), \
@@ -231,6 +236,9 @@ PY
 
 setup_accelerate-infer() {
   # Inference profile = NLP profile + generation/vision deps + models.
+  # PARKED 2026-09-16: the manifest entries using this profile are parked
+  # (hf-mirror Xet issue, see manifest PARKED block), so nothing invokes
+  # this profile right now — kept defined for the re-enable.
   # torchvision: DiffusionPipeline → transformers.AutoImageProcessor pulls
   # the torchvision op registrations; pin the same ABI-matched build as the
   # cv profile (image's default torchvision pairs with its original torch,

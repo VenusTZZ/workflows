@@ -180,6 +180,13 @@ os.environ.setdefault("TQDM_MININTERVAL", "15")
 from modelscope import snapshot_download
 
 MODEL_CACHE = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
+# CI runner containers start with no /root/.cache/modelscope. The
+# default cache path returned by os.path.expanduser is not created by
+# modelscope itself — snapshot_download fails mid-transfer when the
+# ._____temp staging dir cannot be opened (FileDownloadError on the
+# *.safetensors file). mkdir -p is a no-op on coder where env.sh
+# already exports MODELSCOPE_CACHE to /home/coder/work/modelscope-cache.
+os.makedirs(MODEL_CACHE, exist_ok=True)
 local = snapshot_download("Qwen/Qwen2.5-0.5B-Instruct", cache_dir=MODEL_CACHE)
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"TT_MODEL_PATH={local}\n")
