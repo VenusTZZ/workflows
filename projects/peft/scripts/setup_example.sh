@@ -105,7 +105,11 @@ setup_peft() {
   # Pre-download the example model from ModelScope (China-reachable)
   # because runners cannot reach HuggingFace. The local snapshot dir
   # is exported as SFT_MODEL_PATH for overlay_args to reference.
-  python -m pip install modelscope
+  # Pinned to the doc's verified line (1.37.0): the hub code split
+  # started at 1.38 and 1.40.1's "modelscope-hub>=0.4.2" floor is too
+  # loose — 1.40.1 + hub 0.4.2 (mirror-lagged) dies on
+  # DEFAULT_CREDENTIALS_PATH import at modelscope import time.
+  python -m pip install "modelscope==1.37.0"
   python - <<'PY'
 import os
 # Non-TTY CI logs: throttle tqdm refreshes instead of disabling.

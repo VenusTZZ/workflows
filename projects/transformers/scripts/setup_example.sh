@@ -53,7 +53,10 @@ python -m pip install "${DEPS[@]}"
 # examples load them from a local path instead of the blocked HuggingFace CDN.
 # The returned local snapshot dirs are exported as env vars for the example
 # (overlay_args in examples_manifest.yaml reference them via ${VAR}).
-python -m pip install modelscope
+# Pinned: modelscope>=1.38 splits the hub code into modelscope-hub, and the
+# fresh 1.40.1 wheel's loose ">=0.4.2" floor breaks import when the mirror
+# lags on hub 0.4.3. 1.37.0 is the last pre-split line.
+python -m pip install "modelscope==1.37.0"
 python - <<'PY'
 import os
 from modelscope import snapshot_download

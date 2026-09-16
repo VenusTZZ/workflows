@@ -76,7 +76,12 @@ else:
 }
 
 install_llmcompressor() {
-  python -m pip install modelscope huggingface_hub
+  # modelscope pinned to the last pre-hub-split line: >=1.38 depends on
+  # the separate modelscope-hub package, and 1.40.1's loose ">=0.4.2"
+  # floor breaks import when the pip mirror lags on hub 0.4.3. The
+  # plant_hf_from_modelscope import path (modelscope.hub.snapshot_download)
+  # exists in 1.37.0.
+  python -m pip install "modelscope==1.37.0" huggingface_hub
   pip_ascend -e "$TARGET_ROOT" torch==2.10.0
 }
 
@@ -219,7 +224,7 @@ setup_cpu() {
   select_pip_index
   python -m pip install -U pip setuptools wheel
   ensure_cpu_torch
-  python -m pip install modelscope huggingface_hub
+  python -m pip install "modelscope==1.37.0" huggingface_hub
   python -m pip install -e "$TARGET_ROOT" torch==2.10.0
   python -m pip uninstall -y torch_npu >/dev/null 2>&1 || true
   python -c "
