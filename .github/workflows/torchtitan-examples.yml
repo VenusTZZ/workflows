@@ -1,6 +1,6 @@
 # torchtitan examples guard - project thin trigger.
 #
-# Calls the common engine .github/workflows/example-template.yml;
+# Calls the common engine .github/workflows/examples-template.yml;
 # this file only declares what varies per project: schedule,
 # concurrency, upstream repo, dispatch input forwarding, and matrix
 # parallelism. The guard loop (release-only monitor / manifest-check /
@@ -42,7 +42,7 @@ permissions:
 
 jobs:
   torchtitan-examples:
-    uses: ./.github/workflows/example-template.yml
+    uses: ./.github/workflows/examples-template.yml
     with:
       # Namespaces cache keys (examples-monitor-state-torchtitan_*),
       # artifact names and the scheduling paths under projects/torchtitan.
