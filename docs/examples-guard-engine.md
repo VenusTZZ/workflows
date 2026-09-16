@@ -196,7 +196,7 @@ peft 侧新增（引擎零改动）：
 | `project` | string | 必填 | `projects/` 下的项目目录名。派生：清单路径、cache key `examples-monitor-state-<project>_*`、artifact 名前缀 |
 | `upstream_repo` | string | 必填 | `owner/name`。monitor 轮询对象、checkout 的目标仓（唯一来源，dispatch 不提供仓库选择） |
 | `target_ref` | string | `''` | dispatch 专用：被测 ref（空则 `main`）；schedule 时恒由 monitor 的 release tag 决定 |
-| `examples_repo` | string | `''` | 分离模式：example 脚本所在仓（不填即用 `upstream_repo`）。填写后 examples 树 checkout 该仓**默认分支**（release tag 跨仓不存在），run-example 另 checkout `upstream_repo @ target_ref` 到 `target-source` 并以 `UPSTREAM_ROOT` 暴露给项目脚本 |
+| `examples_repo` | string | `''` | 分离模式：example 脚本所在仓（不填即用 `upstream_repo`）。填写后 examples 单独 checkout 到 `examples/`（跟默认分支，release tag 跨仓不存在），经 `EXAMPLES_ROOT` 暴露给项目脚本；`target` 仍是被测仓 `@ target_ref` 的 checkout，setup 安装源契约与普通模式同形 |
 | `max_parallel` | number | `4` | run-example 矩阵并行上限 |
 
 容器零挂载：该 CI 的 runner 无法提供 host 路径挂载（`/data/ci-cache`、Ascend driver 等），自托管 runner 的容器默认可见 NPU 设备（与 quick-start 引擎同一假设）。卡数由 runner 标签钉死（`linux-aarch64-a2-N` 即 N 卡，选对 runner 即选对卡），本设计无任何卡配置字段——schema 已删除 `npu_devices`，peft 清单不含它。legacy 清单里的 `npu_devices` 是旧设计遗留，共享脚本检测到时仍为其派生设备挂载（兼容，不属于本设计）。容器零 options：首轮 run 实测 `/dev/shm` 为 16G（runner 自带，非 docker 默认 64MB），`--shm-size=64g` 未被应用且该负载 shm 用量为 0——已删。Run example 步骤保留一行 `df -h /dev/shm` 诊断。模型缓存无需挂载：ModelScope 走容器内默认缓存目录（`~/.cache/modelscope`），容器销毁即丢，但 release 触发频率低，重下载可接受。镜像、runner、超时逐条目来自矩阵——引擎 YAML 不出现任何调度参数。
@@ -313,7 +313,7 @@ GET /repos/<upstream_repo>/releases/latest    → release 信号（tag_name）
 
 完整沿用 [guarding-examples.md](guarding-examples.md)「项目运行脚本契约」：`setup_example.sh <profile>`（未知 profile 装任何东西前非 0 退出）与 `run_example.sh <example-relpath>`（env 契约 `PROJECT_ROOT` / `TARGET_ROOT` / `FIXTURE_DIR` / `CI_OUTPUT_DIR` / `OVERLAY_ARGS` / `EXEC`；退出码即结果；红线：只改 CI 工作区副本，绝不 git add/commit/push）。本文不重复定义，peft 脚本按此实现。
 
-分离模式（薄触发器传了 `examples_repo`）下的增量契约：`TARGET_ROOT` 始终指向 examples 仓的 checkout（跟其默认分支），项目脚本从 manifest 解析的路径都相对它；引擎额外提供 `UPSTREAM_ROOT`（监控仓 `@ target_ref` 的 checkout，位于 `target-source`），setup 脚本从它安装被测软件本体，保证被测版本仍由 release 信号定版。非分离模式下 `UPSTREAM_ROOT` 为空串，现有项目脚本无感知。
+分离模式（薄触发器传了 `examples_repo`）下的增量契约：引擎提供 `EXAMPLES_ROOT`（examples 仓 checkout，位于 `examples/`，跟其默认分支），manifest 里的 example 路径与 `run_example.sh` 的解析根指向它；`TARGET_ROOT` 仍是被测仓 `@ target_ref` 的 checkout，setup 脚本照旧从它安装被测软件（`pip install -e "$TARGET_ROOT"`），与普通模式同形，被测版本仍由 release 信号定版。非分离模式下 `EXAMPLES_ROOT` 与 `TARGET_ROOT` 同值，现有项目脚本无感知。
 
 ### 4.4 内部接口（引擎 job 间）
 
@@ -351,7 +351,7 @@ GET /repos/<upstream_repo>/releases/latest    → release 信号（tag_name）
 
 | 日期 | 变更内容 | 原因 |
 |------|----------|------|
-| 2026-09-16 | 引擎新增可选输入 `examples_repo`（分离模式）：example 脚本与被测软件分属两仓时（如 deepspeed：监控 `deepspeedai/DeepSpeed`，脚本在 `deepspeedai/DeepSpeedExamples`），examples 树 checkout 该仓默认分支到 `target`，run-example 另 checkout 监控仓 `@ target_ref` 到 `target-source` 并以 job env `UPSTREAM_ROOT` 暴露给项目 setup 脚本。不填时全部行为与此前逐字一致（现有调用方零变化）。 | 分离模式下只 checkout examples 仓会让被测软件版本失去定版来源（setup 只能装 PyPI 最新），result.json 记的 release tag 与实际测试版本脱钩；双 checkout 保证「example × 软件版本」仍由 release 信号定版。examples 仓 checkout 默认分支而非 main：DeepSpeedExamples 默认分支为 master，且 release tag 跨仓不存在。 |
+| 2026-09-16 | 引擎新增可选输入 `examples_repo`（分离模式）：example 脚本与被测软件分属两仓时（如 deepspeed：监控 `deepspeedai/DeepSpeed`，脚本在 `deepspeedai/DeepSpeedExamples`），examples 单独 checkout 到 `examples/`（跟默认分支）并以 `EXAMPLES_ROOT` 暴露；`target` 与 `TARGET_ROOT` 语义不变（被测仓 `@ target_ref`），setup 安装契约对所有项目同形。存量步骤零修改，不传输入时行为与此前逐字一致。 | PR 评审：原方案给存量 checkout 加条件并新引 `UPSTREAM_ROOT`；改为「只加步骤、不动存量」后回归面更小、契约更统一。代价是分离模式下 manifest-check 多一次主仓 checkout（免费 runner，可接受）。examples 仓跟默认分支而非 main：DeepSpeedExamples 默认分支为 master，且 release tag 跨仓不存在。 |
 | 2026-09-10 | 初版设计：examples 看护引擎化（引擎 + 薄触发器），监控信号由三（examples / release / commit）收敛为二（examples / release），scan.root 单一事实源，以 peft 为首个接入示例。 | 14 份复制式 examples workflow 维护成本高；commit 信号 NPU 占用过高致 schedule 停用；quick start 已验证引擎化形态。 |
 | 2026-09-10 | monitor state cache key 改为严格格式 `examples-monitor-state-<project>_<run_id>`：项目名禁 `_`、`_` 作终止分隔符、项目名移到尾部；配套三道运行时校验（project 输入校验、matched-key 断言、`.project` 属主标签）。 | 评审确认：`-` 分隔时项目名互为前缀（peft / peft-npu 类）可致 restore-keys 跨项目串扰，且 GitHub 缓存无 namespace 隔离机制；分隔符与名字字符集互斥可获得构造性保证，尾部命名同时支持按引擎前缀整体审计（gh cache list）。 |
 | 2026-09-10 | 监控再收敛为 release 单信号：删除 examples 信号与信号吸收语义，`scan.root` 回归纯差集概念；no-release 成为一等公民终态（显示后结束、无 result）；release 轮询不做 fallback 链；monitor 不再 checkout 本仓。 | 被测对象（example × 软件版本）由 release 定版，main 中间态不是稳定被测对象；无 release 时如实显示优于制造触发；单信号使状态机与 monitor 实现最小化，NPU 占用与发版频率天然同频。 |

@@ -170,31 +170,33 @@ jobs:
           path: workflows
 
       - name: Checkout target
-        if: inputs.examples_repo == ''
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.upstream_repo }}
           ref: ${{ needs.monitor.outputs.target_ref }}
           path: target
 
-      # Split mode (examples_repo set): examples live in a separate repo
-      # from the monitored upstream. Release tags do not exist in the
-      # examples repo, so it always follows its default branch
-      # (DeepSpeedExamples uses master, not main).
+      # Split mode (examples_repo set): the example scripts live in a
+      # separate repo from the monitored upstream. Release tags do not
+      # exist in the examples repo, so it always follows its default
+      # branch (DeepSpeedExamples uses master, not main).
       - name: Checkout examples repo
         if: inputs.examples_repo != ''
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.examples_repo }}
-          path: target
+          path: examples
 
       - name: Check supported entries and derive matrix
         id: check
+        env:
+          # Non-split: the example tree is the upstream checkout itself.
+          EXAMPLES_ROOT: ${{ inputs.examples_repo != '' && 'examples' || 'target' }}
         run: |
           set -euo pipefail
           python3 -m pip install -q pyyaml
           python3 workflows/scripts/check_supported_entries.py \
-            --target-root target \
+            --target-root "$EXAMPLES_ROOT" \
             --manifest "workflows/projects/${{ inputs.project }}/examples_manifest.yaml"
 
   run-example:
@@ -214,7 +216,9 @@ jobs:
     env:
       PROJECT_ROOT: ${{ github.workspace }}/workflows/projects/${{ inputs.project }}
       TARGET_ROOT: ${{ github.workspace }}/target
-      UPSTREAM_ROOT: ${{ inputs.examples_repo != '' && format('{0}/target-source', github.workspace) || '' }}
+      # Split mode: examples live in their own checkout; non-split: the
+      # example tree is the upstream checkout itself (TARGET_ROOT).
+      EXAMPLES_ROOT: ${{ inputs.examples_repo != '' && format('{0}/examples', github.workspace) || format('{0}/target', github.workspace) }}
       FIXTURE_DIR: ${{ github.workspace }}/workflows/projects/${{ inputs.project }}/fixtures
       HF_ENDPOINT: https://hf-mirror.com
       PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
@@ -228,31 +232,18 @@ jobs:
           path: workflows
 
       - name: Checkout target
-        if: inputs.examples_repo == ''
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.upstream_repo }}
           ref: ${{ needs.monitor.outputs.target_ref }}
           path: target
 
-      # Split mode: the example tree follows the examples repo's default
-      # branch (see manifest-check), while the monitored upstream is
-      # still pinned to the release-derived target_ref so project setup
-      # scripts can install the exact version under test.
       - name: Checkout examples repo
         if: inputs.examples_repo != ''
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.examples_repo }}
-          path: target
-
-      - name: Checkout upstream source
-        if: inputs.examples_repo != ''
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ inputs.upstream_repo }}
-          ref: ${{ needs.monitor.outputs.target_ref }}
-          path: target-source
+          path: examples
 
       - name: Setup example environment
         env:
