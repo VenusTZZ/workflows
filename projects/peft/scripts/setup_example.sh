@@ -145,13 +145,22 @@ TO_ENV = [
     ("AI-ModelScope/bert-base-uncased", "BERT_BASE_UNCASED_PATH"), # sequence_classification
 ]
 
-# (2) snapshot_download + cp plant: 例里硬编码 hub_id（beft/pvera），
+# (2) snapshot_download + cp plant (model): 例里硬编码 hub_id（beft/pvera），
 #     from_pretrained(<hub_id>) 必须命中本地 cache，否则会去打 xet
 #     走 cp 而非 symlink：symlink 指向 modelscope cache，后者被 pod 回收
 #     / 别的 job 清掉就会断链；cp 后 HF cache 自包含，与 modelscope 无关
-TO_PLANT = [
+TO_PLANT_MODEL = [
     ("bigscience/mt0-small",  "bigscience/mt0-small"),   # beft_finetuning.py 硬编码
     ("facebook/dinov2-base",  "facebook/dinov2-base"),   # pvera/...py 硬编码
+]
+
+# (3) snapshot_download + cp plant (dataset): adamss/no_lora 用 glue mrpc，
+#     adamss_manual 默认 cola。allow_patterns 只下要的 config，避免下完整
+#     140MB 的 9 个 config。imdb 不在这里——modelscope 没 parquet 数据，
+#     走 cache-seed/peft（beans、financial_phrasebank 也走那条路）。
+TO_PLANT_DATASET = [
+    # (ms_id, hf_id, allow_patterns)
+    ("nyu-mll/glue", "nyu-mll/glue", ["mrpc/*", "cola/*"]),
 ]
 
 
@@ -162,10 +171,16 @@ def fetch_sha(hf_id, kind):
     return r.json().get("sha") or r.json().get("oid")
 
 
-def plant_model(ms_id, hf_id):
-    src = Path(snapshot_download(ms_id, cache_dir=str(MODEL_CACHE)))
-    sha = fetch_sha(hf_id, "model")
-    repo_dir = HUB_ROOT / f"models--{hf_id.replace('/', '--')}"
+def plant(ms_id, hf_id, kind, allow_patterns=None):
+    src = Path(snapshot_download(
+        ms_id,
+        cache_dir=str(MODEL_CACHE),
+        repo_type=kind,
+        allow_patterns=allow_patterns,
+    ))
+    sha = fetch_sha(hf_id, kind)
+    repo_kind = "models" if kind == "model" else "datasets"
+    repo_dir = HUB_ROOT / f"{repo_kind}--{hf_id.replace('/', '--')}"
     snap_dir = repo_dir / "snapshots" / sha
     snap_dir.mkdir(parents=True, exist_ok=True)
     (repo_dir / "refs").mkdir(exist_ok=True)
@@ -205,37 +220,26 @@ for ms_id, var_name in TO_ENV:
         failures.append(f"{ms_id} (env): {type(exc).__name__}: {exc}")
         print(f"FAIL {ms_id} (env): {exc}", flush=True)
 
-# (2) snapshot + plant
-for ms_id, hf_id in TO_PLANT:
+# (2) snapshot + plant model（脚本硬编码 hub_id）
+for ms_id, hf_id in TO_PLANT_MODEL:
     try:
-        plant_model(ms_id, hf_id)
+        plant(ms_id, hf_id, "model")
     except Exception as exc:
-        failures.append(f"{ms_id} (plant): {type(exc).__name__}: {exc}")
-        print(f"FAIL {ms_id} (plant): {exc}", flush=True)
+        failures.append(f"{ms_id} (plant model): {type(exc).__name__}: {exc}")
+        print(f"FAIL {ms_id} (plant model): {exc}", flush=True)
 
-# (3) 预热 dataset：miss/mica 硬编码 imdb 1%；adamss/no_lora 用 glue mrpc，
-#     adamss_manual 默认 cola。用 load_dataset 复刻 runtime 调用 → 纯 cache hit。
-# 注意：beans、financial_phrasebank 不在这里——ModelScope 没有，走 cache-seed/peft
-try:
-    from datasets import load_dataset
-    for label, args, kwargs in [
-        ("imdb-1pct",  ("imdb",),            {"split": "train[:1%]"}),
-        ("glue-mrpc",  ("glue", "mrpc"),     {}),
-        ("glue-cola",  ("glue", "cola"),     {}),
-    ]:
-        try:
-            load_dataset(*args, **kwargs)
-            print(f"prefetched {label}: {args} {kwargs}", flush=True)
-        except Exception as exc:
-            failures.append(f"dataset {label}: {type(exc).__name__}: {exc}")
-            print(f"FAIL dataset {label}: {exc}", flush=True)
-except ImportError:
-    print("datasets not installed; cannot prefetch", file=sys.stderr, flush=True)
+# (3) snapshot + plant dataset（脚本硬编码 dataset 名）
+for ms_id, hf_id, patterns in TO_PLANT_DATASET:
+    try:
+        plant(ms_id, hf_id, "dataset", allow_patterns=patterns)
+    except Exception as exc:
+        failures.append(f"{ms_id} (plant dataset): {type(exc).__name__}: {exc}")
+        print(f"FAIL {ms_id} (plant dataset): {exc}", flush=True)
 
 if failures:
     print(f"setup_peft incomplete: {failures}", file=sys.stderr, flush=True)
-    # Don't fail setup on prefetch errors — examples that need the data
-    # will surface the real failure when they actually try to load.
+    # Don't fail setup on plant errors — examples that need planted
+    # content will surface the real failure when they actually load.
 PY
 }
 

@@ -102,17 +102,21 @@ peft 9 个 supported 例的 model/dataset 来源，按例分别走哪条路：
 | 例 | model 路径来源 | dataset 路径来源 |
 |---|---|---|
 | sft | overlay `--model_name_or_path ${SFT_MODEL_PATH}`（Qwen0.5B 本地） | overlay fixture `ci_sft_8.jsonl` |
-| miss / mica | overlay `--base_model_name_or_path ${SFT_MODEL_PATH}` | 硬编码 `imdb`（setup 预下）|
+| miss / mica | overlay `--base_model_name_or_path ${SFT_MODEL_PATH}` | 硬编码 `imdb`（**cache-seed**）|
 | supertuning | overlay `--base_model ${SFT_MODEL_PATH}` | overlay fixture `ci_supertuning_8.jsonl` |
-| beft | 硬编码 `bigscience/mt0-small`（setup plant） | 硬编码 `gtfintechlab/financial_phrasebank...` → **cache-seed** |
-| pvera | 硬编码 `facebook/dinov2-base`（setup plant） | 硬编码 `beans` → **cache-seed** |
-| sequence_classification | overlay `--model_name_or_path ${BERT_BASE_UNCASED_PATH}` | `glue/mrpc`（setup 预下）|
-| adamss ×2 | overlay `--model_name_or_path ${ROBERTA_BASE_PATH}` | `glue/mrpc` 或 `glue/cola`（setup 预下）|
+| beft | 硬编码 `bigscience/mt0-small`（setup cp plant） | 硬编码 `gtfintechlab/financial_phrasebank...` → **cache-seed** |
+| pvera | 硬编码 `facebook/dinov2-base`（setup cp plant） | 硬编码 `beans` → **cache-seed** |
+| sequence_classification | overlay `--model_name_or_path ${BERT_BASE_UNCASED_PATH}` | `glue/mrpc`（setup cp plant）|
+| adamss ×2 | overlay `--model_name_or_path ${ROBERTA_BASE_PATH}` | `glue/mrpc` 或 `glue/cola`（setup cp plant）|
 
-**setup_example.sh 只 plant 真正硬编码的**：mt0-small（beft）、dinov2-base
-（pvera），其它 model 走 overlay 传本地路径；dataset 用 `load_dataset(...)`
-预热 cache。
+**setup_example.sh cp plant 三类**：
+- model：脚本硬编码 hub_id 的（beft/pvera）
+- dataset：脚本硬编码 dataset 名 + allow_patterns 过滤的（glue 只取 mrpc/cola）
 
-**本目录只装 ModelScope 没有的 2 个**：
-- `beans`（~162MB parquet）
-- `gtfintechlab/financial_phrasebank_sentences_allagree`（~196KB）
+**本目录装 ModelScope 没有 parquet 数据的 3 个**：
+- `stanfordnlp/imdb`（~80MB plain_text parquet ×3）— miss / mica 用 `train[:1%]`
+- `AI-Lab-Makerere/beans`（~137MB）— pvera 用
+- `gtfintechlab/financial_phrasebank_sentences_allagree` / 5768（~196KB）— beft 用
+
+`modelscope/imdb` 有 imdb.py script 但**没 parquet 数据**，所以 imdb 不走 modelscope。
+nyu-mll/glue 的 mrpc/cola parquet 在 modelscope 上 → setup 阶段 cp plant，无 push。
