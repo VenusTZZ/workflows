@@ -175,7 +175,6 @@ def _maybe_synth_test(ds_dict):
     return ds_dict
 
 
-_original_load_dataset = _patched_load_dataset
 _datasets.load_dataset = _patched_load_dataset
 PY
   # Wrap _load_dataset post-call: a simpler approach is to leave the
