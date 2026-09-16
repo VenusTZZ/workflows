@@ -1,33 +1,16 @@
-# cache-seed/peft/manifest.yaml
-#
-# ModelScope 实测后的结果（2026-09-16）：
-#   ✓  5 个模型都在 ModelScope（AI-ModelScope/roberta-base 等）
-#   ✓  nyu-mll/glue              在 ModelScope
-#   ✓  modelscope/imdb           在 ModelScope（注意命名）
-#   ✗  beans                      ModelScope 没有
-#   ✗  gtfintechlab/financial_phrasebank_sentences_allagree   ModelScope 没有
-#
-# 所以本目录需要 stage 的只有下面这 2 个数据集。
-# - 5 个 model 走 setup_example.sh 里 modelscope.snapshot_download：
-#     Qwen2.5-0.5B / roberta-base / bert-base-uncased 由 overlay
-#     传 ${SFT_MODEL_PATH} / ${ROBERTA_BASE_PATH} / ${BERT_BASE_UNCASED_PATH}
-#     走本地路径（无需 plant）；
-#     bigscience/mt0-small（beft）/ facebook/dinov2-base（pvera）脚本硬编码
-#     hub_id，setup 阶段 symlink plant 到 ~/.cache/huggingface/hub/
-# - nyu-mll/glue（mrpc/cola）+ modelscope/imdb 走 setup 阶段的
-#   load_dataset(...) 预热 cache
-#
-# 下面这两个走本目录（cache-seed 通用流程）：
-#   huggingface-cli download beans --repo-type dataset
-#   huggingface-cli download gtfintechlab/financial_phrasebank_sentences_allagree --repo-type dataset
-#
-#   python scripts/bundle_cache.py --project peft \
-#       --src ~/.cache/huggingface/hub/datasets--beans \
-#       --prefix hub/datasets--beans
-#
-#   python scripts/bundle_cache.py --project peft \
-#       --src ~/.cache/huggingface/hub/datasets--gtfintechlab--financial_phrasebank_sentences_allagree \
-#       --prefix hub/datasets--gtfintechlab--financial_phrasebank_sentences_allagree
-#
-# bundle_cache.py 自动算 sha256 并追加 entries 到本文件。
-files: []
+files:
+- path: hub/datasets--AI-Lab-Makerere--beans/snapshots/27aa014ce09b193e1a6f58112d4a66e0eddb69c5/README.md
+  sha256: d75515895d71309b696807f02cdd7d174c389abdf3040650476f38a56af00111
+- path: hub/datasets--AI-Lab-Makerere--beans/snapshots/27aa014ce09b193e1a6f58112d4a66e0eddb69c5/data/train.parquet
+  sha256: 7f905a7323966a58e89b8e839ed656bb869fc82d16a3fadc7dce40972a5f8b19
+  size: 143773054
+- path: hub/datasets--AI-Lab-Makerere--beans/refs/main
+  sha256: a4de68d31cb2f48ff0b01a8a1230659512b4ec745cdd563515973cc86f613fb4
+- path: hub/datasets--gtfintechlab--financial_phrasebank_sentences_allagree/snapshots/c9e6cd6b3a367dd6a5b9043745ecc2c8b292571b/README.md
+  sha256: f342476d208eaf715d4ad8e5efbde99214efc542f4f0d816218a6773aabea4fb
+- path: hub/datasets--gtfintechlab--financial_phrasebank_sentences_allagree/snapshots/c9e6cd6b3a367dd6a5b9043745ecc2c8b292571b/5768/train.parquet
+  sha256: 841353fa75c7ed8e51b0c40b9354b72b7c48bbff806baa7a2f13d27785d9af3d
+- path: hub/datasets--gtfintechlab--financial_phrasebank_sentences_allagree/snapshots/c9e6cd6b3a367dd6a5b9043745ecc2c8b292571b/5768/test.parquet
+  sha256: 7c5ebc621e7fd7866d6d8a3d9226b15f474ad1cc8f06edc3f51e5a3d8314761d
+- path: hub/datasets--gtfintechlab--financial_phrasebank_sentences_allagree/refs/main
+  sha256: 2978cdd2e6decff6169ebd691da5fd4ee47db50a3a6e19561db08020a80f9542
