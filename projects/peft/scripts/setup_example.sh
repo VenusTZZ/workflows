@@ -124,7 +124,7 @@ setup_peft() {
   # modelscope import time.
   python -m pip install "modelscope==1.37.0"
   python - <<'PY'
-import os, sys
+import os, sys, shutil
 from pathlib import Path
 
 # Non-TTY CI logs: throttle tqdm refreshes instead of disabling.
@@ -145,8 +145,10 @@ TO_ENV = [
     ("AI-ModelScope/bert-base-uncased", "BERT_BASE_UNCASED_PATH"), # sequence_classification
 ]
 
-# (2) snapshot_download + plant: 例里硬编码 hub_id（beft/pvera），
+# (2) snapshot_download + cp plant: 例里硬编码 hub_id（beft/pvera），
 #     from_pretrained(<hub_id>) 必须命中本地 cache，否则会去打 xet
+#     走 cp 而非 symlink：symlink 指向 modelscope cache，后者被 pod 回收
+#     / 别的 job 清掉就会断链；cp 后 HF cache 自包含，与 modelscope 无关
 TO_PLANT = [
     ("bigscience/mt0-small",  "bigscience/mt0-small"),   # beft_finetuning.py 硬编码
     ("facebook/dinov2-base",  "facebook/dinov2-base"),   # pvera/...py 硬编码
@@ -170,18 +172,24 @@ def plant_model(ms_id, hf_id):
     # no trailing newline — hub compares this string to the snapshot
     # folder name without stripping
     (repo_dir / "refs" / "main").write_text(sha)
+    n_bytes = 0
     for item in src.rglob("*"):
         if not item.is_file():
             continue
         dest = snap_dir / item.relative_to(src)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        if dest.exists() or dest.is_symlink():
-            continue
+        if dest.is_symlink():
+            # 替换之前 symlink-based plant 留下的链（避免断链风险）
+            dest.unlink()
+        elif dest.exists():
+            continue  # 已有真实文件，跳过
         try:
-            dest.symlink_to(item.resolve())
+            shutil.copy2(item, dest)
+            n_bytes += item.stat().st_size
         except FileExistsError:
             pass
-    print(f"planted {hf_id}@{sha[:8]}", flush=True)
+    print(f"planted (cp) {hf_id}@{sha[:8]} ({n_bytes // (1024 * 1024)} MB)",
+          flush=True)
 
 
 failures: list[str] = []
