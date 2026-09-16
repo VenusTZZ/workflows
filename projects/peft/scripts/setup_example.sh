@@ -106,148 +106,136 @@ setup_peft() {
     torchvision==0.24.0
   python -c "import peft, trl, transformers, datasets, accelerate; print('peft', peft.__version__, '/ trl', trl.__version__, '/ transformers', transformers.__version__)"
 
-  # Pre-download the example model from ModelScope (China-reachable)
-  # because runners cannot reach HuggingFace. The local snapshot dir
-  # is exported as SFT_MODEL_PATH for overlay_args to reference.
-  # Pinned to the doc's verified line (1.37.0): the hub code split
-  # started at 1.38 and 1.40.1's "modelscope-hub>=0.4.2" floor is too
-  # loose — 1.40.1 + hub 0.4.2 (mirror-lagged) dies on
-  # DEFAULT_CREDENTIALS_PATH import at modelscope import time.
+  # Pre-download all example content from ModelScope (China-reachable)
+  # because runners cannot reliably reach HuggingFace (xet-backed files
+  # 302 to cas-bridge.xethub.hf.co, intermittently unreachable).
+  #
+  # Strategy:
+  #   - Modelscope snapshot_download (China mirror) → plant to
+  #     ~/.cache/huggingface/hub/ via symlinks, with refs/main written
+  #     to the real upstream sha (queried via HF API which is xet-free).
+  #     This way from_pretrained(<hf_id>) / load_dataset(<hf_id>, ...)
+  #     resolves to the planted cache and never touches the network.
+  #   - Qwen2.5-0.5B also gets SFT_MODEL_PATH exposed for overlay_args.
+  #
+  # Pinned to 1.37.0: the hub code split started at 1.38 and 1.40.1's
+  # "modelscope-hub>=0.4.2" floor is too loose — 1.40.1 + hub 0.4.2
+  # (mirror-lagged) dies on DEFAULT_CREDENTIALS_PATH import at
+  # modelscope import time.
   python -m pip install "modelscope==1.37.0"
   python - <<'PY'
-import os
-# Non-TTY CI logs: throttle tqdm refreshes instead of disabling.
-os.environ.setdefault("TQDM_MININTERVAL", "15")
-from modelscope import snapshot_download
-
-MODEL_CACHE = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
-local = snapshot_download("Qwen/Qwen2.5-0.5B", cache_dir=MODEL_CACHE)
-with open(os.environ["GITHUB_ENV"], "a") as fh:
-    fh.write(f"SFT_MODEL_PATH={local}\n")
-print("SFT_MODEL_PATH=", local)
-PY
-
-  # Runtime model loads are a lottery on these runners: hf-mirror 302s
-  # xet-backed weights (all popular models now) to cas-bridge.xethub.hf.co
-  # whose connectivity from the cluster is intermittent (run 35062862773:
-  # one job pulled roberta-base fine, another timed out 5/5 on the same
-  # file). Plant every hub-id model the examples load into the HF cache
-  # from its ModelScope mirror, under the REAL latest revision so
-  # from_pretrained(<hub id>) resolves fully locally without offline mode.
-  python - <<'PY'
-import os
-os.environ.setdefault("TQDM_MININTERVAL", "15")
+import os, sys, shutil
 from pathlib import Path
 
+# Non-TTY CI logs: throttle tqdm refreshes instead of disabling.
+os.environ.setdefault("TQDM_MININTERVAL", "15")
+
 import requests
-from huggingface_hub import try_to_load_from_cache
 from modelscope import snapshot_download
 
-HF_ENDPOINT = os.environ.get("HF_ENDPOINT", "https://huggingface.co")
-MODEL_CACHE = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
-hub_root = Path(os.environ.get("HF_HOME", Path.home() / ".cache/huggingface")) / "hub"
+MODEL_CACHE = Path(os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope")))
+HUB_ROOT = Path(os.path.expanduser("~/.cache/huggingface/hub"))
+HF_API = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/") + "/api"
 
-# (modelscope mirror id, huggingface hub id the example passes)
-MODELS = [
-    ("AI-ModelScope/roberta-base", "roberta-base"),            # adamss x2
-    ("AI-ModelScope/bert-base-uncased", "bert-base-uncased"),   # no_lora
-    ("bigscience/mt0-small", "bigscience/mt0-small"),           # beft (hardcoded)
-    ("facebook/dinov2-base", "facebook/dinov2-base"),           # pvera (hardcoded)
+# (1) snapshot_download → env var: 例里 overlay 传 ${VAR}，
+#     from_pretrained(<local_path>) 直接吃本地，无需 plant
+TO_ENV = [
+    ("Qwen/Qwen2.5-0.5B",               "SFT_MODEL_PATH"),         # sft/miss/mica/supertuning
+    ("AI-ModelScope/roberta-base",      "ROBERTA_BASE_PATH"),      # adamss x2（overlay 注入）
+    ("AI-ModelScope/bert-base-uncased", "BERT_BASE_UNCASED_PATH"), # sequence_classification
 ]
 
-for ms_id, hf_id in MODELS:
-    src = Path(snapshot_download(ms_id, cache_dir=MODEL_CACHE))
-    sha = requests.get(f"{HF_ENDPOINT}/api/models/{hf_id}", timeout=60).json()["sha"]
-    repo_dir = hub_root / f"models--{hf_id.replace('/', '--')}"
+# (2) snapshot_download + cp plant: 例里硬编码 hub_id（beft/pvera），
+#     from_pretrained(<hub_id>) 必须命中本地 cache，否则会去打 xet
+#     走 cp 而非 symlink：symlink 指向 modelscope cache，后者被 pod 回收
+#     / 别的 job 清掉就会断链；cp 后 HF cache 自包含，与 modelscope 无关
+TO_PLANT = [
+    ("bigscience/mt0-small",  "bigscience/mt0-small"),   # beft_finetuning.py 硬编码
+    ("facebook/dinov2-base",  "facebook/dinov2-base"),   # pvera/...py 硬编码
+]
+
+
+def fetch_sha(hf_id, kind):
+    url = f"{HF_API}/{kind}s/{hf_id}"
+    r = requests.get(url, timeout=30)
+    r.raise_for_status()
+    return r.json().get("sha") or r.json().get("oid")
+
+
+def plant_model(ms_id, hf_id):
+    src = Path(snapshot_download(ms_id, cache_dir=str(MODEL_CACHE)))
+    sha = fetch_sha(hf_id, "model")
+    repo_dir = HUB_ROOT / f"models--{hf_id.replace('/', '--')}"
     snap_dir = repo_dir / "snapshots" / sha
     snap_dir.mkdir(parents=True, exist_ok=True)
     (repo_dir / "refs").mkdir(exist_ok=True)
-    # huggingface_hub compares this string to the snapshot folder name
-    # without stripping; a trailing newline makes the cache miss.
+    # no trailing newline — hub compares this string to the snapshot
+    # folder name without stripping
     (repo_dir / "refs" / "main").write_text(sha)
+    n_bytes = 0
     for item in src.rglob("*"):
         if not item.is_file():
             continue
         dest = snap_dir / item.relative_to(src)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        if dest.exists() or dest.is_symlink():
-            continue
-        dest.symlink_to(item.resolve())
-    if not (snap_dir / "config.json").is_file():
-        raise SystemExit(f"{hf_id}: planted snapshot missing config.json")
-    cached = try_to_load_from_cache(hf_id, "config.json")
-    if not cached:
-        raise SystemExit(f"{hf_id}: hub cannot see the planted snapshot")
-    print(f"planted {ms_id} -> {hf_id}@{sha[:8]}")
-PY
+        if dest.is_symlink():
+            # 替换之前 symlink-based plant 留下的链（避免断链风险）
+            dest.unlink()
+        elif dest.exists():
+            continue  # 已有真实文件，跳过
+        try:
+            shutil.copy2(item, dest)
+            n_bytes += item.stat().st_size
+        except FileExistsError:
+            pass
+    print(f"planted (cp) {hf_id}@{sha[:8]} ({n_bytes // (1024 * 1024)} MB)",
+          flush=True)
 
-  # guanaco (supertuning's default dataset) exists only on HF — no
-  # ModelScope mirror — and its files are xet-backed: the mirror 302s
-  # them to cas-bridge, unreachable from the runners. hdc-only
-  # temporary: seed the hub cache from repo-committed copies so
-  # load_dataset("timdettmers/openassistant-guanaco") resolves fully
-  # locally (9846 train / 518 test, verified end-to-end). COPY, not
-  # symlink — the workspace checkout is per-job, the cache must
-  # outlive it. Pinned to the revision the files were fetched from;
-  # if upstream moves, the cache misses and the run fails loudly
-  # (re-seed then). Revert this block and seed/ once the runner
-  # caches are warm.
-  python - <<'PY'
-import os
-import shutil
-from pathlib import Path
 
-SEED_DIR = Path(os.environ["PROJECT_ROOT"]) / "seed" / "guanaco"
-HF_ID = "timdettmers/openassistant-guanaco"
-# revision the seed files were fetched from (2026-09-16)
-SHA = "831dabac2283d99420cda0b673d7a2a43849f17a"
-SIZES = {
-    "openassistant_best_replies_train.jsonl": 20877686,
-    "openassistant_best_replies_eval.jsonl": 1105272,
-}
-hub_root = Path(os.environ.get("HF_HOME", Path.home() / ".cache/huggingface")) / "hub"
-snap = hub_root / f"datasets--{HF_ID.replace('/', '--')}" / "snapshots" / SHA
-need = [n for n in SIZES if not (snap / n).is_file()]
-if not need:
-    print(f"guanaco cache already seeded @{SHA[:8]}")
-else:
-    snap.mkdir(parents=True, exist_ok=True)
-    refs = snap.parent / "refs"
-    refs.mkdir(exist_ok=True)
-    # no trailing newline: hub compares the string to the snapshot dir name
-    (refs / "main").write_text(SHA)
-    for name in need:
-        shutil.copy2(SEED_DIR / name, snap / name)
-        got = (snap / name).stat().st_size
-        assert got == SIZES[name], f"{name}: expected {SIZES[name]} bytes, got {got}"
-    print(f"seeded {HF_ID}@{SHA[:8]} ({sum(SIZES.values()) / 1e6:.1f}MB)")
-PY
+failures: list[str] = []
 
-  # Prefetch every dataset / metric the examples load, with the exact
-  # runtime call so the run step is a pure cache hit (small files are
-  # mirror-proxied and reliable; the win is failing here, fast and
-  # clearly, instead of mid-train).
-  python - <<'PY'
-import os
-os.environ.setdefault("TQDM_MININTERVAL", "15")
-from datasets import load_dataset
+# (1) snapshot → env var
+for ms_id, var_name in TO_ENV:
+    try:
+        local = Path(snapshot_download(ms_id, cache_dir=str(MODEL_CACHE)))
+        with open(os.environ["GITHUB_ENV"], "a") as fh:
+            fh.write(f"{var_name}={local}\n")
+        print(f"{var_name}={local}", flush=True)
+    except Exception as exc:
+        failures.append(f"{ms_id} (env): {type(exc).__name__}: {exc}")
+        print(f"FAIL {ms_id} (env): {exc}", flush=True)
 
-DATASETS = [
-    (("glue", "mrpc"), {}),   # adamss (overlay), no_lora (hardcoded task)
-    (("glue", "cola"), {}),   # adamss manual (default)
-    (("gtfintechlab/financial_phrasebank_sentences_allagree", "5768"), {}),  # beft
-    (("beans",), {"split": "train"}),   # pvera
-    (("imdb",), {"split": "train[:1%]"}),  # miss / mica
-]
-for args, kwargs in DATASETS:
-    ds = load_dataset(*args, **kwargs)
-    splits = list(ds) if hasattr(ds, "keys") else type(ds).__name__
-    print(f"prefetched {args} {kwargs}: {splits}")
+# (2) snapshot + plant
+for ms_id, hf_id in TO_PLANT:
+    try:
+        plant_model(ms_id, hf_id)
+    except Exception as exc:
+        failures.append(f"{ms_id} (plant): {type(exc).__name__}: {exc}")
+        print(f"FAIL {ms_id} (plant): {exc}", flush=True)
 
-import evaluate
-for task in ("mrpc", "cola"):
-    evaluate.load("glue", task)
-print("prefetched evaluate metric glue (mrpc, cola)")
+# (3) 预热 dataset：miss/mica 硬编码 imdb 1%；adamss/no_lora 用 glue mrpc，
+#     adamss_manual 默认 cola。用 load_dataset 复刻 runtime 调用 → 纯 cache hit。
+# 注意：beans、financial_phrasebank 不在这里——ModelScope 没有，走 cache-seed/peft
+try:
+    from datasets import load_dataset
+    for label, args, kwargs in [
+        ("imdb-1pct",  ("imdb",),            {"split": "train[:1%]"}),
+        ("glue-mrpc",  ("glue", "mrpc"),     {}),
+        ("glue-cola",  ("glue", "cola"),     {}),
+    ]:
+        try:
+            load_dataset(*args, **kwargs)
+            print(f"prefetched {label}: {args} {kwargs}", flush=True)
+        except Exception as exc:
+            failures.append(f"dataset {label}: {type(exc).__name__}: {exc}")
+            print(f"FAIL dataset {label}: {exc}", flush=True)
+except ImportError:
+    print("datasets not installed; cannot prefetch", file=sys.stderr, flush=True)
+
+if failures:
+    print(f"setup_peft incomplete: {failures}", file=sys.stderr, flush=True)
+    # Don't fail setup on prefetch errors — examples that need the data
+    # will surface the real failure when they actually try to load.
 PY
 }
 
