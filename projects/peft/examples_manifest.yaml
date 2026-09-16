@@ -62,7 +62,7 @@ supported:
     overlay_args:
       - --base_model_name_or_path ${SFT_MODEL_PATH}   # HfArgumentParser 必填：注入 setup 预下载的 0.5B
       - --dataset_field text label   # upstream bug：ScriptArguments(SFTConfig) dataclass 默认 None，但 miss_finetuning.py:89 直接 dataset_field[0]/[1] 取下标，CUDA 也一样 TypeError（纯 Python 逻辑与硬件无关）。text=imdb 评论, label=0/1 情感
-      - --loss_type nll   # 绕开 trl 1.12+ 默认 chunked_nll：trl sft_trainer.py:1331 用 isinstance(output_embeddings, BaseTunerLayer) 检测到 peft 包了 lm_head 直接 raise ValueError（纯 PyTorch patch，CUDA 同问题，NPU 是首跑通这条路径的环境）；nll 走标准 cross-entropy 跳过整个 chunked patch 路径，与 peft partial head 共存
+      - --loss_type nll   # 绕开 trl 1.12+ 默认 chunked_nll：miss_finetuning.py:61 用 device_map="auto" 加载模型，accelerate.add_hook_to_module 把 model.forward 替换成 functools.partial；trl 1.12 sft_trainer.py:383 (1.13 在 386) 的 _patch_chunked_ce_lm_head 走 inspect.signature(original_forward.__func__) 假设 forward 是普通 method，partial 没 __func__ → AttributeError（纯 PyTorch + accelerate，硬件无关，CUDA 同问题）。nll 走标准 cross-entropy 跳过整个 chunked patch。注：sft_trainer.py:1331 isinstance(BaseTunerLayer) guard 在这两例不会触发——target_modules=["q_proj","o_proj","k_proj","v_proj","gate_proj","up_proj","down_proj"] 不含 lm_head，model.get_output_embeddings() 还是普通 Linear，guard 放过后 patch 内部才崩
     timeout_minutes: 30
 
   # MiCA：同上配方（Qwen2.5-0.5B + imdb 1% + nll）
@@ -72,7 +72,7 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --base_model_name_or_path ${SFT_MODEL_PATH}   # HfArgumentParser 必填：注入 0.5B
-      - --loss_type nll   # 同 miss：绕开 trl chunked_nll 与 peft partial 的冲突
+      - --loss_type nll   # 同 miss：mica_finetuning.py:52 同样 device_map="auto" 触发 accelerate add_hook_to_module；chunked_nll patch 在 functools.partial 上 inspect.signature(__func__) 崩
     timeout_minutes: 30
 
   # PVeRa：dinov2-base + beans，原样跑通
