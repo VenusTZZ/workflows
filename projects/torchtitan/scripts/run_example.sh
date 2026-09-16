@@ -4,10 +4,15 @@
 # (JSON array, possibly []). Shell launchers already forward "$@"; this
 # script never patches them. Never git add/commit/push.
 #
-# Dispatches .sh launcher -> bash (cwd = launcher's dir), Python entry
-# -> python (cwd = target root). All torchtitan supported entries use
-# .sh launchers written by setup_example.sh, so the python branch is
-# only reached for ad-hoc direct entry points (none today).
+# The manifest stores two fields per supported entry:
+#   path: the upstream file we want to verify exists (used by
+#         manifest-check, never executed)
+#   exec: the .sh launcher setup writes under $TARGET_ROOT/scripts/
+#         (execs `torchrun -m torchtitan.train "$@"` so LOCAL_RANK
+#         is set by torchrun — running `python torchtitan/train.py`
+#         directly crashes on `LOCAL_RANK must be set`)
+# When EXEC is set we run the launcher; otherwise we fall back to
+# the path field (ad-hoc Python entry points).
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
@@ -18,11 +23,19 @@ fi
 EXAMPLE_REL="$1"
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
 CI_OUTPUT_DIR="${CI_OUTPUT_DIR:?CI_OUTPUT_DIR is required}"
+# The engine exports EXEC = manifest.entry.exec when set; run_example
+# scripts for projects that have no exec field (ad-hoc .py entries)
+# silently keep the legacy behaviour.
+EXEC_REL="${EXEC:-}"
 
 EXAMPLE_PATH="$TARGET_ROOT/$EXAMPLE_REL"
 [[ -e "$EXAMPLE_PATH" ]] || { echo "example not found: $EXAMPLE_PATH" >&2; exit 1; }
 
-LAUNCH_PATH="$EXAMPLE_PATH"
+if [[ -n "$EXEC_REL" ]]; then
+  LAUNCH_PATH="$TARGET_ROOT/$EXEC_REL"
+else
+  LAUNCH_PATH="$EXAMPLE_PATH"
+fi
 if [[ ! -f "$LAUNCH_PATH" ]]; then
   echo "launchable file not found: $LAUNCH_PATH" >&2
   exit 1
