@@ -200,13 +200,6 @@ jobs:
       TARGET_ROOT: ${{ github.workspace }}/target
       FIXTURE_DIR: ${{ github.workspace }}/workflows/projects/${{ inputs.project }}/fixtures
       HF_ENDPOINT: https://hf-mirror.com
-      # modelscope snapshot_download re-hashes every cached file against
-      # the server sha256 and re-downloads on mismatch. Default-off in the
-      # SDK ("just meet expectation by default", caching.py) — a corrupt
-      # cache would fail every run forever without this. Must be set before
-      # modelscope is imported (module-level constant). Cost: a few seconds
-      # of sha256 per setup for multi-GB caches.
-      MODELSCOPE_ENABLE_DEFAULT_HASH_VALIDATION: "true"
       # When the mirror passes xet metadata through, hf_xet downloads
       # chunks straight from xethub.hf.co hosts, bypassing HF_ENDPOINT
       # (unreachable from the CN runners) — same fix as llm-compressor.
