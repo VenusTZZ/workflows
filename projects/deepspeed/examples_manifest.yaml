@@ -54,7 +54,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - '--model_name_or_path facebook/opt-125m'
+      - '--model_name_or_path ${OPT_125M_PATH}'
       - '--data_path local/jsonfile'
       - '--num_train_epochs 1'
       - '--per_device_train_batch_size 4'
@@ -71,7 +71,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - '--model_name_or_path facebook/opt-125m'
+      - '--model_name_or_path ${OPT_125M_PATH}'
       - '--data_path local/jsonfile'
       - '--num_train_epochs 1'
       - '--per_device_train_batch_size 4'
@@ -87,7 +87,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - '--model_name_or_path facebook/opt-125m'
+      - '--model_name_or_path ${OPT_125M_PATH}'
       - '--data_path local/jsonfile'
       - '--num_train_epochs 1'
       - '--per_device_train_batch_size 2'
@@ -104,8 +104,8 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - '--actor_model_name_or_path facebook/opt-125m'
-      - '--critic_model_name_or_path facebook/opt-125m'
+      - '--actor_model_name_or_path ${OPT_125M_PATH}'
+      - '--critic_model_name_or_path ${OPT_125M_PATH}'
       - '--data_path local/jsonfile'
       - '--enable_test_mode'
       - '--test_stop_step 5'
@@ -119,24 +119,10 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - '--model facebook/opt-125m'
+      - '--model ${OPT_125M_PATH}'
       - '--hf_baseline'
       - '--dtype float32'
       - '--max_new_tokens 8'
-    timeout_minutes: 60
-  # bf16 master-weight comparison: built-in SimpleTransformer + synthetic data, no external model/data.
-  - path: training/bf16_master_weight/train.py
-    profile: deepspeed
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - '--num_layers 2'
-      - '--hidden_dim 256'
-      - '--num_steps 5'
-      - '--warmup_steps 1'
-      - '--batch_size 2'
-      - '--seq_length 128'
-      - '--deepspeed_config configs/baseline.json'
     timeout_minutes: 60
   # CIFAR10 image classification (ZeRO stage 0 + BF16): torchvision auto-downloads CIFAR-10 (~170MB, cluster-reachable).
   - path: training/cifar/cifar10_deepspeed.py
@@ -149,16 +135,6 @@ supported:
       - '--dtype bf16'
       - '--stage 0'
     timeout_minutes: 90
-  # Pipeline parallelism (single card, pipeline=1): CIFAR10, AlexNet.
-  - path: training/pipeline_parallelism/train.py
-    profile: deepspeed
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - '--steps 10'
-      - '-p 1'
-      - '--deepspeed_config ds_config.json'
-    timeout_minutes: 90
   # ZeRO offload_states: random synthetic data, no external dependency.
   - path: training/offload_states/offload_states.py
     profile: deepspeed
@@ -170,6 +146,8 @@ supported:
     timeout_minutes: 60
 
 unsupported:
+  - training/bf16_master_weight/train.py  # CUDA 硬绑定（需 patch，次轮候选）：torch.cuda.set_device（第203行）、torch.autocast(device_type='cuda')（第301行）、torch.cuda.manual_seed_all/reset_peak_memory_stats/memory_allocated 全套 CUDA API；内置 SimpleTransformer + 合成数据本无外部依赖，但 device 全部走 cuda 命名空间，NPU 上 torch.cuda.set_device 抛 AttributeError；同 example 的 1 个 .sh 启动器 run_comparison.sh 已并入本条
+  - training/pipeline_parallelism/train.py  # NCCL+CUDA 硬绑定（需 patch，次轮候选）：--backend 默认 nccl（第58-61行，NPU 用 HCCL 不支持 nccl）、torch.cuda.set_device(args.local_rank)（第154行）；CIFAR10+AlexNet 本身单卡可跑，但分布式初始化与 device 设置绑死 CUDA；同 example 的 1 个 .sh 启动器 run.sh 已并入本条
   - applications/DeepSpeed-Chat/chat.py  # 薄启动器：subprocess.Popen 调同 example 的 inference/chatbot.py 启动多轮交互对话 demo（chat.py 第19-21行），需 --path 指向已训练 actor 模型目录，非独立推理实现
   - applications/DeepSpeed-Chat/e2e_rlhf.py  # 可跑编排入口：按 --step 1/2/3 依次用 bash 执行 training_scripts/opt/${deployment_type}/run_*.sh（get_script/get_cmd，deployment_type 含 multi_node=多机），默认 facebook/opt-1.3b actor、可选 6.7b/13b/66b（parse_args choices），实际训练需多 GPU/NCCL 与 DeepSpeed
   - applications/DeepSpeed-Chat/inference/chatbot.py  # 交互 demo（while True 读命令行多轮对话），transformers pipeline 硬编码 device="cuda:0"（第57行），需已训练模型的 --path 及 config.json

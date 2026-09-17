@@ -70,19 +70,22 @@ print('DeepSpeed version:', deepspeed.__version__)
   python -m pip install mpi4py
 }
 
-# Download a model from ModelScope and plant it into the HF hub cache so the
-# example's hardcoded HF id resolves offline. $1 = HF id, $2 = ModelScope id.
-modelscope_plant() {
-  local hf_id="$1" ms_id="$2"
-  python - "$hf_id" "$ms_id" <<'PY'
-import os, shutil, sys
+# Download models from ModelScope and expose their local paths to the run step
+# via GITHUB_ENV (same pattern as projects/trl). overlay_args reference
+# ${OPT_125M_PATH} so the example gets a concrete local dir.
+ms_download_models() {
+  # modelscope>=1.38 splits hub code into modelscope-hub; pin the last pre-split
+  # release because the runner mirror may only expose an older hub for the latest wheel.
+  python -m pip install -q "modelscope==1.37.0"
+  TQDM_MININTERVAL="${TQDM_MININTERVAL:-15}" python - "$@" <<'PY'
+import os, sys
 from modelscope import snapshot_download
-hf_id, ms_id = sys.argv[1], sys.argv[2]
-src = snapshot_download(ms_id)
-dst = os.path.join(os.environ.get('HF_HOME', os.path.expanduser('~/.cache/huggingface')),
-                   'hub', 'models--' + hf_id.replace('/', '--'))
-os.makedirs(dst, exist_ok=True)
-print(f'plant {ms_id} -> {dst}')
+MODEL_CACHE = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
+for pair in sys.argv[1:]:
+    env_name, model_id = pair.split("=", 1)
+    local = snapshot_download(model_id, cache_dir=MODEL_CACHE)
+    with open(os.environ["GITHUB_ENV"], "a") as fh:
+        fh.write(f"{env_name}={local}\n")
 PY
 }
 
@@ -117,7 +120,7 @@ setup_deepspeed() {
   install_deepspeed_source
   echo "installing HelloDeepSpeed dependencies"
   PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple" \
-    python -m pip install "tokenizers>=0.22.0,<0.23" datasets transformers fire loguru "sh==1.14.2" tqdm pytz tensorboard
+    python -m pip install "tokenizers>=0.22.0,<0.23" datasets transformers fire loguru "sh==1.14.2" tqdm pytz tensorboard torchvision
   patch_hello_wikitext
 }
 
@@ -126,7 +129,13 @@ setup_ds_chat() {
   local fixture="$1"
   install_deepspeed_source
   python -m pip install modelscope transformers datasets accelerate
-  modelscope_plant facebook/opt-125m facebook/opt-125m
+  # DeepSpeed-Chat steps import the top-level dschat package (sibling of the
+  # step dirs); install it editable so 'from dschat.utils... import' resolves.
+  # --no-deps: its setup.py pins deepspeed/torch/transformers which we already
+  # provide (source install / image); only tensorboard is genuinely missing.
+  python -m pip install --no-deps -e "$EXAMPLES_ROOT/applications/DeepSpeed-Chat"
+  python -m pip install tensorboard sentencepiece
+  ms_download_models "OPT_125M_PATH=facebook/opt-125m"
   plant_chat_fixture "$fixture"
 }
 
@@ -138,7 +147,7 @@ setup_ds_chat_rlhf() { setup_ds_chat ci_rlhf_8.json; }
 setup_ds_infer() {
   install_deepspeed_source
   python -m pip install modelscope transformers accelerate
-  modelscope_plant facebook/opt-125m facebook/opt-125m
+  ms_download_models "OPT_125M_PATH=facebook/opt-125m"
 }
 
 supported_profiles() {
