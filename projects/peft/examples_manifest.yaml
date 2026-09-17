@@ -218,13 +218,34 @@ supported:
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 30
 
+  # AdaMSS image：vit-base + cifar10；coder npu-3 2026-09-17 实跑 e2e 通过
+  # train 625 steps @1.34 it/s ≈7.5min + best eval exit (eval_acc=0.0 因 _StubAccuracy 总是返回 0);
+  # 3 patch：(1) `model = model.to("npu")` 在 AdaMSSConfig 构造之前（AdaMSS layer.py device=weight.device，
+  #   不 patch 永远 CPU SVD）；(2) stub evaluate.load("accuracy") 同 [[peft-monteclora-evaluate-load-hangs-offline]]；
+  # (3) PYTHONPATH=/home/coder/work/peft-b-venv/stubs 提供 torchvision.transforms stub（pytorch.org/whl/cpu
+  #   的 torchvision 0.22-0.29 与 torch 2.9.0+cpu ABI 不匹配，见 [[torchvision-v29-stable-abi]]）。
+  # test eval 全量 10000 samples/1250 steps 长跑 ≈15min 是脚本默认行为（无 max_eval_samples 参数）；
+  # 训练 + best eval 已经覆盖主要验证面，test eval 默认跑通但不开 overlay flag。
+  - path: examples/adamss_finetuning/image_classification_adamss_asa.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --max_train_samples 200   # 默认整 cifar10 train 50k：压到 200 = 25 step 即可验证
+      - --num_epochs 1            # 默认 10：压训练
+      - --batch_size 8            # 默认 32：910B4 单卡 32GB 够
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --cache_dir /home/coder/.hdc/cache/huggingface/datasets   # HF-Mirror + 持久化路径
+    timeout_minutes: 30
+
 # ===== unsupported（每条附理由：coder npu-3 2026-09-14 逐例验证 / 静态分析；
 # 2026-09-17 对照上游 main db7d68a 源码逐条审计 + 实测复跑取证；
 # 行号以该 commit 为准；"待复跑取证" = 实测挂但源码找不到对应阻塞点，
 # "翻案候选" = 无后端硬编码，换模型/换数据/多卡 runner 即可能转 supported，
 # "翻案前置 patch" = NPU 实测可通，但需要源码侧 patch 才能进 supported
 #  （如硬编码 fp16=True、pin_memory=True、network 依赖）；
-# 已迁移：corda / glora / hira / olora / waveft → supported，详见 entry 备注） =====
+# 已迁移：corda / glora / hira / olora / waveft / adamss_image → supported，
+# 详见 entry 备注） =====
 unsupported:
   # ===== A. 翻案前置 patch（NPU 实测可通，缺 1-2 行源码改） =====
   # 注释已写明缺什么 patch；不继续验证。
@@ -276,6 +297,23 @@ unsupported:
   # 训练流程不依赖 metric 真值，只在 epoch 末尾打 accuracy，可直接砍
   - examples/monteclora_finetuning/sequence_classification_finetune_monteclora.py
 
+  # bloomz-7b1（main() 局部变量，换模型须改源码）+ deepspeed ZeRO-3：随附 config
+  # 实为无 offload、单进程 fp32（文件名 cpu_offload 名不副实）：L64
+  #   self.device_type = torch.accelerator.current_accelerator().type if hasattr(torch, "accelerator") else "cuda"
+  # torch 2.9 没 torch.accelerator → else 分支固定走 "cuda" → L65
+  # device_module = torch.cuda → empty_cache/memory_allocated 在 NPU 上崩
+  # （与 bloomz-7b1 容量无关，10M 模型同样卡）。**翻案前置 1 处源码 patch**：
+  # :64 改为 `self.device_type = "npu"`（或写动态探测：
+  #   self.device_type = next((n for n in ("npu","cuda","xpu") if getattr(torch, n).is_available()), "cpu")
+  # ）。deepspeed-NPU 构建是另一层（环境级），单独验证
+  - examples/causal_language_modeling/peft_lora_clm_accelerate_ds_zero3_offload.py
+
+  # bart-large + deepspeed ZeRO-3（无 offload + 单进程 fp32）：同 B3 patch 模式，
+  # L57 device_type fall back "cuda" → :58 device_module = torch.cuda 在 NPU 上崩。
+  # **翻案前置 1 处源码 patch**：:57 `self.device_type = "npu"`（同上动态探测）。
+  # deepspeed-NPU 构建是另一层（环境级），单独验证
+  - examples/conditional_generation/peft_lora_seq2seq_accelerate_ds_zero3_offload.py
+
   # 训练循环 NPU 实测**挂在梯度估计阶段**：脚本 :178
   #   `device = torch.device("cuda" if torch.cuda.is_available() else "cpu")`
   # torch.cuda 在 NPU 上 False → 落 CPU；estimate_gradients 内部 forward+backward
@@ -296,30 +334,27 @@ unsupported:
   # 最易候选
   - examples/conditional_generation/peft_lora_seq2seq_accelerate_fsdp.py
 
-  # vit-base + StanfordCars：训练 63%+ 无错误但全量 ~84 分钟超 CI 预算，候选；
-  # --max_train_samples/--num_epochs 可压训练，但 :443 全量 test eval 无截断参数
-  - examples/adamss_finetuning/image_classification_adamss_asa.py
-
-  # bloomz-7b1（main() 局部变量，换模型须改源码）+ deepspeed ZeRO-3：随附 config
-  # 实为无 offload、单进程 fp32（文件名 cpu_offload 名不副实）；仅剩
-  # deepspeed-NPU 构建未验证（环境级）
-  - examples/causal_language_modeling/peft_lora_clm_accelerate_ds_zero3_offload.py
-
-  # 默认模型已是 bart-large（:107，T0_3B 已注释）——原"T0_3B"过时；deepspeed
-  # ZeRO-3 无 offload + 1 进程，仅剩 deepspeed-NPU 构建未验证，翻案候选
-  - examples/conditional_generation/peft_lora_seq2seq_accelerate_ds_zero3_offload.py
-
   # epoch 0 + eval 已完成（bart-base），全量未确认，候选；零 argparse（模型/epoch
   # 均硬编码），压时长须改源码
   - examples/conditional_generation/peft_adalora_seq2seq.py
 
   # 原"单卡 32G / 同 eva"不成立：bf16 + device_map="auto"（:239,:462）多卡自动
   # 切分 + --model_name 可换小模型（README 有 gpt2 示例）；仅剩家族 FA 推断，
-  # 翻案候选
+  # 翻案候选。**3 处 patch**：(1) 替换默认模型 `meta-llama/Llama-3.1-8B-Instruct`
+  # → `gpt2`（coder 已缓存）；(2) `utils.py` 三处 load_dataset 改 HF-Mirror（coder
+  # 直连 huggingface.co hang）；(3) `device_map="auto"` 在 torch_npu 上等价
+  # `device_map={"": "npu:0"}`——BF16 + 124M GPT2 单卡够；num_train/num_eval 压到 100/20
   - examples/orthogonal_subspace_learning/osf_continual_learning.py
 
   # 原"单卡 32G"不成立：device_map="auto"（:83,:102）多卡切分、模型本就必须 CLI
-  # 传入；阻塞为家族 FA 推断（默认 sdpa dispatch）；--bits 默认 fp32，翻案候选
+  # 传入；阻塞为家族 FA 推断（默认 sdpa dispatch）；--bits 默认 fp32，翻案候选。
+  # **3 处 patch**：(1) `from transformers import BitsAndBytesConfig` 必能 import
+  # （即使 bits=fp32 走不到实例化）；(2) PiSSA SVD init 同 [[peft-lora-ga-cuda-is-available-npu-bug]]
+  # ——init_lora_weights="pissa" 在 from_pretrained 时跑 SVD，model.to("npu") 须在
+  # PeftModel.from_pretrained 之前显式调；(3) 走 SFTTrainer 默认 chunked_nll 同
+  # [[trl-chunked-nll-functools-partial-bug]]，device_map="auto" → partial，inspect.signature
+  # 崩，须 --loss_type nll 绕开。bits=fp32 不调 bnb 但 import 链路仍走 transformers；
+  # imdb cache 在 coder，--dataset_field text label
   - examples/pissa_finetuning/pissa_finetuning.py
 
   # ===== C. 阻塞（架构/bnb/xformers/7B+FA/SD 时长/trl 版本） =====
