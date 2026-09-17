@@ -27,7 +27,6 @@ task: ci_truthfulqa_mc2
 dataset_path: json
 dataset_kwargs:
   data_files: fixtures/ci_truthfulqa_2.json
-  split: train
 output_type: multiple_choice
 training_split: null
 validation_split: train
