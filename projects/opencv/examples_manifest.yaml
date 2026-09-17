@@ -79,77 +79,38 @@ scan:
 supported:
   # ===== 已在 coder hdc-stable-npu-2（910B4×2, torch 2.9.0+cpu,
   # torch_npu 2.9.0.post2, CANN 9.1.0）逐例验证通过（exit 0）=====
-  # 全部 8 个 example 走 examples/quickstart_*.py（.sh）。依赖安装 + 源码
-  # 编译见 scripts/setup_example.sh；脚本运行参数展开见
-  # scripts/run_example.sh（沿用 peft 通用契约，只多了 nnal/atb 顺序
-  # 与 PYTHONPATH 校验两处 opencv-specific 处理）。
+  # 3 个 example 都是 NPU / CANN 相关的真正看护点：
+  #   py_version       探针（import cv2 + assert DNN_BACKEND_CANN != 0）
+  #   dnn_inference    NPU 推理（MobileNetV2 ONNX → CANN backend → NPU）
+  #   cann_unit_tests  CANN 算子 binary 套件（53/53 gtest green）
   #
-  # `profile: opencv` 单一 profile，setup 干 4 件事：
+  # 早期版本有 8 个 supported（imread / cvtColor / resize / draw / video
+  # / py_version / dnn_inference / cann_unit_tests），其中前 5 个是
+  # Quick-start-Ascend.md §9a-9e 的 CPU 算法 demo。这些 doc-snippet
+  # 不直接验证 CANN 路径——只验"源码 cv2 能 import + 基础算子能跑",
+  # 而 `py_version` 的 assert DNN_BACKEND_CANN != 0 已经隐含覆盖了
+  # 这一点（pip wheel 的 DNN_BACKEND_CANN == 0,import 进 wheel 的话
+  # 后续 DNN 推理偷偷跑 CPU）。所以 5 个 doc-snippet 不进 supported,
+  # 改放到 `setup_example.sh` 的 step 5 sanity check：setup 完跑一次
+  # 5 个算子,失败 setup 退出非零,fail-fast 而不是等 example 阶段
+  # 才发现 cv2 没编译对。
+  #
+  # 依赖安装 + 源码编译见 scripts/setup_example.sh；脚本运行参数展开
+  # 见 scripts/run_example.sh（沿用 peft 通用契约,只多了 nnal/atb
+  # 顺序与 PYTHONPATH 校验两处 opencv-specific 处理）。
+  #
+  # `profile: opencv` 单一 profile,setup 干 5 件事：
   #   (1) source CANN env（含 nnal/atb——cannops gtest 要用）；
   #   (2) 源码编译 opencv + opencv_contrib（idempotent，跳过已装的）；
   #   (3) PYTHONPATH 头插 /usr/local/opencv-cann/lib/.../cv2（保留
   #       镜像的 CANN Python bits；setdefault 会偷偷留镜像值→pip
   #       wheel 抢回，CI 33286049447 实测翻车）；
-  #   (4) 拷 baboon.jpg + mobilenetv2-12.onnx 到 $TARGET_ROOT/fixtures/。
+  #   (4) 拷 baboon.jpg + mobilenetv2-12.onnx 到 $TARGET_ROOT/fixtures/；
+  #   (5) 5 个 doc-snippet 算子 sanity（imread/cvtColor/resize/draw/
+  #       video），fail-fast；任一非零即 setup 失败。
   # 编译一次性（首次 50–70 min at -j2），同 runner 后续 example 复用
   # /usr/local/opencv-cann（image overlay 持久，不受 stop 影响；rebuild
   # 才会清空）。
-
-  # 9a. imread / imwrite：基础 I/O，BGR->PNG。CPU only，源码编译
-  # 唯一目的是让 cv2 与 CANN 编译后二进制一致（避免 wheel/源码两边
-  # import 路径分裂）。
-  - path: examples/quickstart_imread_imwrite.py
-    profile: opencv
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args: []   # 无：脚本默认值（baboon.jpg 来自 opencv/samples/data/，输出到 /tmp）
-    timeout_minutes: 10   # 编译后只跑这步 1-2 秒；timeout 给 10 分钟是为矩阵编排预留
-    # 不加 overlay 的原因：脚本接受 --image / --output，但 CI 想要
-    # 的就是默认行为（固定输入、固定输出、固定 shape (512,512,3)）。
-    # 任何 overlay 都是"为了不同 CI 复用同一脚本"，目前没有该需求。
-
-  # 9b. cvtColor：BGR -> 灰度。CPU only。脚本固定输出 mean；baboon 实测
-  # 约 129.7（不同 libjpeg 版本抖动 < 0.5），脚本容忍这点。
-  - path: examples/quickstart_cvtcolor.py
-    profile: opencv
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args: []
-    timeout_minutes: 10
-    # 不加 overlay 的原因：同 9a——保持 doc 行为可复现。
-
-  # 9c. resize：BGR 50x200 INTER_AREA。CPU only。
-  - path: examples/quickstart_resize.py
-    profile: opencv
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args: []
-    timeout_minutes: 10
-    # 不加 --width/--height overlay：50x200 是 doc 给的"窄而高"
-    # 演示值，刻意让输出 shape 与 doc test-result 对齐 (200,50,3)。
-    # 上游 opencv resize 的 (W, H) 参数顺序反直觉，固化在脚本里
-    # 反而比 overlay 更稳。
-
-  # 9d. rectangle + putText：CPU only，immutable 复盖原图。
-  - path: examples/quickstart_draw.py
-    profile: opencv
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args: []
-    timeout_minutes: 10
-    # 不加 --text overlay：默认 'Hello OpenCV' 与 doc 图片
-    # (images/quickstart-draw.png) 一致。改文字会破坏 doc 视觉对账。
-
-  # 9e. VideoWriter：3 帧 MJPG AVI。CPU only。
-  - path: examples/quickstart_video.py
-    profile: opencv
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args: []
-    timeout_minutes: 10
-    # 不加 overlay：默认 320x320 + 10 fps + 3 帧 = doc 演示规模；
-    # 镜像不带 FFmpeg/GStreamer（only MJPG fourcc 走得通），改编码
-    # 或分辨率会让 VideoWriter.isOpened() 返 false。over-spec 不划算。
 
   # 版本探针：cv2 + DNN_BACKEND_CANN + DNN_TARGET_NPU 三个枚举
   # 都要非零。CPU only，但唯一能验证"PYTHONPATH 真的指到源码编译
@@ -206,8 +167,9 @@ supported:
                       # 偷偷覆盖。
     timeout_minutes: 60
     # 60 min 而非默认：78 个 gtest 实际 ~5 min（含 graph 编译 + 内存
-    # fixture 准备），余量给 driver 抖动；31 min 与 9a-9e 矩阵并行
-    # 收敛到 60 min 大关（CI 240 min job budget 配 4 并行 leg）。
+    # fixture 准备），余量给 driver 抖动；3 个 supported entry 的
+    # 总 wall-clock 在 30 min 内（py_version ~1s, dnn_inference ~2min,
+    # cann_unit_tests ~5min），矩阵并行收敛到 30 min 大关。
 
 # ===== unsupported =====
 # 四段（从前往后）：
