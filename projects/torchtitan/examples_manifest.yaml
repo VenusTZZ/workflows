@@ -247,6 +247,25 @@ unsupported:
   - torchtitan/models/llama3/config_registry.py:llama3_405b
 
   # ===== 量化：float8 / NVFP4 在 NPU / torchao 不可用 =====
+  # **源码证据**（2026-09-17 grep v0.3.0 checkout）：
+  #   * Float8 硬件 gate（CUDA-only）：
+  #     `torchtitan/components/quantization/float8.py:93-94` 直接抛
+  #     ValueError: "float8 is only supported on NVIDIA SM89 or later,
+  #     or AMD gfx942 (MI300) or later."  — 前面那个 `has_cuda_capability`
+  #     在 `torchtitan/tools/utils.py:27` 实现，第 1 行就是
+  #     `torch.cuda.is_available()`，NPU 必 False → 不可绕过。
+  #     `float8.py:230` MoE 路径也有同款 hard gate（"Float8 MoE
+  #     training only supported on NVIDIA SM89 or later"）。
+  #   * NVFP4：双层 CUDA-only gate：
+  #     (a) `nvfp4.py:67` import `torchao.prototype.moe_training.
+  #         nvfp4_training.*` — torchao 实验子包，本栈 0.15.0 没
+  #         ship，NPU 端也无替代路径。
+  #     (b) `nvfp4.py:287` `if not has_cuda_capability(10, 0): raise
+  #         ValueError("NVFP4 is only supported on SM100 or later")`
+  #         — 同样 `torch.cuda.is_available()` gate + SM100 硬件要求。
+  #   * MXFP8：同 NVFP4 路径：`mx.py:21 import torchao.prototype.
+  #     moe_training.mxfp8_linear` + `mx.py:70 / :175 has_cuda_capability
+  #     (10, 0)`。
   # 实测证据（2026-09-15）：
   #   - llama3_debugmodel_float8 / _float8_emulate_lora / _nvfp4 /
   #     _first_85_pct_layers_nvfp4
@@ -263,13 +282,28 @@ unsupported:
   #         torchao 0.15.0 里没 ship，NPU 端也没有替代路径）
   #   - 同样逻辑适用 llama3_debugmodel_first_85_pct_layers_nvfp4
   # 退役条件：torch_npu 发布 torchao.prototype.{mxfp8,nvfp4,float8}
-  # 任一 NPU 适配。
+  # 任一 NPU 适配，或 `has_cuda_capability` 改造为 torch.npu +
+  # CUDA/ROCm 三分支。
   - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_float8
   - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_float8_emulate_lora
   - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_nvfp4
   - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_first_85_pct_layers_nvfp4
 
   # ===== Variants 受限于上游 torch 2.13+ 依赖 =====
+  # **源码证据**（2026-09-17 本机 v0.3.0 checkout + torch 2.12.0+cpu
+  # wheel 双向 grep）：
+  #   * varlen_attn → flash kernel 直调：
+  #     `torch/nn/attention/varlen.py:45` `@torch.library.custom_op
+  #     ("torch_attn::_varlen_attn", mutates_args={})`
+  #     `torch/nn/attention/varlen.py:109-110` — else 分支调
+  #     `output, softmax_lse, rng_state, _, _ = torch.ops.aten.
+  #     _flash_attention_forward(...)`（fa backend 路径）。PyTorch
+  #     自带 kernel，无任何 torch_npu 注册调用；torch_npu 必须自己
+  #     注册同名 `PrivateUse1::flash_attention_forward` 才能 catch。
+  #     llama3 varlen_attn config 走 `models/common/attention.py:40
+  #     from torch.nn.attention.varlen import ... varlen_attn` + :201
+  #     `result = varlen_attn(...)`，进 varlen 后即撞上面的 kernel
+  #     分支。
   # 实测证据（2026-09-15）：
   #   - llama3_debugmodel_varlen_attn
   #       rc=1 — 真实 root cause（2026-09-17 在 hdc-stable-npu-4 实测）：
@@ -369,6 +403,16 @@ unsupported:
   - torchtitan/models/qwen3/config_registry.py:sft_qwen3_8b_math
 
   # ===== qwen3_5 族：model.py 顶层 import spmd_types + fla 库缺失 =====
+  # **源码证据**（2026-09-17 本机 v0.3.0 checkout）：
+  #   * `models/qwen3_5/model.py:13` `import spmd_types as spmd` —
+  #     顶层 import，模块缺失即整体 fail。
+  #   * `models/qwen3_5/model.py:15-21` 4 行 fla 库 import：
+  #     `from fla.modules.conv.triton.ops import CausalConv1dFunction`
+  #     `from fla.ops.gated_delta_rule import ...` 同款 + `:84`
+  #     `from fla.modules.conv.causal_conv1d import causal_conv1d`
+  #     —— fla (flash-linear-attention) 是社区库，本栈未装。
+  #   * grep 整个 repo，**只有** qwen3_5 顶层 import fla，kimi /
+  #     其他 model 不依赖 fla。
   # 2026-09-17 源码审计修正：之前 manifest 写"模块未挂到 dispatcher
   # 调度链"是错的——`torchtitan/models/__init__.py:7-18`
   # `_supported_models` 显式含 "qwen3_5"，`models/qwen3_5/__init__.py`
@@ -403,6 +447,18 @@ unsupported:
   - torchtitan/models/qwen3_5/config_registry.py:qwen35_35b_a3b
 
   # ===== gpt_oss 族：NPU 缺 flash attention forward kernel；>=20B OOM =====
+  # **源码证据**（2026-09-17 本机 v0.3.0 checkout）：
+  #   * gpt_oss 默认走 varlen 路径：
+  #     `models/gpt_oss/config_registry.py:21 def _gpt_oss_debugmodel
+  #     (attn_backend: str = "varlen")`
+  #     `models/gpt_oss/__init__.py:73, :192, :251, :295` 全部
+  #     `attn_backend: str = "varlen"`。
+  #   * varlen 落到 `torch/nn/attention/varlen.py:110` 的
+  #     `torch.ops.aten._flash_attention_forward` — 同
+  #     llama3_debugmodel_varlen_attn，是 PyTorch 内置 kernel，NPU
+  #     端未注册。`_flash_attention_forward` 在 NPU 后端列表里
+  #     `NotImplementedError` 是 `Could not run 'aten::_flash_attention_forward'
+  #     with arguments from the 'CPU' backend`。
   # 2026-09-17 源码审计 + 实测修正：之前 manifest 把 gpt_oss_debugmodel
   # 归到「triton_key 失败」是错的，triton_key 是 qwen3 / deepseek_v3 的
   # 路径（torch.compile → torch_npu._inductor.codegen.common:24 import
@@ -428,6 +484,22 @@ unsupported:
   - torchtitan/models/gpt_oss/config_registry.py:gpt_oss_120b
 
   # ===== deepseek_v3 族：MoE + MTP + EP dispatcher =====
+  # **源码证据**（2026-09-17 本机 v0.3.0 checkout）：
+  #   * HybridEP 走 torch 2.13+ `opaque_object` API：
+  #     `distributed/deepep/hybridep.py:27 from torch._library.
+  #     opaque_object import CustomClassBase, register_opaque_type`
+  #     `distributed/deepep/hybridep.py:34 class DispatchHandle
+  #     (CustomClassBase)` —— `CustomClassBase` 是 torch 2.13+ 加
+  #     的 API；torch 2.12 这条 import 即 raise ImportError
+  #     "cannot import name 'CustomClassBase' from 'torch._library.
+  #     opaque_object'"。HybridEP 三条 entries（debugmodel_hybridep /
+  #     _16b_hybridep / qwen3_moe_deepep）都触发这个 import。
+  #   * MinimalAsyncEPTokenDispatcher 配置要求 expert_parallel_degree>1
+  #     —— 写死在 config_registry.py，单卡 world_size=1 必拒启动。
+  #   * triton_key 路径：deepseek_v3 debugmodel / _mtp / _16b / _671b
+  #     走 torch.compile → torch_npu._inductor.codegen.common:24
+  #     `from triton.compiler.compiler import triton_key` 撞
+  #     ImportError —— triton-ascend 3.5.0 没暴露该 API。
   # 实测证据（2026-09-15）：
   #   - deepseek_v3_debugmodel / _mtp / _16b / _671b rc=1（rc=2 间接
   #     信号，root cause 在 triton_key compile 阶段被裁切）。
@@ -455,6 +527,22 @@ unsupported:
   - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_671b_float8
 
   # ===== kimi 族：spmd_types 缺失 + 继承 deepseek_v3 整条链 =====
+  # **源码证据**（2026-09-17 本机 v0.3.0 checkout）：
+  #   * spmd_types 顶层 import（4 处，全部顶层无 try/except）：
+  #     `models/kimi_k2_7/model.py:13 import spmd_types as spmd`
+  #     `models/kimi_k2_7/sharding.py:23 import spmd_types as spmd`
+  #     `models/kimi_k2_7/vision_encoder.py:23 import spmd_types as spmd`
+  #   * 继承 deepseek_v3 整条链：
+  #     `models/kimi_k2_7/model.py:24 from torchtitan.models.
+  #     deepseek_v3 import build_mla_moe_layers`
+  #     —— 直接把 deepseek_v3 全部 NPU blocker（triton_key /
+  #     CustomClassBase / MXFP8 / float8 量化 / expert_parallel_degree
+  #     要求等）继承过来。具体见上面 deepseek_v3 段。
+  #   * vision encoder：
+  #     `models/kimi_k2_7/vision_encoder.py:23` 顶层 spmd_types import
+  #     + `models/kimi_k2_7/model.py:30 from .vision_encoder import
+  #     KimiK25VisionEncoder`（kimi_vl_a3b 走 vision 路径，
+  #     multimodal 数据加载需要额外 tokenizer 资产）。
   # 2026-09-17 源码审计修正：之前 manifest 写"模块未挂到 dispatcher
   # 调度链"是错的——同 qwen3_5，`kimi_k2_7` 在
   # `torchtitan/models/__init__.py:7-18` `_supported_models` 列表里，
@@ -483,6 +571,24 @@ unsupported:
   - torchtitan/models/kimi_k2_7/config_registry.py:kimi_k2_5
 
   # ===== flux 族：dispatch 架构不一致 + OOM + MXFP8 缺 =====
+  # **源码证据**（2026-09-17 本机 v0.3.0 checkout）：
+  #   * Dispatcher 查找失败（非 HF 网络问题）：
+  #     `trainer.py:_load_config` 只 import `torchtitan.models`
+  #     这一层的 `config_registry` 符号，不递归查子模块。flux 的
+  #     config_registry 实际定义在
+  #     `torchtitan/models/flux/config_registry.py:23 def flux_debugmodel()`，
+  #     但符号暴露在 `torchtitan.models.flux.config_registry` 上，
+  #     manager.py 找不到 → ImportError（错误信息包装为 "Cannot
+  #     import config_registry for module 'flux'"）。flux 训练入口
+  #     要自己写 launcher：`torchrun -m torchtitan.models.flux.
+  #     trainer` 或类似路径，跟 train.py 的 `--module flux --config ...`
+  #     dispatcher 模型不兼容。
+  #   * MXFP8 缺：与 llama3 量化段同款 `components/quantization/
+  #     mx.py:21 import torchao.prototype.moe_training.mxfp8_linear`。
+  #   * spmd_types 顶层 import：`models/flux/sharding.py:9 import
+  #     spmd_types as spmd` + `models/flux/trainer.py:11 import
+  #     spmd_types as spmd` —— flux 也走 spmd_types 默认 backend
+  #     （同 qwen3_5 / kimi，需 torch ≥2.13）。
   # 2026-09-17 源码审计 + 实测修正：之前 manifest 把 flux_debugmodel
   # 归到「HF timeout 重试」是错的——那是 flux *inference* 路径
   # （HF tokenizer 下载）的失败模式；flux_debugmodel 走 train.py
@@ -527,6 +633,25 @@ unsupported:
   - torchtitan/models/flux/config_registry.py:flux_dev_mxfp8
 
   # ===== muse_glimmer 族：FlexAttention API 与 torch 2.14+ 不兼容 =====
+  # **源码证据**（2026-09-17 本机 v0.3.0 checkout）：
+  #   * `models/muse_glimmer/model.py:569`
+  #     `separate_full_blocks = not is_in_batch_invariant_mode()`
+  #     `models/muse_glimmer/model.py:580` 调
+  #     `compiled_create_block_mask(..., separate_full_blocks=
+  #     separate_full_blocks, ...)` — `separate_full_blocks` 是
+  #     torch 2.14+ 加的 kwarg（stable::permute 同期引入，见
+  #     [[torchvision-v29-stable-abi]]）。
+  #   * 同款 `models/common/decoder.py:274` + `models/common/
+  #     vision_encoder.py:420, :435` 也调用 `compiled_create_block_mask
+  #     (..., separate_full_blocks=...)` —— 不止 muse_glimmer，
+  #     `vision_encoder.py:420` 在 `_compiled_create_block_mask`
+  #     (即 `models/common/attention.py:622 _compiled_create_block_mask
+  #     = torch.compile(create_block_mask)`) 之后，立即撞
+  #     `TypeError: create_block_mask() got an unexpected keyword
+  #     argument 'separate_full_blocks'`。
+  #   * `_mm` 变体还叠加 `models/muse_glimmer/vision_encoder.py:47
+  #     compiled_create_block_mask` + multimodal 路径要 torchvision
+  #     （本栈未装 → ModuleNotFoundError）。
   # 2026-09-17 源码审计 + 实测修正：之前 manifest 把 muse_glimmer_debugmodel
   # 归到「triton_key 失败」是错的，triton_key 是 qwen3 / deepseek_v3 的
   # 路径。muse_glimmer debugmodel 走 torch.compile FlexAttention，但
@@ -555,6 +680,42 @@ unsupported:
   - torchtitan/models/muse_glimmer/config_registry.py:muse_glimmer_30b_mm
 
   # ===== RL 系列：依赖未安装的第三方 =====
+  # **源码证据**（2026-09-17 本机 v0.3.0 checkout grep）：
+  #   * monarch 顶层 import（RL actor 调度根）：
+  #     `experiments/rl/train.py:35 from monarch.actor import ...`
+  #     `experiments/rl/controller.py:106-107 from monarch.actor
+  #     import ... / from monarch.spmd import ...`
+  #     `experiments/rl/actors/{trainer.py:14, generator.py:22}
+  #     from monarch.actor import ...` —— 全是顶层 import，缺包
+  #     即 dispatcher 挂掉。
+  #   * renderers（PrimeIntellect-ai 第三方）顶层 import：
+  #     `experiments/rl/renderer.py:12 from renderers import ...`
+  #     `experiments/rl/environment/message.py:12 from renderers
+  #     import Message, ToolSpec`
+  #     `experiments/rl/environment/token.py:13 from renderers
+  #     import Message, Renderer, ToolSpec`
+  #     `experiments/rl/rollout/rollouter.py:14 from renderers
+  #     import Renderer`
+  #     `experiments/rl/rollout/types.py:13 from renderers import
+  #     Message`
+  #     `experiments/rl/examples/{alphabet_sort,dapo_math}/env.py:11
+  #     from renderers import Message`
+  #     `experiments/rl/examples/search_r1/env.py:16-17 from
+  #     renderers import ...` —— 与 monarch / vllm 平行，是独立
+  #     第三方包（pip 路径 git+https://github.com/PrimeIntellect-ai/
+  #     renderers.git@main）。
+  #   * vllm 顶层 import（rollout 引擎）：
+  #     `experiments/rl/generate.py:27-31` 5 行 vllm.* import
+  #     （EngineArgs, LLMEngine, SamplingParams, AttentionConfig,
+  #     AttentionBackendEnum）。
+  #     `experiments/rl/batch_invariance.py:75 from vllm.model_
+  #     executor.layers.batch_invariant import bmm_batch_invariant`。
+  #   * rl.actors / rl.components（CUDA-only 内部组件）：
+  #     examples 的 config_registry.py 还要 import `rl.actors.
+  #     generator / rl.actors.trainer / rl.batch_invariance /
+  #     rl.components.{batcher, training_sample_builder}` —— 这些
+  #     被 exclude 标记为 CUDA-only（vLLM rollout / NCCL-only 的
+  #     batch invariance 等）。
   # 实测证据（vllm-ascend-hdc 上 2026-09-17，stack: torch 2.10.0+cpu
   # + torch_npu 2.10.0.post4 + vllm 0.23.0 + vllm_ascend 0.23.0 +
   # spmd_types==0.2.3 + datasets 已装；hdc-stable-npu-4 同样 layer
@@ -616,6 +777,15 @@ unsupported:
   #       package context。即使改 `python -m torchtitan.experiments.
   #       forge.example_train` 也未必解决——ForgeEngine 内部还要
   #       torch.compile + cudagraph pool，跟之前的预期一致。）
+  #     **源码证据**（2026-09-17 grep）：`experiments/forge/engine.py:57
+  #     compile: CompileConfig = field(...)` 走主线 trainer 同款
+  #     CompileConfig + `engine.py:247 apply PT-D Tensor Parallel,
+  #     activation checkpointing, torch.compile, Data Parallel`，
+  #     cudagraph 通过 `distributed/cudagraph.py:348 raise ValueError
+  #     ("CUDA graph capture is only supported on NVIDIA CUDA; ...")`
+  #     撞 hard gate。叠加相对 import 包装问题（example_train.py:28
+  #     `from .engine import ForgeEngine` 必须以 module 形式跑），
+  #     2 层障碍都要解才能跑。
   #   - graph_trainer/precompile_main.py rc=1（用 --module llama3
   #       --config llama3_debugmodel 重跑）
   #       AttributeError: 'CompileConfig' object has no attribute 'mode'
@@ -673,6 +843,18 @@ unsupported:
   # 退役条件：8B offload 路径修复后。
 
   # ===== GraphTrainer 多模型入口（CUDA-only） =====
+  # **源码证据**（2026-09-17 本机 v0.3.0 checkout）：
+  #   * `experiments/graph_trainer/cudagraph.py:22`
+  #     `from torch._inductor.cudagraph_trees import _use_cuda_memory_pool_manager`
+  #     —— `_use_cuda_memory_pool_manager` 是 torch._inductor
+  #     cudagraph_trees 私有符号，仅在 CUDA 后端注册；torch_npu
+  #     走 aclgraph，不注册这个符号。
+  #   * `experiments/graph_trainer/cudagraph.py:36` `self._cudagraph_wrappers:
+  #     list["CUDAGraphWrapper"]` + `:164 class CUDAGraphWrapper` —
+  #     wrapper 类名 / 字段全写死 "cuda" 字面。
+  #   * `distributed/cudagraph.py:348` raise ValueError("CUDA graph
+  #     capture is only supported on NVIDIA CUDA; ..." — 主线
+  #     trainer 的 cudagraph path 也是同款硬 gate。
   # 上游 _supported_experiments 显式收录 4 个 GraphTrainer module：
   # graph_trainer.{llama3, deepseek_v3, qwen3, muse_glimmer}。manifest
   # 之前只列了 llama3（precompile_main.py 路径），剩下 3 个 module 是
