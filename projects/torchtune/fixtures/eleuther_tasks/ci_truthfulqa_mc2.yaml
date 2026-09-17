@@ -1,0 +1,35 @@
+# Custom lm_eval task for the CI smoke test of recipes/eleuther_eval.py.
+#
+# The recipe's evaluate() calls lm_eval's get_task_dict(tasks, TaskManager)
+# where TaskManager is given cfg.include_path as an additional task search
+# root. Tasks defined here override the built-in truthfulqa_mc2 (which would
+# pull from HF datasets) so we can run end-to-end without HF access.
+#
+# data_files is a path *relative to this YAML's directory*: lm_eval's JSON
+# dataset loader resolves it via the task's include path. The actual JSON
+# lives one level up at fixtures/ci_truthfulqa_2.json.
+#
+# output_type=multiple_choice makes lm_eval rank each choice by loglikelihood
+# (no generation), so the eval needs only forward passes — fits the 1-step
+# smoke pattern used by the rest of the manifest.
+#
+# Metric is `acc` (built-in) instead of `mc2` (custom TruthfulQA-specific
+# aggregation in lm_eval's truthfulqa/utils.py) because we want a metric
+# that's guaranteed importable from a stock lm-eval install, with no
+# vendoring of upstream eval harness utils.
+task: ci_truthfulqa_mc2
+dataset_path: json
+dataset_kwargs:
+  data_files: ../ci_truthfulqa_2.json
+  split: train
+output_type: multiple_choice
+training_split: null
+validation_split: train
+doc_to_text: "{{question}}\nA:"
+doc_to_target: "{{mc2_targets.choices}}"
+target_delimiter: " "
+metric_list:
+  - metric: acc
+    aggregation: mean
+    higher_is_better: true
+num_fewshot: 0

@@ -4,16 +4,35 @@
 # torchtune itself is installed from TARGET_ROOT (the release checkout
 # under test), so the guarded tag is exactly the code that runs.
 #
-# Dependency line (2026-09-16, coder hdc-stable-npu-4 逐例验证):
-#   torch 2.12.0+cpu + torch_npu 2.12.0 + transformers 4.57.1
-#   + omegaconf + tokenizers + safetensors + modelscope
-# - transformers 4.57.1：与 torchtune v0.6.x 的 LlamaModel / Qwen2
-#   forward 签名匹配；5.x 已重命名部分属性
-# - torchao pin 由 setup_torchtune() 内部按 checkout 探测动态决定：
-#   v0.6.x 走 torchao.dtypes.nf4tensor（pin 0.13.0），main HEAD 走
-#   torchao.quantization（pin 0.18.0）。两个路径互不兼容，所以 pin
-#   不能写死——CI 跑 release 时 setup 选 0.13.0，跑 main 时选 0.18.0
-#   （setup_example.sh 内 probe common_utils.py:19 import line）
+# Dependency line (mirror Quick-start-Ascend.md lines 85-88, 114-117, 168-172;
+# quick-start is the canonical install path for torchtune on this image):
+#   torch 2.11.0+cpu + torch_npu 2.11.0 + transformers 4.57.1
+#   + omegaconf + tokenizers + safetensors + modelscope 1.37.0
+# - torch 2.11.0 + torch_npu 2.11.0: pin explicit in ensure_torch_stack()
+#   below (was: "reuse whatever image ships", which was 2.9.0+cpu). The +cpu
+#   wheel comes from aliyun's mirror of pytorch.org/whl/cpu; the cluster pip
+#   cache ships only CUDA torch wheels (Requires-Dist: cuda-toolkit), which
+#   collide with constraints-npu.txt's cuda-toolkit<0 — see
+#   torchtitan-cuda-torch-wheel-trap memory. torch 2.11.0 is also the floor
+#   for `from torch.nn.functional import ScalingType` that torchao 0.18
+#   needs, so upgrading makes the main HEAD path in the dynamic case below
+#   work too (instead of being a known-broken documented limitation).
+# - transformers 4.57.1: matches torchtune v0.6.x's LlamaModel / Qwen2
+#   forward signatures; 5.x has renamed some attributes.
+# - torchao pin: still decided dynamically inside setup_torchtune() because
+#   the NF4Tensor import path in torchtune/modules/common_utils.py:19 has
+#   moved three times (0.10-0.13 use torchao.dtypes.nf4tensor, 0.14-0.17
+#   don't have the symbol, 0.18+ re-expose it under torchao.quantization).
+#   v0.6.x release tag hits the first path (pin 0.13.0); main HEAD hits the
+#   third (pin 0.18.0, now compatible thanks to the torch 2.11.0 upgrade
+#   above). The case statement at the bottom of setup_torchtune() does
+#   the probe.
+# - non-editable torchtune install: PEP 660 editable makes
+#   `torchtune.__file__` = None, which breaks `torchtune/_cli/cp.py:15`'s
+#   `Path(torchtune.__file__).parent.parent`. Quick-start line 171 uses
+#   `uv pip install .` for the same reason; we use `pip install .` here
+#   (recipes are run as `python recipes/<x>.py`, so no editable hot-reload
+#   is needed).
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -55,19 +74,30 @@ except urllib.error.HTTPError:
 }
 
 ensure_torch_stack() {
-  # Same torch line as torchtune quick-start (CANN 9.1.0 pairing):
-  # torch 2.9.0 + torch_npu 2.9.0. Pin via Huawei ascend index.
-  # Skip if torch is already installed (any 2.x) to avoid downgrade:
-  # the previous version-pinned check forced a 2.12.0+cpu image down to
-  # 2.9.0, which broke the ABI alignment and pulled torchao cpp ext
-  # warnings. Trust whatever the image preinstalled; fall through to
-  # install only when torch is missing entirely.
-  if python -c "import torch" 2>/dev/null; then
-    echo "reusing image torch stack ($(python -c 'import torch; print(torch.__version__)'))"
-    return
-  fi
-  echo "installing torch==2.9.0 torch_npu==2.9.0"
-  pip_ascend torch==2.9.0 torch_npu==2.9.0
+  # Mirror Quick-start-Ascend.md lines 85-88: pin torch==2.11.0+cpu +
+  # torch_npu==2.11.0 explicitly so the setup is independent of what the
+  # image happens to ship. Quick-start verified end-to-end on this same
+  # CANN 9.1.0 image; reusing that line lets the dynamic torchao case
+  # below work for both v0.6.x release (torchao 0.13.0) and main HEAD
+  # (torchao 0.18.0, needs ScalingType from torch.nn.functional which is
+  # torch 2.11+).
+  #
+  # The +cpu torch wheel is fetched from aliyun's mirror of
+  # pytorch.org/whl/cpu via --find-links. Pure-Python deps of the +cpu
+  # torch (filelock / typing-extensions / sympy / networkx / jinja2 /
+  # fsspec / mpmath / markupsafe / setuptools) are resolved through
+  # PIP_INDEX_URL (cluster cache, set by select_pip_index above). None
+  # of those need CUDA, so constraints-npu.txt's cuda-toolkit<0 doesn't
+  # fire. (Contrast with `pip install -i aliyun torch==X.Y.Z` from
+  # torchtitan-cuda-torch-wheel-trap memory: that pulls the CUDA torch
+  # wheel directly, whose Requires-Dist: cuda-toolkit collides with
+  # constraints — --find-links to a +cpu-only directory sidesteps it.)
+  echo "installing torch==2.11.0+cpu (aliyun pytorch-wheels/cpu find-links, deps from PIP_INDEX_URL)"
+  python -m pip install \
+    --find-links https://mirrors.aliyun.com/pytorch-wheels/cpu \
+    torch==2.11.0
+  echo "installing torch_npu==2.11.0 (Huawei ascend index)"
+  pip_ascend torch_npu==2.11.0
 }
 
 # Copy CI fixture data files into the target root so that example
@@ -104,15 +134,16 @@ setup_torchtune() {
   # ModuleNotFoundError on import; main + torchao 0.13 throws the
   # same. There is no single torchao that satisfies both import paths,
   # so we must probe the actual checkout before pinning.
-  echo "installing torchtune from $TARGET_ROOT"
-  python -m pip install -e "$TARGET_ROOT"
+  echo "installing torchtune from $TARGET_ROOT (non-editable, see Quick-start-Ascend.md:164-167)"
+  python -m pip install "$TARGET_ROOT"
   python -m pip install "transformers==4.57.1" "omegaconf>=2.3,<3" \
     tokenizers safetensors tqdm pyyaml
 
   # Probe which NF4Tensor import path the torchtune checkout uses, then
   # install the matching torchao exact pin. Probe runs against the
-  # editable-installed source, so it reflects whatever ref the engine
-  # checked out (release tag OR main HEAD).
+  # installed source (non-editable, see Quick-start-Ascend.md:164-167),
+  # so it reflects whatever ref the engine checked out (release tag
+  # OR main HEAD).
   local import_path torchao_pin
   import_path="$(python -c "
 import importlib.util, pathlib
@@ -173,6 +204,11 @@ print('torchtune', md.version('torchtune'), '/ torchao', torchao.__version__, '/
   # code into modelscope-hub, and the fresh 1.40.1 wheel's loose
   # ">=0.4.2" floor breaks import when the mirror lags on hub 0.4.3.
   python -m pip install "modelscope==1.37.0"
+  # lm_eval is only needed for the eleuther_eval recipe (not declared as
+  # an upstream dep of torchtune). The recipe's __init__ checks
+  # lm-eval >= 0.4.5; pin to the lowest series that the mirror reliably
+  # has so we don't trigger a fresh fetch on every re-run.
+  python -m pip install "lm-eval>=0.4.5,<0.5"
   python - <<'PY'
 import os
 # Non-TTY CI logs: throttle tqdm refreshes instead of disabling.
