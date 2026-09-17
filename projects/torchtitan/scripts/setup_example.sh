@@ -182,6 +182,26 @@ exec torchrun --nproc_per_node=2 \
 LAUNCHER
   chmod +x "$TARGET_ROOT/scripts/run_llama3_debugmodel_2card.sh"
 
+  cat > "$TARGET_ROOT/scripts/run_llama3_debugmodel_1card.sh" <<'LAUNCHER'
+#!/usr/bin/env bash
+# Launcher for the torchtitan llama3_debugmodel default smoke, 1 rank.
+# Uses the default registry config (ChunkedLossWrapper path);
+# the ce_loss variant uses CrossEntropyLoss direct wiring. Two
+# parallel launchers document the config switch and let CI detect
+# drift between the two wiring paths. Empirically rc=0 on
+# torch 2.12.0+cpu + torch_npu 2.12.0 + CANN 9.1.0
+# (hdc-stable-npu-4, 2026-09-17). setup_example.sh installs upstream
+# v0.3.0 as-is per the no-patch policy.
+set -euo pipefail
+cd "${TARGET_ROOT:?TARGET_ROOT is required}"
+exec torchrun --nproc_per_node=1 \
+    --rdzv_backend c10d \
+    --rdzv_endpoint="localhost:0" \
+    -m torchtitan.train \
+    "$@"
+LAUNCHER
+  chmod +x "$TARGET_ROOT/scripts/run_llama3_debugmodel_1card.sh"
+
   cat > "$TARGET_ROOT/scripts/run_llama3_debugmodel_ce_loss_1card.sh" <<'LAUNCHER'
 #!/usr/bin/env bash
 # Launcher for the llama3_debugmodel_ce_loss variant. Same as the base
@@ -198,6 +218,28 @@ exec torchrun --nproc_per_node=1 \
     "$@"
 LAUNCHER
   chmod +x "$TARGET_ROOT/scripts/run_llama3_debugmodel_ce_loss_1card.sh"
+
+  cat > "$TARGET_ROOT/scripts/run_llama3_debugmodel_dist_gemm_1card.sh" <<'LAUNCHER'
+#!/usr/bin/env bash
+# Launcher for the torchtitan llama3_debugmodel_dist_gemm variant,
+# 1 rank. TP=1 path: trainer logs "tp_gemm_backend='dist_gemm'
+# selected but tensor parallelism is not active; running the stock
+# projections. Nothing is fused." — i.e. dist_gemm is a no-op on
+# TP=1, so the smoke verifies the flag is accepted and dispatch
+# resolves without error. TP>=2 path goes through
+# torch.distributed._symmetric_memory (torch 2.13+ API) and is
+# blocked by torch 2.12 ABI on multi-card — not exercised here.
+# Empirically rc=0 on hdc-stable-npu-4, 2026-09-17. setup_example.sh
+# installs upstream v0.3.0 as-is per the no-patch policy.
+set -euo pipefail
+cd "${TARGET_ROOT:?TARGET_ROOT is required}"
+exec torchrun --nproc_per_node=1 \
+    --rdzv_backend c10d \
+    --rdzv_endpoint="localhost:0" \
+    -m torchtitan.train \
+    "$@"
+LAUNCHER
+  chmod +x "$TARGET_ROOT/scripts/run_llama3_debugmodel_dist_gemm_1card.sh"
 
   cat > "$TARGET_ROOT/scripts/run_sft_debugmodel_1card.sh" <<'LAUNCHER'
 #!/usr/bin/env bash

@@ -50,47 +50,46 @@ scan:
     - '**/requirements*.txt'
 
 supported:
-  # 3 条支持 example（#2 #3 #4），全部走 setup 写入的 .sh launcher（exec 字段）。
-  # path 字段统一填 `torchtitan/train.py`（上游真实文件，manifest-check
-  # 用它做 (target_root/path).exists() 校验）；exec 是真正的可执行
-  # launcher（setup 写入 target/scripts/），它内部 exec torchrun
-  # -m torchtitan.train "$@" —— overlay_args 透传给 torchtitan.train。
-  #
-  # 2026-09-17 no-patch policy 之后：这 3 条 entry 留在 supported
-  # 但 CI 预期失败——torchtitan v0.3.0 release 自称 device-agnostic /
-  # 支持 torch_npu，「能支持」成立；失败根因是上游 torch_npu / triton-
-  # ascend / CANN 栈各自的 bug，按 policy 不在 setup 层绕开，留作
-  # upstream signal。预期失败点见 docs/case-torchtitan-v0.3.0-torch2.12-
-  # npu.md §六「2026-09-17 no-patch 复盘」末尾表。当上游对应 issue 修
-  # 掉后 CI 自动转绿，不需要再 review / 撤 patch。
-  #
-  # v0.3.0 上游 (release tag) 在本栈的兼容性状态：
-  # - 单卡 1-card debugmodel_ce_loss / sft_debugmodel：Quick-start 验证过；
-  #   CI 第 34087315070 号 run green 跑过 1-card + 2-card。
-  # - 多卡 2-card debugmodel：Quick-start 验证过。
-  # debugmodel: dim=256 / 6 层 / 16 head / vocab 2048 (~6 M 参数)，
-  # 30 GB HBM 完全够装，FSDP shard=2 切分后单卡仅 ~24 GB 占用。
-  # 模型/数据全在仓库内（debugmodel 用 torchtitan/tests/assets/
-  # tokenizer + random data），不依赖外网。
-  #
-  # 2026-09-15 端到端实跑证据（hdc-stable-npu-4 实测，CANN 9.1.0 +
-  # torch 2.12.0+cpu + torch_npu 2.12.0 + triton-ascend 3.5.0+dev20260701
-  # + torchtitan v0.3.0 checkout + 7 个 sed 补丁，已于 2026-09-17 撤掉）：
-  # - llama3_debugmodel_ce_loss 1-card: 2 步完成，loss 8.23→7.97
-  # - sft_debugmodel 1-card: 2 步完成，loss 8.08→7.67，ChatDataLoader 正常
-  # - llama3_debugmodel 2-card (full_dtensor + dp_shard=2 + bf16): 2 步完成，
-  #   global batch size=2 生效，loss 16.06→15.48（reduce-by-dp_shard）。
-  # 实测命令记录在 /tmp/torchtitan-verify/ 与 setup_example.sh 内嵌注释里。
+  # 1) 单卡 + default llama3_debugmodel 配置（ChunkedLossWrapper 路径）。
+  # 2026-09-17 在 hdc-stable-npu-4 实测 rc=0，loss 8.17→7.84（2 step），
+  # 之前 manifest 说的「ChunkedLossWrapper 在 NPU 触发 meta 张量泄漏
+  # （case doc §2.5）」来自 2026-09-04~07 应用的 sed patch 链，那 7 个
+  # patch 已在 2026-09-17 全部撤掉，目前栈（torch 2.12.0+cpu +
+  # torch_npu 2.12.0 + triton-ascend 3.5.0+dev20260701 + CANN 9.1.0）
+  # 下 default 配置走通。预期仍会卡在 c10d broadcast（DTensor
+  # OffsetBasedRNGTracker 的 rng_state .device=None），但现状是
+  # init_weights 阶段在 broadcast 之前 trainer 主路径没炸，loss 正常
+  # 下降——说明 c10d broadcast 触发条件（需要 FSDP mesh rng_state
+  # broadcast）在我们这条 smoke 路径上没命中。
+  # no-patch policy：default ChunkedLossWrapper 是上游决策，不在 setup
+  # 层 patch。保留这条作为「default wiring」基线，#2 ce_loss 变体
+  # 单独验证 CrossEntropyLoss 直连路径，两条同时留 supported =
+  # default vs ce_loss wiring 漂移检测（CI 成本翻倍但信号独立）。
+  - path: torchtitan/train.py
+    profile: torchtitan
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: scripts/run_llama3_debugmodel_1card.sh
+    overlay_args:
+      - --module llama3
+      - --config llama3_debugmodel
+      - --comm.mode default
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/llama3_debugmodel_1card
+    timeout_minutes: 20
 
   # 2) 单卡 + CE loss 配置变体：llama3_debugmodel_ce_loss 是上游
   # registry 内置的 CE 损失等价配置（CrossEntropyLoss 直接接线，不走
   # ChunkedLossWrapper）。保留它作为独立 supported 是为了在每次
   # upgrade 时验证上游 CE 配置的 wiring 与 ChunkedLossWrapper 入口
-  # 同步未漂移。
-  # no-patch policy：ChunkedLossWrapper 在 NPU 触发 meta 张量泄漏
-  # （case doc §2.5），但配置默认走 ChunkedLossWrapper 是上游决策，
-  # 不在 setup 层 patch。ce_loss 变体绕开这条路径；预期仍会卡在
-  # c10d broadcast 同 #1。
+  # 同步未漂移（同 #1）。
+  # no-patch policy：ChunkedLossWrapper 是上游决策，不在 setup 层 patch。
+  # ce_loss 变体绕开 ChunkedLossWrapper 路径；预期仍会卡在 c10d
+  # broadcast（同 #1，但 #1 实测没卡）。
   - path: torchtitan/train.py
     profile: torchtitan
     runner: linux-aarch64-a2-1
@@ -138,7 +137,36 @@ supported:
       - --dump-folder ${CI_OUTPUT_DIR}/llama3_debugmodel_2card
     timeout_minutes: 25
 
-  # 4) SFT example 1-card：--module llama3 --config sft_debugmodel。
+  # 4) 单卡 + llama3_debugmodel_dist_gemm 变体：TP=1 下 dist_gemm
+  # 是 no-op（trainer log: "tp_gemm_backend='dist_gemm' selected but
+  # tensor parallelism is not active; running the stock projections.
+  # Nothing is fused."），smoke 验证 dispatch 接受 dist_gemm flag 且
+  # init 阶段不炸。TP>=2 真路径走 torch.distributed._symmetric_memory
+  # （torch 2.13+ API）做 cross-process param shard；torch 2.12 无此
+  # 模块；并且 2-card 上跑 TP=2 + dist_gemm 必撞同 supported #3 的
+  # c10d broadcast，无独立信号。留这条是为「dispatch + flag 解析」回归
+  # 检测 —— 上游哪天在 TP=1 路径上对 dist_gemm flag 加任何 parse-time
+  # 校验，这里立刻报红。
+  # 退役条件：TP>=2 路径需 torch 2.13+ ABI 适配 + c10d broadcast 解，
+  # 此后才有意义再开 TP>=2 的 supported。
+  - path: torchtitan/train.py
+    profile: torchtitan
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: scripts/run_llama3_debugmodel_dist_gemm_1card.sh
+    overlay_args:
+      - --module llama3
+      - --config llama3_debugmodel_dist_gemm
+      - --comm.mode default
+      - --training.steps 2
+      - --training.local-batch-size 1
+      - --training.seq-len 256
+      - --metrics.log-freq 1
+      - --metrics.disable-color-printing
+      - --dump-folder ${CI_OUTPUT_DIR}/llama3_debugmodel_dist_gemm_1card
+    timeout_minutes: 20
+
+  # 5) SFT example 1-card：--module llama3 --config sft_debugmodel。
   # sft_debugmodel 是 torchtitan/models/llama3/config_registry.py:349
   # 注册的 SFT 配置（不是独立 module），训练走 torchtitan/train.py
   # 同一入口。smoke 验证 SFT 数据通路（ChatDataLoader /
@@ -168,23 +196,17 @@ supported:
     timeout_minutes: 20
 
 unsupported:
-  # ===== 配置精简（no-patch policy 下与另一 supported entry 冗余） =====
-  # 2026-09-17 决定：
-  #   - llama3_debugmodel (default)
-  #     rc=1（no-patch policy 下预期）；跟 #2 llama3_debugmodel_ce_loss
-  #     共用同一 launcher（run_llama3_debugmodel_1card.sh vs
-  #     run_llama3_debugmodel_ce_loss_1card.sh，body 完全相同，
-  #     2026-09-17 撤 patch 后仅 --config flag 区别：
-  #     "llama3_debugmodel" → "llama3_debugmodel_ce_loss"）。
-  #     no-patch policy 下 default config 走 ChunkedLossWrapper，在
-  #     NPU 上是 case doc §2.5 已知的 meta tensor leak，不在 setup 层
-  #     patch；同时 ce_loss 变体走 CrossEntropyLoss 直连路径，验证
-  #     面更全。两条同时留 supported = 同 launcher 双跑，CI 成本翻倍
-  #     信号零增量，所以只留 ce_loss 变体。
-  #     退役条件：不退役。如果未来 ChunkedLossWrapper 在 NPU 上被上游
-  #     修好，可以单独加回这条作为对照（default vs ce_loss wiring
-  #     漂移检测），但目前没必要保留两条同 launcher 的 supported。
-  - torchtitan/models/llama3/config_registry.py:llama3_debugmodel
+  # ===== llama3_default / dist_gemm 已升级到 supported，见上面 #1/#4 =====
+  # 2026-09-17 实测（hdc-stable-npu-4，torch 2.12.0+cpu + torch_npu 2.12.0
+  # + triton-ascend 3.5.0+dev20260701 + CANN 9.1.0，撤掉所有 sed patch
+  # 后）：
+  #   - llama3_debugmodel (default)  rc=0，loss 8.17→7.84（2 step）——
+  #     case doc §2.5 说的「ChunkedLossWrapper meta tensor leak」来自
+  #     2026-09-04~07 的 sed patch 链（已 2026-09-17 全撤），目前栈
+  #     default 配置走通。promoted → supported #1。
+  #   - llama3_debugmodel_dist_gemm  rc=0，TP=1 no-op 路径，promoted →
+  #     supported #4（注释里有 TP>=2 路径为什么不通的解释）。
+  # 退役条件：上 supported 后跟其他 supported 一起靠 CI 信号退役。
 
   # ===== 规模：8B / 70B / 405B 在本栈 OOM / 拒绝启动 =====
   # 2026-09-15 实测证据（单卡 ASCEND_RT_VISIBLE_DEVICES=0，
@@ -239,18 +261,6 @@ unsupported:
 
   # ===== Variants 受限于上游 torch 2.13+ 依赖 =====
   # 实测证据（2026-09-15）：
-  #   - llama3_debugmodel_dist_gemm
-  #       rc=0（**单卡通过**：TP=1 时 tp_gemm_backend=dist_gemm 是
-  #       no-op，trainer.log 打 "tp_gemm_backend='dist_gemm' selected
-  #       but tensor parallelism is not active; running the stock
-  #       projections. Nothing is fused."）。
-  #       仍留 unsupported：实测绿但留作「不跑只为不增加 CI 成本」——
-  #       跟 supported #2 llama3_debugmodel_ce_loss 共用同一 trainer
-  #       路径，dist_gemm 在 TP=1 不激活，多一条 smoke = 多 ~10min
-  #       CI 零信号增量。TP≥2 真路径走 torch.distributed._
-  #       symmetric_memory（torch 2.13+ API）做 cross-process param
-  #       shard；torch 2.12 无此模块；并且 2-card 上跑 TP=2 + dist_gemm
-  #       必撞同 supported #3 的 c10d broadcast，无独立信号。
   #   - llama3_debugmodel_varlen_attn
   #       rc=1（exitcode 1 但 root cause 在 trainer init 阶段被裁切，
   #       rc=2 间接信号）—— 需要 varlen 包路径 + 模型端
@@ -261,8 +271,10 @@ unsupported:
   # def llama3_debugmodel_flex；attn_backend="flex" 只在 sft_debugmodel
   # 内部作 model_registry 参数出现。Engine 永远不会 dispatch 到该
   # manifest entry，已从 unsupported 移除。）
+  # （llama3_debugmodel_dist_gemm 已 promoted → supported #4，2026-09-17
+  # 实测 rc=0，TP=1 no-op 路径；注释里有 TP>=2 路径为什么不通的
+  # 解释。）
   # 退役条件：torch 2.13 ABI 适配 / 上游不复活 flex debug entry。
-  - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_dist_gemm
   - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_varlen_attn
 
   # ===== qwen3 族：分三类失败（triton_key / OOM / 文件缺失） =====
@@ -356,14 +368,26 @@ unsupported:
   - torchtitan/models/qwen3_5/config_registry.py:qwen35_27b
   - torchtitan/models/qwen3_5/config_registry.py:qwen35_35b_a3b
 
-  # ===== gpt_oss 族：debugmodel 是 triton_key / 量化编译错；>=20B OOM =====
-  # 实测证据（2026-09-15）：
-  #   - gpt_oss_debugmodel / _flex rc=1（rc=2 间接信号，root cause 在
-  #     compile 阶段被裁切）；flex_attention 走 triton_key 失败
-  #     （同 qwen3 A 类）。
+  # ===== gpt_oss 族：NPU 缺 flash attention forward kernel；>=20B OOM =====
+  # 2026-09-17 源码审计 + 实测修正：之前 manifest 把 gpt_oss_debugmodel
+  # 归到「triton_key 失败」是错的，triton_key 是 qwen3 / deepseek_v3 的
+  # 路径（torch.compile → torch_npu._inductor.codegen.common:24 import
+  # 失败）。gpt_oss 不走 torch.compile，直接调
+  # `aten::_flash_attention_forward`，本栈 torch_npu 2.12.0 没 ship
+  # 这个 kernel 的 NPU 实现（backend 列表里只有 PrivateUse1 / Meta
+  # 等，PrivateUse1 fallback 在 NPU 没注册）：
+  #   - gpt_oss_debugmodel rc=1
+  #       NotImplementedError: Could not run 'aten::_flash_attention_forward'
+  #       with arguments from the 'CPU' backend. ... 'aten::_flash_attention_forward'
+  #       is only available for these backends: [PrivateUse1, Meta,
+  #       SparsePrivateUse1, ...]
+  #       （torch 2.12 + torch_npu 2.12 NPU 端没注册这个 kernel）
+  #   - gpt_oss_debugmodel_flex rc=1 同根（model_registry 选 attn=flex
+  #     路径，最终仍走 _flash_attention_forward）
   #   - gpt_oss_20b rc=1 OOM 1014 MiB / 28.79 GiB 已分配
   #   - gpt_oss_120b rc=1 OOM 7.91 GiB / 26.20 GiB 已分配
-  # 退役条件：triton-ascend 暴露 triton_key；>=20B 需要 64 GB+ HBM。
+  # 退役条件：torch_npu 适配 _flash_attention_forward kernel；
+  # >=20B 需要 64 GB+ HBM。
   - torchtitan/models/gpt_oss/config_registry.py:gpt_oss_debugmodel
   - torchtitan/models/gpt_oss/config_registry.py:gpt_oss_debugmodel_flex
   - torchtitan/models/gpt_oss/config_registry.py:gpt_oss_20b
@@ -424,38 +448,61 @@ unsupported:
   - torchtitan/models/kimi_k2_7/config_registry.py:kimi_vl_a3b
   - torchtitan/models/kimi_k2_7/config_registry.py:kimi_k2_5
 
-  # ===== flux 族：HF 网络阻断 + OOM + MXFP8 缺 =====
-  # 实测证据（2026-09-15）：
-  #   - flux_debugmodel rc=124（timeout）
-  #       卡在 huggingface.co/google/t5-v1_1-xxl/resolve/main/
-  #       tokenizer_config.json 下载重试上：'(MaxRetryError
-  #       ("HTTPSConnectionPool(host='huggingface.co', port=443):
-  #       Max retries exceeded with url: ... (Caused by
-  #       ConnectTimeoutError)"))' 反复抛。China runner 拉不动 HF。
-  #       不是 NPU 问题——是网络问题。先用镜像或预下载资产。
+  # ===== flux 族：dispatch 架构不一致 + OOM + MXFP8 缺 =====
+  # 2026-09-17 源码审计 + 实测修正：之前 manifest 把 flux_debugmodel
+  # 归到「HF timeout 重试」是错的——那是 flux *inference* 路径
+  # （HF tokenizer 下载）的失败模式；flux_debugmodel 走 train.py
+  # 入口时根本没机会撞 HF 网络。真实 root cause：
+  #   - flux_debugmodel rc=1
+  #       ImportError: Cannot import config_registry for module 'flux'
+  #       from torchtitan.models, torchtitan.experiments, or
+  #       torchtitan.experiments.rl.examples
+  #       （manager.py:_load_config 第 120 行只 import `torchtitan.models`
+  #       这一层的 `config_registry` 符号，不递归查子模块。flux 的
+  #       config_registry 实际位于
+  #       `torchtitan/models/flux/config_registry.py:23 def flux_debugmodel()`，
+  #       但符号暴露在 `torchtitan.models.flux.config_registry` 上，
+  #       manager.py 找不到 → ImportError。flux 训练入口要自己写
+  #       launcher：`torchrun -m torchtitan.models.flux.trainer` 或类似
+  #       路径，跟 train.py 的 `--module flux --config ...` dispatcher
+  #       模型不兼容。）
   #   - flux_dev / flux_schnell rc=1 OOM 254 MiB / 28.40 GiB 已分配
   #       （full-size DiT 体积即便 dev 也要 12+ GB / step）
   #   - flux_schnell_mxfp8 / flux_dev_mxfp8 rc=1
   #       ImportError: torchao is not installed. Please install it to
   #       use MXFP8 linear layers.
-  # 退役条件：HF 镜像或预下载资产；>=flux_dev/schnell 多卡 HBM；
-  # torchao MXFP8 NPU 适配。
+  # 退役条件：给 flux 写专属 train launcher（不走 manager.py
+  # _load_config 的子模块查找路径）+ HF 资产预下载；>=flux_dev/schnell
+  # 多卡 HBM；torchao MXFP8 NPU 适配。
   - torchtitan/models/flux/config_registry.py:flux_debugmodel
   - torchtitan/models/flux/config_registry.py:flux_dev
   - torchtitan/models/flux/config_registry.py:flux_schnell
   - torchtitan/models/flux/config_registry.py:flux_schnell_mxfp8
   - torchtitan/models/flux/config_registry.py:flux_dev_mxfp8
 
-  # ===== muse_glimmer 族：缺 torchvision + OOM =====
-  # 实测证据（2026-09-15）：
-  #   - muse_glimmer_debugmodel / _flex rc=1（rc=2 间接信号，root
-  #     cause 在 triton_key compile 阶段被裁切）。
-  #   - muse_glimmer_debugmodel_mm / _30b_mm rc=1
+  # ===== muse_glimmer 族：FlexAttention API 与 torch 2.14+ 不兼容 =====
+  # 2026-09-17 源码审计 + 实测修正：之前 manifest 把 muse_glimmer_debugmodel
+  # 归到「triton_key 失败」是错的，triton_key 是 qwen3 / deepseek_v3 的
+  # 路径。muse_glimmer debugmodel 走 torch.compile FlexAttention，但
+  # muse_glimmer/model.py:587 `get_attention_masks()` 调用
+  # `create_attention_mask(..., separate_full_blocks=...)`，这个 kwarg
+  # 是 torch 2.14+ 才加的（stable::permute 同期引入，见 torchvision
+  # v0.29 stable ABI 记忆），torch 2.12 上报：
+  #   - muse_glimmer_debugmodel rc=1
+  #       TypeError: create_block_mask() got an unexpected keyword argument
+  #       'separate_full_blocks'
+  #       （trainer.py:746 → muse_glimmer/model.py:587 →
+  #       attention.py:627 _compiled_create_block_mask →
+  #       torch._dynamo eval_frame compile_wrapper → FlexAttention 内核）
+  #   - muse_glimmer_debugmodel_mm rc=1
   #       ModuleNotFoundError: No module named 'torchvision'
-  #       （multimodal 路径要 torchvision 处理图像）
+  #       （multimodal 路径要 torchvision 处理图像，跟 create_block_mask
+  #       失败是同 entry 的两层 root cause，先撞 create_block_mask）
   #   - muse_glimmer_30b rc=1 OOM 508 MiB / 28.81 GiB 已分配
-  # 退役条件：triton-ascend 暴露 triton_key；vision 路径加 torchvision
-  # 依赖；>=30b 多卡 HBM。
+  #   - muse_glimmer_30b_mm 同上叠加 torchvision 缺失
+  # 退役条件：torch 升级到 ≥2.14（separate_full_blocks API 可用）+ NPU
+  # FlexAttention 内核适配；vision 路径加 torchvision 依赖；>=30b
+  # 多卡 HBM。
   - torchtitan/models/muse_glimmer/config_registry.py:muse_glimmer_debugmodel
   - torchtitan/models/muse_glimmer/config_registry.py:muse_glimmer_debugmodel_mm
   - torchtitan/models/muse_glimmer/config_registry.py:muse_glimmer_30b
