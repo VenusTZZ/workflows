@@ -24,7 +24,13 @@ supported:
   #   写进去的只有：
   #     - argparse required=True 必填（cv/complete_cv 的 --data_dir）
   #     - 显式 override 默认的（checkpointing_steps / output_dir / with_tracking / project_dir）
-  #   profile=accelerate-nlp 装 base 栈，accelerate-cv 多装 timm+torchvision+预下 Pets。
+  #   profile 约定（2026-09-17 起，资产源 = ModelScope plant / cache-seed）：
+  #     accelerate-nlp        bert+glue（全体 NLP / by_feature 例）
+  #     accelerate-nlp-ar     nlp + SmolLM+wikitext（仅 grad_accum_ar）
+  #     accelerate-cv         nlp + timm/torchvision + Pets 数据
+  #     accelerate-infer-*    nlp + fire/av/diffusers/scipy/torchvision，
+  #                           每例只 plant 自己硬编码的模型（phi2/sd/tts/llava），
+  #                           tts/llava 的数据集走 cache-seed 兜底
 
   - path: examples/nlp_example.py
     profile: accelerate-nlp
@@ -124,97 +130,88 @@ supported:
     overlay_args: []
     timeout_minutes: 15
 
-  # ===== PARKED 2026-09-16（CI run 35062880797 后临时下线，等 Xet 问题解决再放开）=====
-  # 以下 6 条已通过 coder npu-1 端到端验证（torch2.9 / torch_npu 2.9.0.post2 /
-  # transformers 5.17，全部 rc=0，证据见各条注释），但 CI 首跑暴露平台网络问题：
-  # SmolLM-360M / phi-2 / SD-v1.5 / LLaVA 等 Xet-backed 仓库经 hf-mirror 时，
-  # 镜像缓存未命中会 302 到 cas-bridge.xethub.hf.co，CI runner 直连超时
-  # （HF_HUB_DISABLE_XET=1 只能改变失败模式：Xet 客户端 401 → 直连 timeout）；
-  # 镜像缓存命中时能过（同一 run 里 grad_accum_ar 后跑即成功，纯属时序运气），
-  # 即"能不能过取决于镜像缓存状态"——不可接受为 CI 依赖。
-  # 连带伤害：prepare_nlp_assets 的 SmolLM 预下把原本全绿的 cv_example /
-  # complete_cv_example 也拖挂了（cv profile 复用 nlp setup）。
-  # 放开条件（任一）：
-  #   1) CI 侧预下改为可稳定触达的源（如 runner 内先跑一次预热脚本 /
-  #      modelscope 镜像 / 非 Xet 权重复制仓）
-  #   2) runner 网络放行 cas-bridge.xethub.hf.co
-  #   3) hf-mirror 对 Xet 仓库提供稳定缓存
-  # 放开动作：取消本块注释 + setup_example.sh 里 PARKED 标记的 3 处
-  # （schedulefree pip / SmolLM 资产块 / 本块引用的 infer profile 已保留未动）。
-#  # ===== 2026-09-16 源码核对（accelerate@b795b483）后新增 =====
-#  # 旧注曾按上游旧版描述（GPT-2 + ELI5 + 54G OOM）；现版 example 已改为
-#  # SmolLM-360M + wikitext-2 截断 500 条，360M + AdamW ≈ 4.3G，32G HBM
-#  # 无压力。显式 ga=4 让 accumulation 路径真实生效（argparse 默认 1）。
-#  # 2026-09-16 coder npu-1 实跑（torch2.9+torch_npu2.9.0.post2）：3 epochs
-#  # + eval 全部完成，exit 0，213s。
-#  - path: examples/by_feature/gradient_accumulation_for_autoregressive_models.py
-#    profile: accelerate-nlp
-#    runner: linux-aarch64-a2-1
-#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-#    overlay_args:
-#      - --gradient_accumulation_steps 4
-#    timeout_minutes: 45
+  # ===== 2026-09-17 复活：资产源已整体切到 ModelScope + cache-seed =====
+  # 2026-09-16 PARKED 的根因（hf-mirror 对 Xet 仓库 302 到 cas-bridge 超时）
+  # 已绕开：所有模型改由 setup 从 ModelScope snapshot_download 后 plant 到
+  # HF hub cache（peft 同款机制，见 setup_example.sh ms_plant）；两个
+  # ModelScope 没有的数据集（pokemon-en-zh / malterei swift 视频）已通过
+  # cache-seed 投递到 runner 共享缓存（bundle 投递后从仓库移除，重建
+  # runbook 见 cache-seed/README.md）。以下 6 条全部恢复，profile 按例
+  # 拆分（infer 组每 job 只 plant 本例硬编码的模型，避免单 job 拉 ~27G）。
 
-#  # schedulefree 是纯 Python 包（wheel 为 py3-none-any，无 native 扩展），
-#  # 旧注"内部走 _C 扩展无 NPU 实现"不实；装上后是普通张量运算。
-#  # bert/mrpc 默认 3 epochs，同其他 by_feature 条目。
-#  # 2026-09-16 coder npu-1 实跑：schedulefree 1.4.1，3 epochs
-#  # accuracy 0.855 / f1 0.898，exit 0，116s。
-#  - path: examples/by_feature/schedule_free.py
-#    profile: accelerate-nlp
-#    runner: linux-aarch64-a2-1
-#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-#    overlay_args: []
-#    timeout_minutes: 20
+  # 旧注曾按上游旧版描述（GPT-2 + ELI5 + 54G OOM）；现版 example 已改为
+  # SmolLM-360M + wikitext-2 截断 500 条，360M + AdamW ≈ 4.3G，32G HBM
+  # 无压力。显式 ga=4 让 accumulation 路径真实生效（argparse 默认 1）。
+  # 2026-09-16 coder npu-1 实跑（torch2.9+torch_npu2.9.0.post2）：3 epochs
+  # + eval 全部完成，exit 0，213s。资产：SmolLM/wikitext 走 ModelScope
+  # plant（accelerate-nlp-ar profile）。
+  - path: examples/by_feature/gradient_accumulation_for_autoregressive_models.py
+    profile: accelerate-nlp-ar
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --gradient_accumulation_steps 4
+    timeout_minutes: 45
 
-#  # ===== 2026-09-16 源码核对（accelerate@b795b483）后新增 =====
+  # schedulefree 是纯 Python 包（wheel 为 py3-none-any，无 native 扩展），
+  # 装上后是普通张量运算。bert/mrpc 默认 3 epochs，同其他 by_feature 条目。
+  # 2026-09-16 coder npu-1 实跑：schedulefree 1.4.1，3 epochs
+  # accuracy 0.855 / f1 0.898，exit 0，116s。bert/mrpc 走 ModelScope
+  # plant（accelerate-nlp profile，schedulefree 已回装 pip 列表）。
+  - path: examples/by_feature/schedule_free.py
+    profile: accelerate-nlp
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 20
 
-#  # ===== inference/distributed（accelerate-infer profile：NLP 栈 + fire /
-#  # webdataset / av / diffusers + 模型预下）=====
-#  # phi-2 无 CLI 参数，prompts 硬编；fp16 ≈5.4G 冷缓存下载计入 timeout。
-#  # 2026-09-16 coder npu-1 实跑：5 prompts 生成 + gather 打印完整，exit 0，
-#  # 70s（含 14G 模型从缓存加载）。
-#  - path: examples/inference/distributed/phi2.py
-#    profile: accelerate-infer
-#    runner: linux-aarch64-a2-1
-#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-#    overlay_args: []
-#    timeout_minutes: 45
+  # phi-2 无 CLI 参数，prompts 硬编；fp16 ≈5.4G。模型从 ModelScope
+  # （microsoft/phi-2 同名镜像）plant 到 HF cache，冷缓存下载计入 timeout。
+  # 2026-09-16 coder npu-1 实跑：5 prompts 生成 + gather 打印完整，exit 0，
+  # 70s（含 14G 模型从缓存加载）。
+  - path: examples/inference/distributed/phi2.py
+    profile: accelerate-infer-phi2
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 45
 
-#  # stable_diffusion：SD v1.5 fp16 ≈5G 冷缓存；3 prompts 默认 50 步。
-#  # 注意 Xet：SD v1.5 是 Xet-backed 仓库，必须 HF_HUB_DISABLE_XET=1
-#  # （setup 已写 GITHUB_ENV），否则镜像 401。2026-09-16 coder npu-1
-#  # 实跑：50 步 ~4.5it/s，exit 0，121s。
-#  - path: examples/inference/distributed/stable_diffusion.py
-#    profile: accelerate-infer
-#    runner: linux-aarch64-a2-1
-#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-#    overlay_args: []
-#    timeout_minutes: 45
+  # stable_diffusion：example 用 fp32 权重 + torch_dtype=fp16（无 variant），
+  # ModelScope AI-ModelScope/stable-diffusion-v1-5 的 safetensors 即够
+  # （plant 时跳过 .bin/.ckpt 重复格式，~5.5G）；3 prompts 默认 50 步。
+  # 2026-09-16 coder npu-1 实跑：50 步 ~4.5it/s，exit 0，121s。
+  - path: examples/inference/distributed/stable_diffusion.py
+    profile: accelerate-infer-sd
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 45
 
-#  # VITS 语音生成：facebook/mms-tts-eng（~150M）+ pokemon captions 数据集
-#  # （833 条），fp32 推理，逐条落 wav。需 scipy（wavfile）+ torchvision
-#  # （VitsModel import 链拉 torchvision op 注册）。2026-09-16 coder npu-1
-#  # 实跑：105 批全生成，exit 0，153s。
-#  - path: examples/inference/distributed/distributed_speech_generation.py
-#    profile: accelerate-infer
-#    runner: linux-aarch64-a2-1
-#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-#    overlay_args:
-#      - --output_path ${CI_OUTPUT_DIR}/tts
-#    timeout_minutes: 45
+  # VITS 语音生成：facebook/mms-tts-eng（~150M，ModelScope 同名镜像 plant）
+  # + pokemon captions 数据集（833 条；ModelScope 无 en-zh 变体 → 已于
+  # 2026-09-17 经 cache-seed 投递到 runner 共享缓存），fp32 推理，逐条落
+  # wav。需 scipy（wavfile）+ torchvision（VitsModel import 链拉 torchvision
+  # op 注册）。2026-09-16 coder npu-1 实跑：105 批全生成，exit 0，153s。
+  - path: examples/inference/distributed/distributed_speech_generation.py
+    profile: accelerate-infer-tts
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --output_path ${CI_OUTPUT_DIR}/tts
+    timeout_minutes: 45
 
-#  # LLaVA-NeXT-Video-7B-hf fp16 ≈14G 冷缓存下载（timeout 对齐 xdit 30G/90min
-#  # 先例，镜像实测 ~16MB/s 约 33min）+ malterei swift 视频数据集（205 个
-#  # 视频）；av 解码 8 帧/视频，bs4 逐批 generate。2026-09-16 coder npu-1
-#  # 实跑：51 批全生成落盘，exit 0，836s（warm cache）。
-#  - path: examples/inference/distributed/llava_next_video.py
-#    profile: accelerate-infer
-#    runner: linux-aarch64-a2-1
-#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-#    overlay_args:
-#      - --save_dir ${CI_OUTPUT_DIR}/llava
-#    timeout_minutes: 90
+  # LLaVA-NeXT-Video-7B-hf fp16 ≈14G（ModelScope 同名镜像 plant，冷缓存
+  # 下载计入 timeout）+ malterei swift 视频数据集（204 个视频；ModelScope
+  # 无 → 已于 2026-09-17 经 cache-seed 投递到 runner 共享缓存）；av 解码
+  # 8 帧/视频，bs4 逐批 generate。2026-09-16 coder npu-1 实跑：51 批全生成
+  # 落盘，exit 0，836s（warm cache）。
+  - path: examples/inference/distributed/llava_next_video.py
+    profile: accelerate-infer-llava
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --save_dir ${CI_OUTPUT_DIR}/llava
+    timeout_minutes: 90
 
 
 unsupported:
@@ -300,9 +297,10 @@ unsupported:
   - examples/alst_ulysses_sequence_parallelism/sp-alst.py
   - examples/alst_ulysses_sequence_parallelism/sp-alst.sh
 
-  # [环境] 推理分布式（模型加载组）：已转 supported（装 fire/webdataset/av/
-  # diffusers + 预下模型；florence2 用 setup 生成的 8 图 mini.tar fixture，
-  # image_gen overlay 到 SD v1.5 避开 PixArt T5-XXL ~20G 冷缓存）
+  # [环境] 推理分布式（模型加载组）：已转 supported（2026-09-17 资产源切
+  # ModelScope：phi2/sd/tts/llava 按例拆 profile，setup ms_plant 各自预下
+  # 硬编码模型；pokemon/malterei 数据集走 cache-seed 兜底）。florence2 与
+  # image_gen 仍 unsupported（理由见各自条目）。
 
   # [环境/引擎] PiPPy pipeline 推理：is_pippy_available 只查 torch>=2.4，
   # prepare_pippy 的 num_chunks 默认 = num_processes（inference.py:165）。
@@ -377,6 +375,6 @@ unsupported:
   # （coder 实跑 rc=1：OSError Errno 36 @ 307/1632 images）
   - examples/inference/distributed/distributed_image_generation.py
 
-  # [环境] 分布式推理 split-between-processes：stable_diffusion / speech_gen
-  # 已转 supported（装 diffusers/fire/scipy/torchvision + 预下模型）；
+  # [环境] 分布式推理 split-between-processes：stable_diffusion / speech_gen /
+  # llava_video / phi2 已转 supported（ModelScope plant + cache-seed 数据集）；
   # image_gen 见上条（上游文件名 bug）。

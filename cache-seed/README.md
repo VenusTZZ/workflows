@@ -120,3 +120,56 @@ peft 9 个 supported 例的 model/dataset 来源，按例分别走哪条路：
 
 `modelscope/imdb` 有 imdb.py script 但**没 parquet 数据**，所以 imdb 不走 modelscope。
 nyu-mll/glue 的 mrpc/cola parquet 在 modelscope 上 → setup 阶段 cp plant，无 push。
+
+## accelerate 的现状（实测 ModelScope API 后，2026-09-17）
+
+accelerate 的资产源整体切换（解决 2026-09-16 hf-mirror Xet 302 事故）：
+9 个可 ModelScope 的资产全部走 setup 阶段 `ms_plant`（snapshot_download →
+cp 到 HF hub cache，同 peft 机制）：
+
+| 资产 | ModelScope id | 备注 |
+|---|---|---|
+| bert-base-cased | `AI-ModelScope/bert-base-cased` | 例里硬编码裸 id，plant 到 `models--bert-base-cased` |
+| glue mrpc | `nyu-mll/glue` | 同 peft |
+| oxford-iiit-pet | `timm/oxford-iiit-pet` | ~790MB parquet，cv 两例 |
+| SmolLM-360M | `HuggingFaceTB/SmolLM-360M` | 同名镜像，allow_patterns 跳过 3.9G onnx/ |
+| wikitext-2-v1 | `Salesforce/wikitext` | 只取 wikitext-2-v1/* ~7.4MB |
+| phi-2 | `microsoft/phi-2` | 同名镜像 |
+| SD v1.5 | `AI-ModelScope/stable-diffusion-v1-5` | 例用 fp32+torch_dtype=fp16（无 variant），plant 只取 safetensors ~5.5G |
+| mms-tts-eng | `facebook/mms-tts-eng` | 同名镜像 |
+| LLaVA-NeXT-Video-7B-hf | `llava-hf/LLaVA-NeXT-Video-7B-hf` | 同名镜像，14G |
+
+infer 组按例拆 profile（`accelerate-infer-phi2/sd/tts/llava`），每 job 只
+plant 本例硬编码的模型，避免单 job 拉 ~27G。
+
+**已投递后移除（2026-09-17）**：accelerate 的两个 ModelScope 缺口数据集
+（均为例里硬编码 `load_dataset` / `snapshot_download`，无 MS 镜像或等价物）
+曾打包在本目录并通过 cache-seed workflow（run 35177063140）投递到 runner
+共享缓存，投递完成后 bundle 已从仓库移除以减轻每次 CI checkout：
+
+- `svjack/pokemon-blip-captions-en-zh`（~100MB）—
+  distributed_speech_generation 用其 `en_text` 列；MS 只有原版
+  lambdalabs/pokemon-blip-captions（无 en/zh 列），不可替代
+- `malterei/LLaVA-Video-small-swift`（~505MB，204 视频）— llava_next_video
+  运行时 `snapshot_download(repo_type="dataset")`，os.walk 全量使用
+
+**新 runner 缺数据时的重建流程**（本机代理下 → push → dispatch）：
+
+```bash
+export HF_HOME=/tmp/hf HTTPS_PROXY=http://127.0.0.1:7890
+python3 - <<'PY'
+import os
+from huggingface_hub import snapshot_download
+for repo in ("svjack/pokemon-blip-captions-en-zh", "malterei/LLaVA-Video-small-swift"):
+    snapshot_download(repo, repo_type="dataset")
+PY
+python scripts/bundle_cache.py --project accelerate \
+  --src /tmp/hf/hub/datasets--svjack--pokemon-blip-captions-en-zh \
+  --prefix hub/datasets--svjack--pokemon-blip-captions-en-zh \
+  --src /tmp/hf/hub/datasets--malterei--LLaVA-Video-small-swift \
+  --prefix hub/datasets--malterei--LLaVA-Video-small-swift
+git add cache-seed/accelerate && git commit -m "accelerate: re-seed datasets" && git push
+# 再 dispatch cache-seed workflow（projects=accelerate），完成后同样可删
+```
+
+历史 bundle 也可从 git 直接恢复：`git checkout 0242ba8 -- cache-seed/accelerate`。
