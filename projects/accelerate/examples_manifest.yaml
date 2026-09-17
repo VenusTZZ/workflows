@@ -132,28 +132,48 @@ supported:
     overlay_args: []
     timeout_minutes: 30
 
-  # ===== 2026-09-17 复活：资产源已整体切到 ModelScope + cache-seed =====
-  # 2026-09-16 PARKED 的根因（hf-mirror 对 Xet 仓库 302 到 cas-bridge 超时）
-  # 已绕开：所有模型由 cache-seed workflow 统一从 ModelScope 下载并 plant
-  # 到 runner 共享缓存（spec：cache-seed/accelerate/ms_seeds.yaml，脚本
-  # scripts/ms_seed.py；各例 setup 只做在位校验，不下载）；两个 ModelScope
-  # 没有的数据集（pokemon-en-zh / malterei swift 视频）走 bundle 投递
-  # （已投递后从仓库移除，重建 runbook 见 cache-seed/README.md）。以下 6 条
-  # 全部恢复，profile 按例拆分（infer 组各例只校验自己硬编码的模型）。
+  # ===== PARKED 2026-09-16（CI run 35062880797 后临时下线，等 Xet 问题解决再放开）=====
+  # 以下 6 条已通过 coder npu-1 端到端验证（torch2.9 / torch_npu 2.9.0.post2 /
+  # transformers 5.17，全部 rc=0，证据见各条注释），但 CI 首跑暴露平台网络问题：
+  # SmolLM-360M / phi-2 / SD-v1.5 / LLaVA 等 Xet-backed 仓库经 hf-mirror 时，
+  # 镜像缓存未命中会 302 到 cas-bridge.xethub.hf.co，CI runner 直连超时
+  # （HF_HUB_DISABLE_XET=1 只能改变失败模式：Xet 客户端 401 → 直连 timeout）；
+  # 镜像缓存命中时能过（同一 run 里 grad_accum_ar 后跑即成功，纯属时序运气），
+  # 即"能不能过取决于镜像缓存状态"——不可接受为 CI 依赖。
+  # 连带伤害：prepare_nlp_assets 的 SmolLM 预下把原本全绿的 cv_example /
+  # complete_cv_example 也拖挂了（cv profile 复用 nlp setup）。
+  # 放开条件（任一）：
+  #   1) CI 侧预下改为可稳定触达的源（如 runner 内先跑一次预热脚本 /
+  #      modelscope 镜像 / 非 Xet 权重复制仓）
+  #   2) runner 网络放行 cas-bridge.xethub.hf.co
+  #   3) hf-mirror 对 Xet 仓库提供稳定缓存
+  # 放开动作：取消本块注释 + setup_example.sh 里 PARKED 标记的 3 处
+  # （schedulefree pip / SmolLM 资产块 / 本块引用的 infer profile 已保留未动）。
+#  # ===== 2026-09-16 源码核对（accelerate@b795b483）后新增 =====
+#  # 旧注曾按上游旧版描述（GPT-2 + ELI5 + 54G OOM）；现版 example 已改为
+#  # SmolLM-360M + wikitext-2 截断 500 条，360M + AdamW ≈ 4.3G，32G HBM
+#  # 无压力。显式 ga=4 让 accumulation 路径真实生效（argparse 默认 1）。
+#  # 2026-09-16 coder npu-1 实跑（torch2.9+torch_npu2.9.0.post2）：3 epochs
+#  # + eval 全部完成，exit 0，213s。
+#  - path: examples/by_feature/gradient_accumulation_for_autoregressive_models.py
+#    profile: accelerate-nlp
+#    runner: linux-aarch64-a2-1
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --gradient_accumulation_steps 4
+#    timeout_minutes: 45
 
-  # 旧注曾按上游旧版描述（GPT-2 + ELI5 + 54G OOM）；现版 example 已改为
-  # SmolLM-360M + wikitext-2 截断 500 条，360M + AdamW ≈ 4.3G，32G HBM
-  # 无压力。显式 ga=4 让 accumulation 路径真实生效（argparse 默认 1）。
-  # 2026-09-16 coder npu-1 实跑（torch2.9+torch_npu2.9.0.post2）：3 epochs
-  # + eval 全部完成，exit 0，213s。资产：SmolLM/wikitext 走 ModelScope
-  # plant（accelerate-nlp-ar profile）。
-  - path: examples/by_feature/gradient_accumulation_for_autoregressive_models.py
-    profile: accelerate-nlp-ar
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --gradient_accumulation_steps 4
-    timeout_minutes: 60
+#  # schedulefree 是纯 Python 包（wheel 为 py3-none-any，无 native 扩展），
+#  # 旧注"内部走 _C 扩展无 NPU 实现"不实；装上后是普通张量运算。
+#  # bert/mrpc 默认 3 epochs，同其他 by_feature 条目。
+#  # 2026-09-16 coder npu-1 实跑：schedulefree 1.4.1，3 epochs
+#  # accuracy 0.855 / f1 0.898，exit 0，116s。
+#  - path: examples/by_feature/schedule_free.py
+#    profile: accelerate-nlp
+#    runner: linux-aarch64-a2-1
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args: []
+#    timeout_minutes: 20
 
   # schedulefree 是纯 Python 包（wheel 为 py3-none-any，无 native 扩展），
   # 装上后是普通张量运算。bert/mrpc 默认 3 epochs，同其他 by_feature 条目。
@@ -189,18 +209,17 @@ supported:
     overlay_args: []
     timeout_minutes: 60
 
-  # VITS 语音生成：facebook/mms-tts-eng（~150M，ModelScope 同名镜像 plant）
-  # + pokemon captions 数据集（833 条；ModelScope 无 en-zh 变体 → 已于
-  # 2026-09-17 经 cache-seed 投递到 runner 共享缓存），fp32 推理，逐条落
-  # wav。需 scipy（wavfile）+ torchvision（VitsModel import 链拉 torchvision
-  # op 注册）。2026-09-16 coder npu-1 实跑：105 批全生成，exit 0，153s。
-  - path: examples/inference/distributed/distributed_speech_generation.py
-    profile: accelerate-infer-tts
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --output_path ${CI_OUTPUT_DIR}/tts
-    timeout_minutes: 60
+#  # VITS 语音生成：facebook/mms-tts-eng（~150M）+ pokemon captions 数据集
+#  # （833 条），fp32 推理，逐条落 wav。需 scipy（wavfile）+ torchvision
+#  # （VitsModel import 链拉 torchvision op 注册）。2026-09-16 coder npu-1
+#  # 实跑：105 批全生成，exit 0，153s。
+#  - path: examples/inference/distributed/distributed_speech_generation.py
+#    profile: accelerate-infer
+#    runner: linux-aarch64-a2-1
+#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+#    overlay_args:
+#      - --output_path ${CI_OUTPUT_DIR}/tts
+#    timeout_minutes: 45
 
   # LLaVA-NeXT-Video-7B-hf fp16 ≈14G（ModelScope 同名镜像 plant，冷缓存
   # 下载计入 timeout）+ malterei swift 视频数据集（204 个视频；ModelScope

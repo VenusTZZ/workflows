@@ -555,34 +555,53 @@ unsupported:
   - torchtitan/models/muse_glimmer/config_registry.py:muse_glimmer_30b_mm
 
   # ===== RL 系列：依赖未安装的第三方 =====
-  # 实测证据（2026-09-15）：
+  # 实测证据（vllm-ascend-hdc 上 2026-09-17，stack: torch 2.10.0+cpu
+  # + torch_npu 2.10.0.post4 + vllm 0.23.0 + vllm_ascend 0.23.0 +
+  # spmd_types==0.2.3 + datasets 已装；hdc-stable-npu-4 同样 layer
+  # 失败但 rl/scripts/loss_compare.py 在那里因 spmd_types 缺失直接
+  # rc=1，import 都进不去。vllm-ascend-hdc 多装 spmd_types + datasets
+  # 之后才能区分 import 链 vs argparse 链）：
   #   - rl/train.py rc=1
   #       ModuleNotFoundError: No module named 'monarch'
   #       （line 35: from monarch.actor import default_bootstrap_cmd,
   #       HostMesh, ProcMesh, this_host）
+  #       路径：monarch.actor 是 RL actor 调度根，需 torchmonarch + pygtrie
+  #       + portpicker + torchstore 整条 actor 框架。
   #   - rl/generate.py rc=1
-  #       ModuleNotFoundError: No module named 'vllm'
-  #       （line 27: from vllm import EngineArgs, LLMEngine,
-  #       SamplingParams）
-  #   - rl/scripts/loss_compare.py rc=1
-  #       GRPO loss regression 检测脚本（与顶层 scripts/loss_compare.py
-  #       同 pattern），通过 subprocess 跑 rl/train.py；自身 main() 也会
-  #       触发从 `scripts.loss_compare` import——v0.3.0 仓库根没有
-  #       `scripts/loss_compare.py`（仅 rl/scripts/ 下有这一份），该
-  #       sibling import 必 fail；同时它子进程调用的 rl/train.py 因
-  #       monarch 缺失也 fail。两层 root cause 都是 CUDA-only RL 栈。
-  # 注释里说的 "vllm-ascend ABI 对齐 torch 2.10" 是在 vLLM 真装上后
-  # 才相关；当前栈连 vllm + monarch 都没装，import 阶段就 fail。
-  # **vLLM 验证延后**：依赖 vllm + monarch 的 RL 系列（rl/train.py
-  # + rl/generate.py + rl/scripts/loss_compare.py + 下面 RL examples
-  # 三个 module）属于 vLLM 依赖链，先不动。参考
-  # projects/speculators/ 看护（已用
-  # `swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/
-  # vllm-ascend:v0.23.0` 镜像 + 8 条 supported 跑通 DFlash / Eagle3
-  # 等 vLLM-based 训练 / 推理链路）；speculators 项目验证 vllm-ascend
-  # v0.23.0 镜像在 NPU 上 OK 后，再回头验证 torchtitan RL 系列。
-  # 退役条件：speculators 项目跑通后 + monarch + vllm-ascend（torch 2.12
-  # ABI）安装到位 + 仓库根补回 scripts/loss_compare.py。
+  #       ModuleNotFoundError: No module named 'renderers'
+  #       （不是 vllm——vllm 在 vllm-ascend-hdc 上已装。真正失败点在
+  #       rl/renderer.py:12: from renderers import config_from_name,
+  #       create_renderer, Renderer；rl/generate.py 顶端 import 触达这
+  #       一层就停。renderers 是 PrimeIntellect-ai/renderers 第三方
+  #       包，pip 路径：git+https://github.com/PrimeIntellect-ai/
+  #       renderers.git@main，torchtitan RL README Quick Start 第 1 步
+  #       列了这个 dep。）
+  #   - rl/scripts/loss_compare.py（实跑实证，跟 manifest 之前描述不符）
+  #       装上 spmd_types + datasets 之后：
+  #       (a) `python -m torchtitan.experiments.rl.scripts.loss_compare
+  #            --help` rc=0，argparse 完整工作。
+  #       (b) 传最小 args（--hf-assets-path tests/assets/tokenizer
+  #            --dump-folder /tmp/lc_test）后 argparse 才报错
+  #            "one of --export-result / --import-result is required"。
+  #       (c) 满足 args 后脚本内部 subprocess.Popen 调
+  #            `python -m torchtitan.experiments.rl.train ...` 跑
+  #            smoke；该子进程按上面 (1) 的根因在 import `monarch` 时
+  #            fail（"[RL_LOSS_COMPARE] Training failed with return code
+  #            1"，stderr 末段 traceback 同样 No module named 'monarch'）。
+  #       结论：本 entry 自身 import 链是 OK 的（spmd_types + datasets
+  #       装齐即可），rc=1 是因为它内嵌 subprocess 调 rl/train.py，
+  #       实际是 rl/train.py 的根因；之前 manifest 写 "自身 import 必
+  #       fail" 是猜的，没在 spmd_types 装齐的环境实跑过。
+  # **vLLM 验证延后**：依赖 vllm + monarch + renderers + torchstore
+  # 的整条 RL 链，先不动。参考 projects/speculators/ 看护（已用
+  # `swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/
+  # vllm-ascend/vllm-ascend:v0.23.0` 镜像 + 8 条 supported 跑通
+  # DFlash / Eagle3 等 vLLM-based 训练 / 推理链路）。speculators
+  # 项目验证 vllm-ascend v0.23.0 镜像在 NPU 上 OK + 等 vllm-ascend 出
+  # torch 2.12 ABI 版本后，再回头验证 torchtitan RL 系列。
+  # 退役条件：speculators 项目跑通 + monarch + renderers + torchstore
+  # + vllm-ascend（torch 2.12 ABI）安装到位；rl/scripts/loss_compare.py
+  # 子进程改走 NPU-validated 子路径。
   - torchtitan/experiments/rl/train.py
   - torchtitan/experiments/rl/generate.py
   - torchtitan/experiments/rl/scripts/loss_compare.py
@@ -693,23 +712,30 @@ unsupported:
 
   # ===== RL examples（CUDA-only 依赖链 + vLLM 依赖） =====
   # 上游 _supported_experiments 显式收录 3 个 RL example module：
-  # alphabet_sort / dapo_math / search_r1。各自的 config_registry.py
-  # 直接 import rl.actors.generator / rl.actors.trainer /
-  # rl.batch_invariance / rl.components.{batcher,training_sample_builder}
-  # 等被 exclude 标记为 CUDA-only 的子模块（vLLM rollout / monarch /
-  # NCCL-only 的 batch invariance 等）。即使 rl/train.py + rl/generate.py
-  # 解决了 vLLM / monarch 缺失问题，RL example 这层还多一层 RL 专属
-  # CUDA-only 组件依赖。
-  # **vLLM 验证延后**（同 rl/train.py 段说明）：依赖 vllm + monarch
-  # 的整条链，先不动。参考 projects/speculators/ 用
-  # `vllm-ascend:v0.23.0` 镜像跑通 8 条 supported 之后，再回头验证。
+  # alphabet_sort / dapo_math / search_r1。各自的 env.py 直接 import
+  # `from renderers import Message, ToolSpec`（vllm-ascend-hdc 上 2026-
+  # 09-17 实测，alphabet_sort/env.py:11 / dapo_math/env.py:11 /
+  # search_r1/env.py:16 全是同 pattern）——renderers 是
+  # PrimeIntellect-ai 第三方包，跟 vllm / monarch 是平行的两个 dep，
+  # 不是 vllm 的子依赖。装上 spmd_types + datasets 之后这三个 example
+  # 仍在 renderers 这一层 fail。
+  # 进一步依赖：config_registry.py 还要 import rl.actors.generator /
+  # rl.actors.trainer / rl.batch_invariance / rl.components.{batcher,
+  # training_sample_builder} 等被 exclude 标记为 CUDA-only 的子模块
+  # （vLLM rollout / monarch / NCCL-only 的 batch invariance 等）。
+  # 所以 RL example 至少三层 root cause：renderers + monarch + 自有
+  # CUDA-only 组件。
+  # **vLLM 验证延后**（同 rl/train.py 段说明）：依赖 vllm + monarch +
+  # renderers + torchstore 的整条链，先不动。参考 projects/speculators/
+  # 用 `vllm-ascend:v0.23.0` 镜像跑通 8 条 supported 之后，再回头
+  # 验证。
   # 影响条目：
   #   - rl/examples/alphabet_sort/config_registry.py:rl_grpo_qwen3_*
   #   - rl/examples/dapo_math/config_registry.py:rl_grpo_qwen3_*
   #   - rl/examples/search_r1/config_registry.py:rl_search_r1_qwen3_*
-  # 退役条件：speculators vllm-ascend 跑通 + rl.actors/components/batch_
-  # invariance 提供 NPU 后端，或上游把 RL rollout / batch invariance
-  # 拆成 backend-pluggable。
+  # 退役条件：speculators vllm-ascend 跑通 + renderers + monarch 安装
+  # 到位 + rl.actors/components/batch_invariance 提供 NPU 后端，或
+  # 上游把 RL rollout / batch invariance 拆成 backend-pluggable。
   - torchtitan/experiments/rl/examples/alphabet_sort/config_registry.py
   - torchtitan/experiments/rl/examples/dapo_math/config_registry.py
   - torchtitan/experiments/rl/examples/search_r1/config_registry.py
