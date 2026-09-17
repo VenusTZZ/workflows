@@ -207,6 +207,13 @@ jobs:
       # 302s to cas-bridge.xethub.hf.co regardless; those must be
       # pre-downloaded (see peft supertuning's fixture).
       HF_HUB_DISABLE_XET: "1"
+      # evaluate's metric caches (predictions/references arrow files) are
+      # per-job scratch with zero cross-job value — keep them OFF the
+      # shared persistent volume (default ~/.cache/huggingface/metrics).
+      # That volume is also where cross_validation hit Errno 5 EIO on a
+      # metrics-file close (run 35188975420) and where every glue-metric
+      # leg would otherwise contend on the same fixed path.
+      HF_METRICS_CACHE: ${{ github.workspace }}/.hf-metrics
       PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
       PIP_TIMEOUT: "120"
     container:
