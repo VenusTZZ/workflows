@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Prepare the CI environment for one supported ROLL example.
 # $1 is the manifest profile. Unknown profiles fail before any install.
-# ROLL itself is installed from TARGET_ROOT (the upstream checkout under test),
-# replacing the image's preinstalled copy without touching the pinned
-# torch / torch_npu / vLLM / vLLM-Ascend / triton-ascend stack.
+# The manifest uses a domestic CANN base image.  This script installs the
+# version-matched torch_npu / vLLM-Ascend stack proven by roll-quick-start,
+# then installs ROLL itself from TARGET_ROOT (the upstream checkout under
+# test).  ModelScope keeps using the runner's existing persistent cache.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -15,6 +16,7 @@ PROFILE="$1"
 
 ASCEND_PIP_INDEX=https://repo.huaweicloud.com/ascend/repos/pypi
 FALLBACK_PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+HUAWEICLOUD_PIP_INDEX=https://repo.huaweicloud.com/repository/pypi/simple
 CLUSTER_PIP_HOST=cache-service.nginx-pypi-cache.svc.cluster.local
 export CLUSTER_PIP_INDEX="http://${CLUSTER_PIP_HOST}/pypi/simple"
 
@@ -107,14 +109,59 @@ print(f"roll import path ok: {source}")
 PY
 }
 
-ensure_agentic_deps() {
-  if python -c "import gym, gymnasium, gem, gym_sokoban" 2>/dev/null; then
-    echo "reusing image agentic env deps"
-    return
-  fi
-  echo "=> installing agentic env deps (gem-llm / gym_sokoban / gymnasium)"
-  python -m pip install "gem-llm==0.0.4" "gym_sokoban" "gymnasium[toy-text]"
-  python -c "import gym, gymnasium, gem, gym_sokoban; print('agentic env deps ok')"
+install_rollout_stack() {
+  local target_root="${TARGET_ROOT:?TARGET_ROOT is required}"
+  local requirements_file
+  # Keep the filtered file beside requirements_common.txt: its relative
+  # ./mcore_adapter and -r requirements_vision.txt references are resolved
+  # relative to the requirements file location by pip.
+  requirements_file="$target_root/.ci-requirements-common.txt"
+
+  echo "=> installing matched torch 2.10 / torch_npu 2.10 runtime"
+  python -m pip install -q \
+    "torch==2.10.0" "torchvision==0.25.0" "torchaudio==2.10.0" \
+    "numpy==1.26.4"
+  pip_ascend -q --no-deps "torch-npu==2.10.0.post4"
+
+  echo "=> installing vLLM 0.23.0 / vLLM-Ascend 0.23.0rc1 from domestic indexes"
+  python -m pip install -q --index-url "$HUAWEICLOUD_PIP_INDEX" \
+    "vllm==0.23.0"
+  python -m pip uninstall -y -q triton triton-ascend || true
+  python -m pip install -q --index-url "$HUAWEICLOUD_PIP_INDEX" \
+    "triton==3.5.0"
+  python -m pip install -q --no-deps --index-url "$ASCEND_PIP_INDEX" \
+    "triton-ascend==3.2.1"
+  python -m pip install -q --index-url "$HUAWEICLOUD_PIP_INDEX" \
+    "vllm-ascend==0.23.0rc1"
+
+  # Generic vLLM metadata can select a CUDA torch build.  Restore the exact
+  # NPU pair after installing vLLM, matching the exercised quick-start path.
+  python -m pip install -q \
+    "torch==2.10.0" "torchvision==0.25.0" "torchaudio==2.10.0"
+  pip_ascend -q --no-deps "torch-npu==2.10.0.post4"
+
+  echo "=> installing ROLL common + Sokoban dependencies"
+  grep -vE '^[[:space:]]*gem-llm' \
+    "$target_root/requirements_common.txt" > "$requirements_file"
+  python -m pip install -q -r "$requirements_file"
+  # gem-llm metadata pulls an antlr runtime incompatible with Hydra's pin;
+  # quick-start proved the package itself works with ROLL's 4.9.3 runtime.
+  python -m pip install -q --ignore-requires-python --no-deps \
+    "gem-llm==0.0.4"
+  python -m pip install -q \
+    "numpy==1.26.4" "transformers==4.57.6" "tensorboard==2.20.0" \
+    "antlr4-python3-runtime==4.9.3" "modelscope==1.37.0" \
+    "gym_sokoban" "gymnasium[toy-text]"
+
+  python - <<'PY'
+import torch, torch_npu, vllm, vllm_ascend, triton
+print("torch", torch.__version__)
+print("torch_npu", torch_npu.__version__)
+print("vllm", vllm.__version__)
+print("triton", triton.__version__)
+print("NPU available", torch.npu.is_available(), "count", torch.npu.device_count())
+PY
+  rm -f "$requirements_file"
 }
 
 ms_download_model() {
@@ -142,9 +189,9 @@ PY
 prepare_ci_configs() {
   local src="${PROJECT_ROOT:?PROJECT_ROOT is required}/configs"
   local dst="$TARGET_ROOT/examples/ci_roll"
-  echo "preparing CI configs: $src -> $dst"
+  echo "preparing phase-one rollout config: $src -> $dst"
   mkdir -p "$dst"
-  cp "$src"/ci_agentic_train.yaml "$src"/ci_agentic_rollout.yaml "$src"/ci_rlvr.yaml "$dst/"
+  cp "$src"/ci_agentic_rollout.yaml "$dst/"
   ls -la "$dst/"
 }
 
@@ -165,27 +212,16 @@ PY
 
 prepare_ascend_env
 select_pip_index
-
-python -c "import torch, torch_npu, vllm, vllm_ascend; print('torch', torch.__version__, 'torch_npu', torch_npu.__version__, 'vllm', vllm.__version__)"
-
+export PYTHONNOUSERSITE=1
+install_rollout_stack
 ensure_roll_installed
 ms_download_model "Qwen/Qwen2.5-0.5B-Instruct"
 prepare_ci_configs
 
 case "$PROFILE" in
-  agentic_train_npu)
-    echo "profile: agentic_train_npu (2 NPUs: FSDP2 train + vLLM rollouts)"
-    ensure_agentic_deps
-    check_npu_devices 2
-    ;;
   agentic_rollout_npu)
     echo "profile: agentic_rollout_npu (1 NPU: vLLM rollouts only)"
-    ensure_agentic_deps
     check_npu_devices 1
-    ;;
-  rlvr_npu)
-    echo "profile: rlvr_npu (4 NPUs: FSDP2 train(2) + vLLM(1) + reference(1))"
-    check_npu_devices 4
     ;;
   *)
     echo "FATAL: unknown profile '$PROFILE'" >&2
