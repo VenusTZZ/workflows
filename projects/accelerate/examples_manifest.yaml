@@ -24,13 +24,15 @@ supported:
   #   写进去的只有：
   #     - argparse required=True 必填（cv/complete_cv 的 --data_dir）
   #     - 显式 override 默认的（checkpointing_steps / output_dir / with_tracking / project_dir）
-  #   profile 约定（2026-09-17 起，资产源 = ModelScope plant / cache-seed）：
+  #   profile 约定（2026-09-17 起，资产由 cache-seed workflow 统一投递到
+  #   runner 共享缓存：ModelScope plant 见
+  #   cache-seed/accelerate/ms_seeds.yaml，ModelScope 没有的数据集走
+  #   cache-seed bundle；setup 只装栈 + 校验在位，不下载）：
   #     accelerate-nlp        bert+glue（全体 NLP / by_feature 例）
   #     accelerate-nlp-ar     nlp + SmolLM+wikitext（仅 grad_accum_ar）
   #     accelerate-cv         nlp + timm/torchvision + Pets 数据
   #     accelerate-infer-*    nlp + fire/av/diffusers/scipy/torchvision，
-  #                           每例只 plant 自己硬编码的模型（phi2/sd/tts/llava），
-  #                           tts/llava 的数据集走 cache-seed 兜底
+  #                           phi2/sd/tts/llava 各自校验本例模型与数据集
 
   - path: examples/nlp_example.py
     profile: accelerate-nlp
@@ -132,12 +134,12 @@ supported:
 
   # ===== 2026-09-17 复活：资产源已整体切到 ModelScope + cache-seed =====
   # 2026-09-16 PARKED 的根因（hf-mirror 对 Xet 仓库 302 到 cas-bridge 超时）
-  # 已绕开：所有模型改由 setup 从 ModelScope snapshot_download 后 plant 到
-  # HF hub cache（peft 同款机制，见 setup_example.sh ms_plant）；两个
-  # ModelScope 没有的数据集（pokemon-en-zh / malterei swift 视频）已通过
-  # cache-seed 投递到 runner 共享缓存（bundle 投递后从仓库移除，重建
-  # runbook 见 cache-seed/README.md）。以下 6 条全部恢复，profile 按例
-  # 拆分（infer 组每 job 只 plant 本例硬编码的模型，避免单 job 拉 ~27G）。
+  # 已绕开：所有模型由 cache-seed workflow 统一从 ModelScope 下载并 plant
+  # 到 runner 共享缓存（spec：cache-seed/accelerate/ms_seeds.yaml，脚本
+  # scripts/ms_seed.py；各例 setup 只做在位校验，不下载）；两个 ModelScope
+  # 没有的数据集（pokemon-en-zh / malterei swift 视频）走 bundle 投递
+  # （已投递后从仓库移除，重建 runbook 见 cache-seed/README.md）。以下 6 条
+  # 全部恢复，profile 按例拆分（infer 组各例只校验自己硬编码的模型）。
 
   # 旧注曾按上游旧版描述（GPT-2 + ELI5 + 54G OOM）；现版 example 已改为
   # SmolLM-360M + wikitext-2 截断 500 条，360M + AdamW ≈ 4.3G，32G HBM
@@ -298,8 +300,9 @@ unsupported:
   - examples/alst_ulysses_sequence_parallelism/sp-alst.sh
 
   # [环境] 推理分布式（模型加载组）：已转 supported（2026-09-17 资产源切
-  # ModelScope：phi2/sd/tts/llava 按例拆 profile，setup ms_plant 各自预下
-  # 硬编码模型；pokemon/malterei 数据集走 cache-seed 兜底）。florence2 与
+  # ModelScope：phi2/sd/tts/llava 按例拆 profile，模型由 cache-seed
+  # workflow 统一 plant（cache-seed/accelerate/ms_seeds.yaml），setup 只做
+  # 在位校验；pokemon/malterei 数据集走 cache-seed bundle）。florence2 与
   # image_gen 仍 unsupported（理由见各自条目）。
 
   # [环境/引擎] PiPPy pipeline 推理：is_pippy_available 只查 torch>=2.4，

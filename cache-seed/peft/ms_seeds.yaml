@@ -1,0 +1,41 @@
+# peft 例程资产的 ModelScope plant spec（由 cache-seed workflow 的
+# scripts/ms_seed.py 执行）。2026-09-17 前这些 plant 活在 peft 的
+# setup_example.sh 里（TO_ENV / TO_PLANT_MODEL / TO_PLANT_DATASET），
+# 现统一迁到 seed workflow；setup 只负责解析 refs/main 得到本地路径。
+#
+# 与旧 setup plant 的对应关系：
+#   TO_ENV:            Qwen2.5-0.5B / roberta-base / bert-base-uncased
+#                      → 现按同名 hf_id plant，setup 从 refs/main 解析路径
+#                      注入 SFT_MODEL_PATH / ROBERTA_BASE_PATH /
+#                      BERT_BASE_UNCASED_PATH（overlay args 消费）
+#   TO_PLANT_MODEL:    mt0-small / dinov2-base / roberta-base（裸 id）
+#   TO_PLANT_DATASET:  glue 只取 mrpc/cola 子树
+version: 1
+seeds:
+  # sft/miss/mica/supertuning 的 overlay --model_name_or_path 等
+  - ms_id: Qwen/Qwen2.5-0.5B
+    hf_id: Qwen/Qwen2.5-0.5B
+    kind: model
+  # adamss ×2 的 overlay 注入 + adamss_manual 硬编码裸 id
+  # from_pretrained('roberta-base')
+  - ms_id: AI-ModelScope/roberta-base
+    hf_id: roberta-base
+    kind: model
+  # sequence_classification 的 overlay 注入
+  - ms_id: AI-ModelScope/bert-base-uncased
+    hf_id: bert-base-uncased
+    kind: model
+  # beft_finetuning.py 硬编码 bigscience/mt0-small
+  - ms_id: bigscience/mt0-small
+    hf_id: bigscience/mt0-small
+    kind: model
+  # pvera/...py 硬编码 facebook/dinov2-base
+  - ms_id: facebook/dinov2-base
+    hf_id: facebook/dinov2-base
+    kind: model
+  # adamss/no_lora 用 glue mrpc，adamss_manual 默认 cola（只取这两个
+  # 子树，避免 140MB 全量 9 configs）
+  - ms_id: nyu-mll/glue
+    hf_id: nyu-mll/glue
+    kind: dataset
+    allow_patterns: ["mrpc/*", "cola/*"]
