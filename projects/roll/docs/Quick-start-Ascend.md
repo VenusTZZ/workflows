@@ -116,6 +116,7 @@ cd ROLL
 grep -v '^gem-llm' requirements_common.txt > requirements_npu.txt
 pip install -r requirements_npu.txt
 pip install --ignore-requires-python gem-llm==0.0.4
+pip install "numpy==1.26.4"
 pip install "transformers==4.57.6" "tensorboard==2.20.0" "antlr4-python3-runtime==4.9.3"
 pip install -e .
 rm requirements_npu.txt
