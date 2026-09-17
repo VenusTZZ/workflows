@@ -51,8 +51,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Idempotent copies; the scheduler spreads them over the pool.
-        slot: [1, 2, 3, 4]
+        # ONE slot: the pool shares a single persistent cache volume, so
+        # one seeding pass covers every runner (the 4-slot fan-out from
+        # the per-machine era only stacked queue pressure — see run
+        # 35197422474 waiting 13+ min for runners). Bump back up if the
+        # pool ever switches to per-machine caches.
+        slot: [1]
     container:
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     env:
