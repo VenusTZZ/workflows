@@ -46,8 +46,15 @@ class DeepSpeedExamplesContractTests(unittest.TestCase):
         moe = self.by_path["training/cifar/run_ds_moe.sh"]
         self.assertEqual(moe["runner"], "linux-aarch64-a2-2")
         self.assertEqual(moe["profile"], "ds_cifar")
-        self.assertIn("--num_gpus 2", self.run_script)
-        self.assertIn("--ep-world-size 2", self.run_script)
+        moe_launcher = self.run_script.split("run_cifar_moe()", 1)[1].split(
+            "run_autotp_equivalence()", 1
+        )[0]
+        self.assertIn("TORCH_COMPILE_DISABLE=1", moe_launcher)
+        self.assertIn("--num_gpus 2", moe_launcher)
+        self.assertIn("--ep-world-size 2", moe_launcher)
+        self.assertIn("--num-experts 2", moe_launcher)
+        self.assertEqual(self.run_script.count("TORCH_COMPILE_DISABLE=1"), 1)
+        self.assertNotIn("export TORCH_COMPILE_DISABLE=1", self.run_script)
 
         autotp = self.by_path["training/autotp_equivalence"]
         self.assertEqual(autotp["runner"], "linux-aarch64-a2-4")

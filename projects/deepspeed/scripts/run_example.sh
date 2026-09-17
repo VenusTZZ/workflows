@@ -126,7 +126,10 @@ run_cifar_moe() {
   local devices
   devices="$(first_visible_devices 2)"
   echo "reproducing upstream run_ds_moe.sh on devices $devices"
-  ASCEND_RT_VISIBLE_DEVICES="$devices" deepspeed \
+  echo "disabling optional torch.compile for DeepSpeed MoE helpers; eager MoE/EP execution is preserved"
+  TORCH_COMPILE_DISABLE=1 \
+  ASCEND_RT_VISIBLE_DEVICES="$devices" \
+  deepspeed \
     --master_port "$(master_port_for 2)" \
     --num_nodes 1 \
     --num_gpus 2 \

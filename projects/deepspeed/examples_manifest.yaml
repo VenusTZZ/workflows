@@ -163,6 +163,10 @@ supported:
   # Two-card expert-parallel CIFAR10. The upstream run_ds_moe.sh fixes the
   # launcher recipe but has no $@ passthrough, so run_example.sh reproduces it
   # and appends these CI-size overrides without editing the example checkout.
+  # DeepSpeed 0.19.7 wraps MoE helpers with optional torch.compile, while the
+  # current NPU image has no validated Triton-Ascend backend. The project runner
+  # disables that optional compiler only for this command and retains eager
+  # two-rank HCCL execution with EP=2.
   - path: training/cifar/run_ds_moe.sh
     profile: ds_cifar
     runner: linux-aarch64-a2-2
