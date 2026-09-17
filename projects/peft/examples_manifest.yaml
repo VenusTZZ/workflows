@@ -226,89 +226,9 @@ supported:
 #  （如硬编码 fp16=True、pin_memory=True、network 依赖）；
 # 已迁移：corda / glora / hira / olora / waveft → supported，详见 entry 备注） =====
 unsupported:
-  # bnb 4bit nf4 必经（:69-78 无条件，baseline 同路径）：无 NPU 后端，换模型救不了；
-  # 脚本未设 attn_implementation，"FA 内核问题"不适用；Mixtral bf16 ~94GB 超 2×32G
-  # 仅为次要（4/8 卡可容，bnb 先崩）
-  - examples/KappaTune/experiments_kappatune_peft.py
-  # vit-base + StanfordCars：训练 63%+ 无错误但全量 ~84 分钟超 CI 预算，候选；
-  # --max_train_samples/--num_epochs 可压训练，但 :443 全量 test eval 无截断参数
-  - examples/adamss_finetuning/image_classification_adamss_asa.py
-  # Mistral-7B：家族推断（默认 sdpa 在 NPU dispatch 到 FA 内核，dora 实测 aclnn
-  # 207001）；fp32 加载 7B≈28G 单卡紧张但能载入；换模型需同步改 --invocation_string
-  # （默认 [/INST] 是 Mistral 模板）
-  - examples/alora_finetuning/alora_finetuning.py
-  # bnb 4bit nf4 硬编码（:304-317 对 base/arrow/gks 所有策略无条件构造
-  # BitsAndBytesConfig）：主因不是"未验证"，删量化才可跑（须改源码）；
-  # device_map=auto 在 accelerate-NPU 机制本身可用
-  - examples/arrow_multitask/arrow_phi3_mini.py
-  # HTTP 客户端，需先部署 BDLoRA 路由服务（:38 硬编码 localhost:8000，
-  # 由 vllm_server.bash 起 vLLM + 先跑 notebook 产 adapter）
-  - examples/bdlora_finetuning/chat.py
-  # 依赖上游训练产物（eval.sh:13-16 要 checkpoint-50000 + controlnet/unet 权重，
-  # pred 图由 test_controlnet.py 生成）；:36-40 cuda:0 有 CPU 回退，非硬编码
-  - examples/boft_controlnet/eval.py
-  # 同上（依赖 checkpoint-50000 训练产物）
-  - examples/boft_controlnet/eval.sh
-  # SD-2.1 全量 50k 步超 CI 预算；:340 无条件用 wandb_init（仅 report_to=="wandb"
-  # 时定义）→ 关 wandb 即 NameError；bnb/xformers 在 .py 均为可选 flag 默认关
-  # ——原"bnb/xformers 无 NPU 后端"仅对 .sh 成立（见下条）
-  - examples/boft_controlnet/train_controlnet.py
-  # .sh:36 显式 --enable_xformers_memory_efficient_attention（无 NPU 后端）+
-  # 50k 步全量训练；bnb（use_8bit_adam）未启用
-  - examples/boft_controlnet/train_controlnet.sh
-  # SD dreambooth：bnb(use_8bit_adam) 可选 flag 默认关、.py 无 xformers——原 bnb
-  # 理由不成立；真因 SD-2.1 全量训练时长 + prior preservation 需现场生成 200 张类图
-  - examples/boft_dreambooth/train_dreambooth.py
-  # 同上 + .sh 显式启用 xformers（无 NPU 后端）；1010 步 + 200 类图仍超预算
-  - examples/boft_dreambooth/train_dreambooth.sh
-  # 多阶段研究管线（synthesize 产 distill.jsonl → train 消费）：非单一 example
-  - examples/cartridge_self_study/arxiv_synthesize.py
-  # 同上（arxiv 包装器）
-  - examples/cartridge_self_study/arxiv_train.py
-  # 同上（stage 1：--use_vllm 可选，不用时走 HF generate）
-  - examples/cartridge_self_study/synthesize.py
-  # 同上（stage 2：--device choices=[cpu,mps,cuda,xpu] 无 npu，NPU 上只能
-  # --device cpu）
-  - examples/cartridge_self_study/train_distill.py
-  # bloomz-7b1（main() 局部变量，换模型须改源码）+ deepspeed ZeRO-3：随附 config
-  # 实为无 offload、单进程 fp32（文件名 cpu_offload 名不副实）；仅剩
-  # deepspeed-NPU 构建未验证（环境级）
-  - examples/causal_language_modeling/peft_lora_clm_accelerate_ds_zero3_offload.py
-  # epoch 0 + eval 已完成（bart-base），全量未确认，候选；零 argparse（模型/epoch
-  # 均硬编码），压时长须改源码
-  - examples/conditional_generation/peft_adalora_seq2seq.py
-  # 默认模型已是 bart-large（:107，T0_3B 已注释）——原"T0_3B"过时；deepspeed
-  # ZeRO-3 无 offload + 1 进程，仅剩 deepspeed-NPU 构建未验证，翻案候选
-  - examples/conditional_generation/peft_lora_seq2seq_accelerate_ds_zero3_offload.py
-  # t5-base（0.22B）+ FSDP1：脚本零 CUDA 假设、torch_npu 2.9 对 FSDP1 有适配；
-  # unsupported 仅因未在 NPU 验证（FSDP config 需自备，仓库未随附）——多卡翻案
-  # 最易候选
-  - examples/conditional_generation/peft_lora_seq2seq_accelerate_fsdp.py
-  # SD dreambooth：bnb 可选 flag 默认关——原 bnb 理由不成立；真因全量训练时长 +
-  # 200 类图生成
-  - examples/deft_dreambooth/train_dreambooth.py
-  # llama-7b：dtype 自动 bf16（is_bf16_supported）7B≈14G——原"单卡 32G"不成立；
-  # 阻塞为家族推断：默认 sdpa 在 NPU dispatch 到 FA 内核（dora 实测 aclnn 207001）
-  - examples/deft_finetuning/deft_finetuning.py
-  # 同 deft（bf16 加载，家族 FA 推断；脚本未硬编码 flash_attention_2）
-  - examples/delora_finetuning/delora_finetuning.py
-  # Llama-3.1-8B bf16≈16G 单卡 32G 可容——原"HBM 溢出"不必然；device_map 传单
-  # 设备名不切分多卡；前向走默认 sdpa → FA 内核问题（同 dora 实测）仍适用
-  - examples/dora_finetuning/dora-caching.py
-  # 家族代表实测：载入 OK（Using device: npu），首步前向 aclnnFlashAttentionScore
-  # 207001（CANN 9.1）；注：脚本未硬编码 flash_attention_2，是 transformers 默认
-  # sdpa 在 torch_npu dispatch 到 FA 内核（环境级，7B/8B llama 系普遍适用）
-  - examples/dora_finetuning/dora_finetuning.py
-  # peft 源码级硬编码：tuners/lora/variants.py:157 把 lora_B .to("cuda")（仅
-  # cuda/xpu 分支，无 npu）——非"未验证"，须 patch peft 或 transfer_to_npu；
-  # 不带 flag 则模型本就 device_map={"": "cpu"}，纯 CPU 跑测不到特性
-  - examples/ephemeral_gpu_offloading/load_with_dora.py
-  # :27 硬编码 Llama-3.1-8B + 全脚本零 CLI 参数（无注入点）+ fp32 加载 8B≈32GB
-  # → :72 .to(DEVICE) 处必 OOM（FA 前向到不了）；修复须改源码
-  - examples/eva_finetuning/eva_finetuning.py
-  # 分布式后端仅 nccl(cuda)/xccl(xpu)（:48-60），NPU 落 else 分支 local_rank=-1
-  # → :94-95 .to(-1) + DDP(device_ids=[-1]) 必崩；另叠加 7B + MetaMathQA 全量
-  - examples/eva_finetuning/eva_finetuning_multi_accelerator.py
+  # ===== A. 翻案前置 patch（NPU 实测可通，缺 1-2 行源码改） =====
+  # 注释已写明缺什么 patch；不继续验证。
+
   # 训练循环 NPU 实跑通（coder npu-3 2026-09-17，MiniLM-L6-v2 + --sanity_test
   # + 5 步，3.57 it/s exit 0，adapter 落盘）。**翻案前置 2 处源码 patch**：
   # (a) :311/:319 DataLoader pin_memory=True → False（accelerator.prepare 在 NPU
@@ -318,14 +238,7 @@ unsupported:
   #     (b3) pre-cache evaluate-metric--roc_auc 到 HF hub cache
   # 待 (a)(b) 都改后才能进 supported
   - examples/feature_extraction/peft_lora_embedding_semantic_search.py
-  # bitsandbytes NF4 硬编码（:50-56 无开关，无 NPU 后端）
-  - examples/fp4_finetuning/finetune_fp4_opt_bnb_peft.py
-  # NPU 阻塞在 peft frod/layer.py：每次 forward :259 构造 sparse COO + coalesce，
-  # fp32 默认路径 :269 torch.sparse.mm；--bf16/--fp16 true 走 :265-268 dense mm
-  # 分支可绕过 mm（coalesce 仍在，须实测）
-  - examples/frod_finetuning/frod_image_classification.py
-  # 同上（同一 layer 实现）；原"aten::addmm 无 NPU 后端"归因为运行时推测
-  - examples/frod_finetuning/frod_text_classification.py
+
   # 复跑取证完成（2026-09-17）：归因**确认**是脚本 :96 硬编码 fp16=True 与
   # torch_npu amp.GradScaler 不兼容——traceback 显示
   #   accelerate/optimizer.py:173 → torch_npu/npu/amp/grad_scaler.py:380
@@ -338,44 +251,31 @@ unsupported:
   # 挑剔：--data_path 必须是含 train.jsonl + test.jsonl 的**目录**
   # （:117 直接 tokenized_datasets["test"]，单 split 会 KeyError 'test'）
   - examples/gralora_finetuning/gralora_finetuning.py
-  # SD dreambooth：bnb 可选 flag 默认关——原 bnb 理由不成立；真因时长 + 200 类图
-  - examples/hra_dreambooth/train_dreambooth.py
-  # 同上 + .sh 显式启用 xformers（无 NPU 后端）；510 步 + 类图生成仍超预算
-  - examples/hra_dreambooth/train_dreambooth.sh
-  # bnb int8 硬编码（:32 load_in_8bit 无开关；另 :85 硬编码 50 epoch、无 argparse）
-  - examples/int8_training/fine_tune_blip2_int8.py
-  # bnb int8 硬编码（:538；:542-543 显式拒绝 cpu/disk device_map）+ whisper-large-v2
-  - examples/int8_training/peft_adalora_whisper_large_training.py
-  # 同上（包装脚本；accelerate config 为 Intel MULTI_XPU，requirements 直装 bnb
-  # git 主干）
-  - examples/int8_training/run_adalora_whisper_int8.sh
-  # coder 实测 backward acl ERR00100；源码层 KaSA 无 CUDA/sparse 私有 API（SVD
-  # 截断在 init detach 后、forward 仅 linear+广播乘，variants.py:1567-1594）——
-  # 归因待复跑取证（疑 bf16 nll 反向或环境问题）
-  - examples/kasa_finetuning/kasa_finetuning.py
+
   # 同 gralora fp16 链路 bug——脚本 :100 硬编码 fp16=True。NPU 实跑通：注释掉
   # fp16=True + Qwen2.5-0.5B + --device npu:0 + train/test split，1 epoch 12.85s
   # exit 0，train_loss 2.65，trainable 4.84M。**翻案前置 1 处源码 patch**：
   # :100 `fp16=True,` 改 `fp16=False,`
   - examples/lily_finetuning/lily_finetuning.py
-  # bnb 最硬路径：:55 顶层 import + :127-136 直调 int8_vectorwise_quant/dequant
-  # kernel + :170-173 load_in_8bit 硬编码 + :162 默认 --device cuda
-  - examples/loftq_finetuning/int8_correction.py
-  # LoftQ 经 peft 运行时硬依赖 bnb（loftq_utils.py:54-57 无 bnb 直接 raise，
-  # :78-84 调 bnb kernel；coder 实测确认属实）
-  - examples/loftq_finetuning/quantize_save_load.py
-  # bnb NF4 硬编码（:453-458）——原"send_example_telemetry 已移除"过时：
-  # transformers.utils 4.56 仍导出（实测可 import）
-  - examples/loftq_finetuning/train_gsm8k_llama.py
-  # CPU 格式转换工具，无需 NPU 看护
-  - examples/lora_dreambooth/convert_kohya_ss_sd_lora_to_peft.py
-  # CPU 格式转换工具
-  - examples/lora_dreambooth/convert_peft_sd_lora_to_kohya_ss.py
-  # SD dreambooth：bnb 可选 flag 默认关——原 bnb 理由不成立；真因时长 + 200 类图
-  - examples/lora_dreambooth/train_dreambooth.py
-  # NVIDIA TransformerEngine（经 trust_remote_code 的 TE 模型 remote code 引入，
-  # 仅 CUDA；:16 CUDA_VISIBLE_DEVICES，README 要求 nvcr.io 容器）
-  - examples/lora_finetuning_transformer_engine/lora_finetuning_te.py
+
+  # 同 gralora fp16 链路 bug——脚本 :102 硬编码 fp16=True。NPU 实跑通：注释掉
+  # fp16=True + Qwen2.5-0.5B + --device npu:0 + train/test split，1 epoch 11.17s
+  # exit 0，train_loss 2.65，trainable 19.46M。**翻案前置 1 处源码 patch**：
+  # :102 `fp16=True,` 改 `fp16=False,`。注意：glora/hira/olora/waveft 用
+  # transformers Trainer 默认无 fp16，**不**踩此坑，理论上 0 patch 即可翻案
+  - examples/peanut_finetuning/peanut_finetuning.py
+
+  # NPU 实测**死在 evaluate.load("glue", "mrpc")**（:33，import 时同步触发）：
+  # HF_HUB_OFFLINE=1 下 evaluate.builder.get_dataset_config_name_async 在 coder
+  # 上无网络直接 SIGKILL；HF_HUB_OFFLINE=0 走网络又不通；离线缓存的 metric
+  # modules/evaluate_modules/metrics/evaluate-metric--glue/* 实际只 import 不重
+  # 现 evaluate 路径，hang 出现在 builder 拿 inference config 阶段。训练循环本
+  # 身可通（roberta-base + glue/mrpc cache 已在 coder + infer_device 含 npu）。
+  # **翻案前置 1 处源码 patch**：:33 删 `metric = evaluate.load("glue", "mrpc")`
+  # （或 stub 成 always-0 哑 metric，并在 :compute_metric 处短路返回）；
+  # 训练流程不依赖 metric 真值，只在 epoch 末尾打 accuracy，可直接砍
+  - examples/monteclora_finetuning/sequence_classification_finetune_monteclora.py
+
   # 训练循环 NPU 实测**挂在梯度估计阶段**：脚本 :178
   #   `device = torch.device("cuda" if torch.cuda.is_available() else "cpu")`
   # torch.cuda 在 NPU 上 False → 落 CPU；estimate_gradients 内部 forward+backward
@@ -387,80 +287,274 @@ unsupported:
   # + :176 同行把 `model = model.to(device)` 即可在 NPU 上跑梯度估计
   # 全量时长另需 --grad_estimate_iters 4-16 评估
   - examples/lora_ga_finetuning/lora_ga_finetuning.py
-  # :52-60 设备分支 cuda/xpu/else→cpu，无 npu → device_map="cpu" 先落主机内存
-  # （原"8B HBM 溢出"不成立：fp16/bf16 8B≈16G）；README 提供 accelerate launch 用法
-  - examples/lorafa_finetune/lorafa_finetuning.py
-  # NPU 实测**死在 evaluate.load("glue", "mrpc")**（:33，import 时同步触发）：
-  # HF_HUB_OFFLINE=1 下 evaluate.builder.get_dataset_config_name_async 在 coder
-  # 上无网络直接 SIGKILL；HF_HUB_OFFLINE=0 走网络又不通；离线缓存的 metric
-  # modules/evaluate_modules/metrics/evaluate-metric--glue/* 实际只 import 不重
-  # 现 evaluate 路径，hang 出现在 builder 拿 inference config 阶段。训练循环本
-  # 身可通（roberta-base + glue/mrpc cache 已在 coder + infer_device 含 npu）。
-  # **翻案前置 1 处源码 patch**：:33 删 `metric = evaluate.load("glue", "mrpc")`
-  # （或 stub 成 always-0 哑 metric，并在 :compute_metric 处短路返回）；
-  # 训练流程不依赖 metric 真值，只在 epoch 末尾打 accuracy，可直接砍
-  - examples/monteclora_finetuning/sequence_classification_finetune_monteclora.py
-  # SD dreambooth：bnb 可选 flag 默认关——原 bnb 理由不成立；真因时长 + 200 类图
-  - examples/oft_dreambooth/train_dreambooth.py
+
+  # ===== B. 翻案候选（无后端硬编码，换模型/数据/多卡 runner 即可） =====
+  # 不在 simple 翻案范围；B 组内按换模型难度低 → 多卡 runner 排序。
+
+  # t5-base（0.22B）+ FSDP1：脚本零 CUDA 假设、torch_npu 2.9 对 FSDP1 有适配；
+  # unsupported 仅因未在 NPU 验证（FSDP config 需自备，仓库未随附）——多卡翻案
+  # 最易候选
+  - examples/conditional_generation/peft_lora_seq2seq_accelerate_fsdp.py
+
+  # vit-base + StanfordCars：训练 63%+ 无错误但全量 ~84 分钟超 CI 预算，候选；
+  # --max_train_samples/--num_epochs 可压训练，但 :443 全量 test eval 无截断参数
+  - examples/adamss_finetuning/image_classification_adamss_asa.py
+
+  # bloomz-7b1（main() 局部变量，换模型须改源码）+ deepspeed ZeRO-3：随附 config
+  # 实为无 offload、单进程 fp32（文件名 cpu_offload 名不副实）；仅剩
+  # deepspeed-NPU 构建未验证（环境级）
+  - examples/causal_language_modeling/peft_lora_clm_accelerate_ds_zero3_offload.py
+
+  # 默认模型已是 bart-large（:107，T0_3B 已注释）——原"T0_3B"过时；deepspeed
+  # ZeRO-3 无 offload + 1 进程，仅剩 deepspeed-NPU 构建未验证，翻案候选
+  - examples/conditional_generation/peft_lora_seq2seq_accelerate_ds_zero3_offload.py
+
+  # epoch 0 + eval 已完成（bart-base），全量未确认，候选；零 argparse（模型/epoch
+  # 均硬编码），压时长须改源码
+  - examples/conditional_generation/peft_adalora_seq2seq.py
+
   # 原"单卡 32G / 同 eva"不成立：bf16 + device_map="auto"（:239,:462）多卡自动
   # 切分 + --model_name 可换小模型（README 有 gpt2 示例）；仅剩家族 FA 推断，
   # 翻案候选
   - examples/orthogonal_subspace_learning/osf_continual_learning.py
-  # 同 gralora fp16 链路 bug——脚本 :102 硬编码 fp16=True。NPU 实跑通：注释掉
-  # fp16=True + Qwen2.5-0.5B + --device npu:0 + train/test split，1 epoch 11.17s
-  # exit 0，train_loss 2.65，trainable 19.46M。**翻案前置 1 处源码 patch**：
-  # :102 `fp16=True,` 改 `fp16=False,`。注意：glora/hira/olora/waveft 用
-  # transformers Trainer 默认无 fp16，**不**踩此坑，理论上 0 patch 即可翻案
-  - examples/peanut_finetuning/peanut_finetuning.py
+
   # 原"单卡 32G"不成立：device_map="auto"（:83,:102）多卡切分、模型本就必须 CLI
   # 传入；阻塞为家族 FA 推断（默认 sdpa dispatch）；--bits 默认 fp32，翻案候选
   - examples/pissa_finetuning/pissa_finetuning.py
-  # 版本敏感：trl 1.10 可跑（exit 0）、1.12 backward 崩，与 mica/miss 配方冲突
-  # （脚本自身无 NPU 特有路径，断裂点在 trl 内部，待复跑取证）
-  - examples/psoft_finetuning/psoft_finetuning.py
-  # GPTQ 现场量化必经（:86-98，无关闭开关；exllama/marlin 仅 CUDA，torch 内核慢）
-  - examples/qalora_finetuning/qalora_gptq_finetuning.py
+
+  # ===== C. 阻塞（架构/bnb/xformers/7B+FA/SD 时长/trl 版本） =====
+
+  # ---- C-bnb：BitsAndBytesConfig 硬编码（load_in_4bit/int8/nf4），无 NPU 后端 ----
+
+  # bnb 4bit nf4 必经（:69-78 无条件，baseline 同路径）：无 NPU 后端，换模型救不了；
+  # 脚本未设 attn_implementation，"FA 内核问题"不适用；Mixtral bf16 ~94GB 超 2×32G
+  # 仅为次要（4/8 卡可容，bnb 先崩）
+  - examples/KappaTune/experiments_kappatune_peft.py
+
+  # bnb 4bit nf4 硬编码（:304-317 对 base/arrow/gks 所有策略无条件构造
+  # BitsAndBytesConfig）：主因不是"未验证"，删量化才可跑（须改源码）；
+  # device_map=auto 在 accelerate-NPU 机制本身可用
+  - examples/arrow_multitask/arrow_phi3_mini.py
+
+  # bitsandbytes NF4 硬编码（:50-56 无开关，无 NPU 后端）
+  - examples/fp4_finetuning/finetune_fp4_opt_bnb_peft.py
+
+  # bnb int8 硬编码（:32 load_in_8bit 无开关；另 :85 硬编码 50 epoch、无 argparse）
+  - examples/int8_training/fine_tune_blip2_int8.py
+
+  # bnb int8 硬编码（:538；:542-543 显式拒绝 cpu/disk device_map）+ whisper-large-v2
+  - examples/int8_training/peft_adalora_whisper_large_training.py
+
+  # 同上（包装脚本；accelerate config 为 Intel MULTI_XPU，requirements 直装 bnb
+  # git 主干）
+  - examples/int8_training/run_adalora_whisper_int8.sh
+
+  # bnb 最硬路径：:55 顶层 import + :127-136 直调 int8_vectorwise_quant/dequant
+  # kernel + :170-173 load_in_8bit 硬编码 + :162 默认 --device cuda
+  - examples/loftq_finetuning/int8_correction.py
+
+  # LoftQ 经 peft 运行时硬依赖 bnb（loftq_utils.py:54-57 无 bnb 直接 raise，
+  # :78-84 调 bnb kernel；coder 实测确认属实）
+  - examples/loftq_finetuning/quantize_save_load.py
+
+  # bnb NF4 硬编码（:453-458）——原"send_example_telemetry 已移除"过时：
+  # transformers.utils 4.56 仍导出（实测可 import）
+  - examples/loftq_finetuning/train_gsm8k_llama.py
+
+
+  # ---- C-SD-dreambooth：50k 步全量 + prior preservation 200 类图生成 ----
+  # SD-2.1 全量 50k 步超 CI 预算；:340 无条件用 wandb_init（仅 report_to=="wandb"
+  # 时定义）→ 关 wandb 即 NameError；bnb/xformers 在 .py 均为可选 flag 默认关
+  # ——原"bnb/xformers 无 NPU 后端"仅对 .sh 成立（见下条）
+  - examples/boft_controlnet/train_controlnet.py
+
+  # .sh:36 显式 --enable_xformers_memory_efficient_attention（无 NPU 后端）+
+  # 50k 步全量训练；bnb（use_8bit_adam）未启用
+  - examples/boft_controlnet/train_controlnet.sh
+
+  # SD dreambooth：bnb(use_8bit_adam) 可选 flag 默认关、.py 无 xformers——原 bnb
+  # 理由不成立；真因 SD-2.1 全量训练时长 + prior preservation 需现场生成 200 张类图
+  - examples/boft_dreambooth/train_dreambooth.py
+
+  # 同上 + .sh 显式启用 xformers（无 NPU 后端）；1010 步 + 200 类图仍超预算
+  - examples/boft_dreambooth/train_dreambooth.sh
+
+  # SD dreambooth：bnb 可选 flag 默认关——原 bnb 理由不成立；真因时长 + 200 类图
+  - examples/hra_dreambooth/train_dreambooth.py
+
+  # 同上 + .sh 显式启用 xformers（无 NPU 后端）；510 步 + 类图生成仍超预算
+  - examples/hra_dreambooth/train_dreambooth.sh
+
+  # SD dreambooth：bnb 可选 flag 默认关——原 bnb 理由不成立；真因时长 + 200 类图
+  - examples/lora_dreambooth/train_dreambooth.py
+
+  # SD dreambooth：bnb 可选 flag 默认关——原 bnb 理由不成立；真因时长 + 200 类图
+  - examples/oft_dreambooth/train_dreambooth.py
+
+  # SD dreambooth：bnb 可选 flag 默认关——原 bnb 理由不成立；真因全量训练时长 +
+  # 200 类图生成
+  - examples/deft_dreambooth/train_dreambooth.py
+
+  # SD dreambooth：bnb 可选 flag 默认关——原 bnb 理由不成立；真因时长 + 200 类图
+  - examples/stable_diffusion/train_dreambooth.py
+
+
+  # ---- C-7B-FA-family：默认 sdpa → FA 内核 aclnn 207001 风险 ----
+  # Mistral-7B：家族推断（默认 sdpa 在 NPU dispatch 到 FA 内核，dora 实测 aclnn
+  # 207001）；fp32 加载 7B≈28G 单卡紧张但能载入；换模型需同步改 --invocation_string
+  # （默认 [/INST] 是 Mistral 模板）
+  - examples/alora_finetuning/alora_finetuning.py
+
+  # llama-7b：dtype 自动 bf16（is_bf16_supported）7B≈14G——原"单卡 32G"不成立；
+  # 阻塞为家族推断：默认 sdpa 在 NPU dispatch 到 FA 内核（dora 实测 aclnn 207001）
+  - examples/deft_finetuning/deft_finetuning.py
+
+  # 同 deft（bf16 加载，家族 FA 推断；脚本未硬编码 flash_attention_2）
+  - examples/delora_finetuning/delora_finetuning.py
+
+  # Llama-3.1-8B bf16≈16G 单卡 32G 可容——原"HBM 溢出"不必然；device_map 传单
+  # 设备名不切分多卡；前向走默认 sdpa → FA 内核问题（同 dora 实测）仍适用
+  - examples/dora_finetuning/dora-caching.py
+
+  # 家族代表实测：载入 OK（Using device: npu），首步前向 aclnnFlashAttentionScore
+  # 207001（CANN 9.1）；注：脚本未硬编码 flash_attention_2，是 transformers 默认
+  # sdpa 在 torch_npu dispatch 到 FA 内核（环境级，7B/8B llama 系普遍适用）
+  - examples/dora_finetuning/dora_finetuning.py
+
   # llama-7b：bf16/fp16 加载 7B≈14G——原"单卡 32G"不成立；阻塞为家族 FA 推断
   - examples/randlora_finetuning/randlora_finetuning.py
+
   # :171 --device 默认 "cuda:0" 硬编码（NPU 须显式 --device npu:0；:90 .to(device)
   # 会把 device_map 切分拉回单设备）；fp32 加载 7B≈28G 紧张；另家族 FA 推断
   - examples/road_finetuning/road_finetuning.py
+
+
+  # ---- C-多卡脚本：num_processes 写死 + 70B/8B 模型容量 ----
   # Llama-2-70b（bf16≈140GB）：ZeRO-3 无 offload、config num_processes 写死 8
   # （2/4 卡须覆盖）；flash-attn 为可选开关（--use_flash_attn False 可关）——
   # 换小模型 + 覆盖进程数可跑 peft 侧路径
   - examples/sft/run_peft_deepspeed.sh
+
   # Llama-2-70b：FSDP1 FULL_SHARD（config 写死 8 进程）；torch_npu 2.9 对 FSDP1
   # 有适配，换小模型 + 覆盖进程数即可跑
   - examples/sft/run_peft_fsdp.sh
+
   # GPTQ INT4 预量化模型（8B 非 70B，容量无忧）：GPTQ 内核 exllama/marlin 仅 CUDA
   - examples/sft/run_peft_fsdp_gptq.sh
+
   # 主阻塞 bnb 4bit（:38-39 use_4bit_quantization True 默认开，overlay 可翻转）；
   # 另 --use_flash_attn True 需关、torchrun nproc 写死 8 需覆盖——全关后退化为
   # 普通 LoRA DDP，NPU 可行
   - examples/sft/run_peft_multigpu.sh
+
   # bnb qlora（use_4bit_quantization True，主阻塞）；70B-4bit≈35-40GB、ZeRO-3 分
   # 2 卡容量本可容——容量是次要项，bnb 先崩
   - examples/sft/run_peft_qlora_deepspeed_stage3.sh
+
   # 同上（FSDP offload 变体，config 写死 2 进程；bnb 是主阻塞）
   - examples/sft/run_peft_qlora_fsdp.sh
-  # unsloth 硬依赖（仅 CUDA；utils.py:87-88 惰性 import，:98 禁分布式单进程）
-  - examples/sft/run_unsloth_peft.sh
-  # :59 device = "cuda" if torch.cuda.is_available() else "cpu"——NPU 上落 CPU、
-  # 单设备硬编码多卡无效（属实）；但实测 SIGKILL 是主机 RAM OOM（fp32 8B≈32GB）
-  # 而非"HBM"；默认模型 Qwen3-8B（非 llama 系）
-  - examples/shadow_finetuning/shadow_finetuning.py
+
+
+  # ---- C-架构级硬阻塞（peft 源码 / 数据路径 / 设备分支） ----
+  # peft 源码级硬编码：tuners/lora/variants.py:157 把 lora_B .to("cuda")（仅
+  # cuda/xpu 分支，无 npu）——非"未验证"，须 patch peft 或 transfer_to_npu；
+  # 不带 flag 则模型本就 device_map={"": "cpu"}，纯 CPU 跑测不到特性
+  - examples/ephemeral_gpu_offloading/load_with_dora.py
+
+  # NPU 阻塞在 peft frod/layer.py：每次 forward :259 构造 sparse COO + coalesce，
+  # fp32 默认路径 :269 torch.sparse.mm；--bf16/--fp16 true 走 :265-268 dense mm
+  # 分支可绕过 mm（coalesce 仍在，须实测）
+  - examples/frod_finetuning/frod_image_classification.py
+
+  # 同上（同一 layer 实现）；原"aten::addmm 无 NPU 后端"归因为运行时推测
+  - examples/frod_finetuning/frod_text_classification.py
+
   # NPU 硬阻塞：shira/layer.py:222-226 每次 forward 构造 sparse COO，:245/:255
   # dense += sparse 混合布局加法——无 dtype 绕过分支（比 frod 更硬）
   - examples/shira_finetuning/shira_finetuning.py
-  # CPU 格式转换工具
-  - examples/stable_diffusion/convert_sd_adapter_to_peft.py
-  # Intel Gaudi HPU（neural-compressor + optimum-habana；:32-35 无 HPU 直接 raise）
-  - examples/stable_diffusion/inc_flux_lora_hpu.py
-  # SD dreambooth：bnb 可选 flag 默认关——原 bnb 理由不成立；真因时长 + 200 类图
-  - examples/stable_diffusion/train_dreambooth.py
+
+  # coder 实测 backward acl ERR00100；源码层 KaSA 无 CUDA/sparse 私有 API（SVD
+  # 截断在 init detach 后、forward 仅 linear+广播乘，variants.py:1567-1594）——
+  # 归因待复跑取证（疑 bf16 nll 反向或环境问题）
+  - examples/kasa_finetuning/kasa_finetuning.py
+
   # coder 实测 backward 崩；源码无 nll 特有路径（nll 为 SFT 共有 loss，trl patch
   # 不在本仓）——UniLoRA 特有的是共享 theta_d 高级索引 backward（unilora/layer.py:
   # 216-217），归因待复跑取证
   - examples/unilora_finetuning/unilora_finetuning.py
+
+  # 版本敏感：trl 1.10 可跑（exit 0）、1.12 backward 崩，与 mica/miss 配方冲突
+  # （脚本自身无 NPU 特有路径，断裂点在 trl 内部，待复跑取证）
+  - examples/psoft_finetuning/psoft_finetuning.py
+
+  # GPTQ 现场量化必经（:86-98，无关闭开关；exllama/marlin 仅 CUDA，torch 内核慢）
+  - examples/qalora_finetuning/qalora_gptq_finetuning.py
+
+  # :27 硬编码 Llama-3.1-8B + 全脚本零 CLI 参数（无注入点）+ fp32 加载 8B≈32GB
+  # → :72 .to(DEVICE) 处必 OOM（FA 前向到不了）；修复须改源码
+  - examples/eva_finetuning/eva_finetuning.py
+
+  # 分布式后端仅 nccl(cuda)/xccl(xpu)（:48-60），NPU 落 else 分支 local_rank=-1
+  # → :94-95 .to(-1) + DDP(device_ids=[-1]) 必崩；另叠加 7B + MetaMathQA 全量
+  - examples/eva_finetuning/eva_finetuning_multi_accelerator.py
+
+  # :52-60 设备分支 cuda/xpu/else→cpu，无 npu → device_map="cpu" 先落主机内存
+  # （原"8B HBM 溢出"不成立：fp16/bf16 8B≈16G）；README 提供 accelerate launch 用法
+  - examples/lorafa_finetune/lorafa_finetuning.py
+
+  # :59 device = "cuda" if torch.cuda.is_available() else "cpu"——NPU 上落 CPU、
+  # 单设备硬编码多卡无效（属实）；但实测 SIGKILL 是主机 RAM OOM（fp32 8B≈32GB）
+  # 而非"HBM"；默认模型 Qwen3-8B（非 llama 系）
+  - examples/shadow_finetuning/shadow_finetuning.py
+
+
+  # ---- C-产物/服务依赖（外部 checkpoint + HTTP 服务） ----
+  # HTTP 客户端，需先部署 BDLoRA 路由服务（:38 硬编码 localhost:8000，
+  # 由 vllm_server.bash 起 vLLM + 先跑 notebook 产 adapter）
+  - examples/bdlora_finetuning/chat.py
+
+  # 依赖上游训练产物（eval.sh:13-16 要 checkpoint-50000 + controlnet/unet 权重，
+  # pred 图由 test_controlnet.py 生成）；:36-40 cuda:0 有 CPU 回退，非硬编码
+  - examples/boft_controlnet/eval.py
+
+  # 同上（依赖 checkpoint-50000 训练产物）
+  - examples/boft_controlnet/eval.sh
+
+  # ===== D. CPU-only / 非 NPU（CPU 转换工具 / HPU/TE 容器锁死 / 骨架占位） =====
+  # 明确不涉及 NPU 看护。
+
+  # CPU 格式转换工具，无需 NPU 看护
+  - examples/lora_dreambooth/convert_kohya_ss_sd_lora_to_peft.py
+
+  # CPU 格式转换工具
+  - examples/lora_dreambooth/convert_peft_sd_lora_to_kohya_ss.py
+
+  # CPU 格式转换工具
+  - examples/stable_diffusion/convert_sd_adapter_to_peft.py
+
+  # Intel Gaudi HPU（neural-compressor + optimum-habana；:32-35 无 HPU 直接 raise）
+  - examples/stable_diffusion/inc_flux_lora_hpu.py
+
+  # NVIDIA TransformerEngine（经 trust_remote_code 的 TE 模型 remote code 引入，
+  # 仅 CUDA；:16 CUDA_VISIBLE_DEVICES，README 要求 nvcr.io 容器）
+  - examples/lora_finetuning_transformer_engine/lora_finetuning_te.py
+
+  # unsloth 硬依赖（仅 CUDA；utils.py:87-88 惰性 import，:98 禁分布式单进程）
+  - examples/sft/run_unsloth_peft.sh
+
   # mistral.rs 推理引擎（Rust/CUDA；:7-10 为 Ellipsis 占位骨架，本就不可直跑）
   - examples/xlora/xlora_inference_mistralrs.py
+
+  # 多阶段研究管线（synthesize 产 distill.jsonl → train 消费）：非单一 example
+  - examples/cartridge_self_study/arxiv_synthesize.py
+
+  # 同上（arxiv 包装器）
+  - examples/cartridge_self_study/arxiv_train.py
+
+  # 同上（stage 1：--use_vllm 可选，不用时走 HF generate）
+  - examples/cartridge_self_study/synthesize.py
+
+  # 同上（stage 2：--device choices=[cpu,mps,cuda,xpu] 无 npu，NPU 上只能
+  # --device cpu）
+  - examples/cartridge_self_study/train_distill.py
+
