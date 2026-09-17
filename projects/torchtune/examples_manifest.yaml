@@ -148,16 +148,23 @@ supported:
     timeout_minutes: 15
 
   # 评测：Qwen2.5-0.5B + lm_eval + 自定义 ci_truthfulqa_mc2 任务（本地 JSON 驱动）
-  # eleuther_eval recipe 在 __init__ 强检 lm-eval >= 0.4.5，setup_example.sh
-  # 装 `lm-eval>=0.4.5,<0.5`（recipe import 链只用到 lm_eval.tasks /
+  # eleuther_eval recipe 在 __init__ 强检 `version("lm-eval") < "0.4.5"`
+  # （**字符串比较**，不是 packaging.version——0.4.10-0.4.49 都被误拒；
+  # 详见 setup_example.sh 注释 + 端到端跑通日期 2026-09-17），setup 装
+  # `lm-eval==0.4.5`（recipe import 链只用到 lm_eval.tasks /
   # lm_eval.evaluator / lm_eval.models.huggingface / lm_eval.utils 这四块，
   # 0.4.5 已稳定）。任务数据走 fixtures/ci_truthfulqa_2.json（2 行手工写的
   # TruthfulQA mc2 格式），通过 `include_path` 指向 fixtures/eleuther_tasks/，
   # lm_eval 的 TaskManager 把 `ci_truthfulqa_mc2` 注册为覆盖 built-in
-  # truthfulqa_mc2 的本地任务，绕开 HF datasets 拉取 truthfull_qa。`acc`
+  # truthfulqa_mc2 的本地任务，绕开 HF datasets 拉取 truthfulqa。`acc`
   # 指标而非原版 `mc2`：原版 mc2 是 truthfulqa/utils.py 里的自定义聚合函数，
   # 用 built-in `acc` 避免把 utils.py 也 vendor 进 fixtures。`device=npu`
   # overlay 把 upstream config 的 `device: cuda` 翻成 NPU。
+  # 2026-09-17 在 coder hdc-stable-npu-2 跑通：exit 0，acc=1.0 / 0.92s /
+  # 1.56GB HBM（5×5 loglikelihood 一次性跑完）。fixture YAML 需要 `data_files`
+  # 写相对 cwd 的路径（datasets 4.x resolve_pattern 用 base_path="")，并且
+  # multiple_choice 类型要求 `doc_to_choice` 显式提供，不能只给 doc_to_text /
+  # doc_to_target。
   - path: recipes/eleuther_eval.py
     profile: torchtune
     runner: linux-aarch64-a2-1
@@ -223,9 +230,12 @@ unsupported:
   # eleuther_eval.py:16 `from lm_eval.evaluator import evaluate` → `ModuleNotFoundError:
   # No module named 'lm_eval'`（runner 不预装 lm-eval；即便装上，task dict 默认
   # 走 HF 下载 hellaswag/arc 等，CI 不可控）。2026-09-17 改：setup_example.sh
-  # 装 `lm-eval>=0.4.5,<0.5`，manifest 加 fixtures/eleuther_tasks/ci_truthfulqa_mc2.yaml
-  # + fixtures/ci_truthfulqa_2.json 自定义任务走 include_path，绕开 HF 拉取，
-  # recipe 转 supported（见 supported: 块对应 entry）
+  # 装 `lm-eval==0.4.5`（recipe `version("lm-eval") < "0.4.5"` 是字符串比较
+  # 而不是 packaging.version，0.4.10-0.4.49 全被误拒），manifest 加
+  # fixtures/eleuther_tasks/ci_truthfulqa_mc2.yaml + fixtures/ci_truthfulqa_2.json
+  # 自定义任务走 include_path，绕开 HF 拉取，recipe 转 supported（见
+  # supported: 块对应 entry；2026-09-17 在 coder hdc-stable-npu-2 端到端
+  # 跑通 exit 0，acc=1.0 / 0.92s / 1.56GB HBM）
   # - recipes/eleuther_eval.py
 
   # ===== static-only（被 scan.exclude 排除，独立 launch 不会被发现） =====
