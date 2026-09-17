@@ -2,208 +2,131 @@ version: 1
 scan:
   root: examples
   include_extensions: ['.sh', '.py']
-  # xtuner/examples/ 下 huggingface_trainer/{train_hf,train_lora_hf,train_qlora_hf}.py
-  # 是直接 launchable 的 Python example。examples/demo_data/ 也被本 manifest
-  # 收为 supported 行（4 套：single_turn / multi_turn_1 / multi_turn_2 /
-  # pretrain），但属于"recipe cfg"语义，不是传统 example；收 supported 而
-  # 非 exclude 的理由：零 cfg 改动可端到端跑通（2026-09-15/16/17 coder npu-2
-  # 全 EXIT=0），具体机制见下方 supported 块注释。
-  #
-  # map_fn.py 是每个 demo 的 sibling 模块（定义 dataset_map_fn），
-  # `examples/demo_data/<sub>/config.py` 用 `with read_base(): from .map_fn
-  # import ...` 相对导入它。没有 `if __name__ == '__main__'`，裸
-  # `python map_fn.py` 跑只会触发 module-level docstring/function def 后
-  # 正常退出但什么也不做，不是 example。归 exclude 而非 unsupported：
-  # unsupported 表示"扫描到但 launch 有 blocker"，这里连 launchable 都不算。
-  # data.json / README.md 不是 .py/.sh，被 include_extensions 自然过滤。
   exclude:
-    - examples/demo_data/single_turn/map_fn.py   # sibling of single_turn/config.py
-    - examples/demo_data/multi_turn_1/map_fn.py  # sibling of multi_turn_1/config.py
-    - examples/demo_data/multi_turn_2/map_fn.py  # sibling of multi_turn_2/config.py
-    - examples/demo_data/pretrain/map_fn.py       # sibling of pretrain/config.py
+    - examples/demo_data/single_turn/map_fn.py
+    - examples/demo_data/multi_turn_1/map_fn.py
+    - examples/demo_data/multi_turn_2/map_fn.py
+    - examples/demo_data/pretrain/map_fn.py
 
-# ===== supported（coder npu-2 910B4×2, torch2.11/torch_npu2.11, CANN9.1 实跑 exit 0） =====
+# ===== supported（npu-2 910B4 / torch2.11 / torch_npu2.11 / CANN9.1 实跑 exit 0） =====
 supported:
-  # HF Trainer 路径：build_model 返回 PreTrainedModel，绕过 SupervisedFinetune 的
-  # `build_llm_from_cfg` 入口；Trainer 直接用 plain CausalLM 走 HF 默认 loss。
-  # 2026-09-15 coder npu-2 实跑：1 step / Qwen2.5-0.5B / 8 行 alpaca jsonl / NPU 1.79s/it
-  # loss=1.78 grad_norm=35.3 exit 0；transfer_to_npu shim 自动让 torch.cuda→torch.npu
-  # （xtuner 自身 utils.device.get_device_name() 也走 npu 分支，与 shim 一致）。
+  # HF Trainer 版 SFT：绕开 xtuner 自己的模型封装，直接用 transformers
+  # Trainer 训 plain 模型（1 步 / Qwen2.5-0.5B / 8 行 alpaca fixture）。
   - path: examples/huggingface_trainer/train_hf.py
     profile: xtuner-llm
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --model_name_or_path ${LLM_MODEL_PATH}        # DefaultTrainingArguments 必填：注入 setup 预下载的 0.5B
-      - --dataset_name_or_path ${TARGET_ROOT}/fixtures/ci_alpaca_8.jsonl   # xtuner.apis.datasets.alpaca_dataset 默认拉 HF `tatsu-lab/alpaca`：换仓内 8 行 fixture
-      - --output_dir ${CI_OUTPUT_DIR}                  # argparse 必填：脚本会 mkdir
-      - --per_device_train_batch_size 1                # 默认 1：0.5B 模型 32G NPU 上无压力
-      - --max_steps 1                                  # 默认整 epoch：1 步压到 CI 规模
-      - --save_strategy no                             # 默认 epoch：1 步训练无 epoch 边界、HF Trainer 报 checkpoint save 异常
-      - --logging_steps 1                              # 默认 5：保证 1 步内也打日志（验证训练循环活着）
+      - --model_name_or_path ${LLM_MODEL_PATH}        # 必须：不传时脚本拿 None 去加载模型，直接报错；注入 setup 预下载的本地 Qwen2.5-0.5B
+      - --dataset_name_or_path ${TARGET_ROOT}/fixtures/ci_alpaca_8.jsonl   # 必须：不传时报错；该参数默认值还会去 HF 拉 tatsu-lab/alpaca 全量数据（runner 连不上 HF），换成仓内 8 行 fixture
+      # 可选调优项（不传也能跑通，仅按默认值执行）：
+      - --output_dir ${CI_OUTPUT_DIR}                  # 默认 ./work_dirs：显式指定，把训练产物隔离到 CI 输出目录
+      - --max_steps 1                                  # 默认跑满 3 epochs（24 步）：压到 1 步省时间
+      - --save_strategy no                             # 默认每 epoch 存 ~1GB checkpoint：关掉省写盘（实测不关也能正常退出，纯为省时省盘）
+      - --logging_steps 1                              # 默认每 5 步打一次日志：改成 1，保证单步也输出 loss
     timeout_minutes: 30
 
-  # 单轮对话 SFT recipe（`with read_base(): from .map_fn import ...`）。
-  # cfg 头部用 `internlm/internlm-7b` 硬编 `pretrained_model_name_or_path`，
-  # 且 `tokenizer = dict(...)` dict literal 被 `Config.fromfile()` 深拷成
-  # 5 个独立 ConfigDict（顶层 + train_dataset.tokenizer + train_dataloader.dataset.tokenizer +
-  # custom_hooks.0.tokenizer + custom_hooks.1.tokenizer）—— `is` 全 False，
-  # 因此 --cfg-options 必须 5 个 token 路径全 override，mmengine 不做跨 dict
-  # 路径传播。`model.llm` 同理有 `model.llm.pretrained_model_name_or_path`。
-  # `train_dataset.dataset.data_files.train` 与
-  # `train_dataloader.dataset.dataset.data_files.train` 是两个不同 cfg key，
-  # 都得 override。`model.llm.quantization_config=None` 关掉 cfg 默认的
-  # BitsAndBytesConfig（aarch64 无 bnb wheel，NPU 也无 bnb 后端）。
-  # 单 batch=1 / 0.5B / NPU 跑通；EvaluateChatHook + DatasetInfoHook 都被
-  # 调到，所以两个 custom_hooks 都要 override。
-  # 2026-09-17 coder npu-2 实跑：1 epoch / Qwen2.5-0.5B / 2 行 toy chat
-  # jsonl / NPU 0.99s/it loss=1.2543 grad_norm=1.3822 EXIT=0；
-  # EvaluateChatHook 输出 chat（Q/A gibberish 因 1 epoch/2 row 不够学）。
+  # 单轮对话 SFT（xtuner cfg 配方）：1 epoch / Qwen2.5-0.5B / 2 行 toy 数据。
+  # cfg 把模型硬编为 internlm/internlm-7b（HF 仓库 ID，runner 连不上 HF），
+  # 且 tokenizer 配置在加载时被深拷成多份独立副本、互不同步，所以模型
+  # 路径要按"实际会构建的位置"逐份覆盖成 ${LLM_MODEL_PATH}。
   - path: examples/demo_data/single_turn/config.py
     profile: xtuner-llm
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    exec: scripts/xtuner_train_demo.sh                 # setup 写 launcher：python -m xtuner.tools.train 替代裸 python config.py（避免 .map_fn 相对导入 ImportError）
+    exec: scripts/xtuner_train_demo.sh                 # setup 写的启动器：用 python -m xtuner.tools.train 跑 cfg（直接 python config.py 会因 .map_fn 相对导入报错）
     overlay_args:
-      - examples/demo_data/single_turn/config.py        # xtuner.tools.train argv0
-      - --cfg-options pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options model.llm.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options train_dataset.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options train_dataloader.dataset.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options custom_hooks.0.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options custom_hooks.1.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options model.llm.quantization_config=None
-      - --cfg-options train_dataset.dataset.data_files.train=${TARGET_ROOT}/examples/demo_data/single_turn/data.json  # cfg 默认 "./data.json"，但相对 cwd 是 TARGET_ROOT；指绝对路径避免歧义
-      - --cfg-options train_dataloader.dataset.dataset.data_files.train=${TARGET_ROOT}/examples/demo_data/single_turn/data.json
-      - --cfg-options train_cfg.max_epochs=1            # 默认 3 epochs：1 epoch 压到 CI 规模
-      - --cfg-options evaluation_freq=100000           # 默认 500：跳过中段 chat eval
-      - --cfg-options save_steps=100000                # 默认 500：只走 step=1 一次 checkpoint
+      - examples/demo_data/single_turn/config.py        # 必须：train 工具的第一个参数就是 cfg 文件路径，缺了直接报错
+      - --cfg-options model.llm.pretrained_model_name_or_path=${LLM_MODEL_PATH}         # 必须：模型加载路径，不覆盖会去 HF 下载 internlm-7b（连不上，必失败）
+      - --cfg-options train_dataloader.dataset.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}  # 必须：训练数据预处理的分词器，不覆盖同样会去 HF 下载 internlm-7b 的分词器
+      - --cfg-options custom_hooks.0.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}      # 必须：DatasetInfoHook（打印样本信息）构造时就加载分词器，不覆盖必失败
+      - --cfg-options custom_hooks.1.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}      # 必须：EvaluateChatHook（对话评估）构造时就加载分词器，即使评估从不触发也要加载
+      - --cfg-options model.llm.quantization_config=None   # 必须：cfg 默认开 bitsandbytes 4bit 量化，NPU 环境装不上 bitsandbytes，必须显式关掉
+      - --cfg-options train_dataloader.dataset.dataset.data_files.train=${TARGET_ROOT}/examples/demo_data/single_turn/data.json  # 必须：cfg 默认读 ./data.json（相对仓库根目录，文件不在那），换成真实数据的绝对路径
+      # 可选调优项（默认值下 2 行数据 6 步内不会触发评估/保存，不传也能跑通）：
+      - --cfg-options train_cfg.max_epochs=1            # 默认 3 epochs：压到 1 个省时间
+      - --cfg-options evaluation_freq=100000           # 默认每 500 步跑一次对话评估：调大跳过
+      - --cfg-options save_steps=100000                # 默认每 500 步存一次 checkpoint：调大跳过
     timeout_minutes: 30
 
-  # 多轮对话 SFT recipe (chat 模板 "internlm_chat")。与 single_turn 共用
-  # 同一套 cfg layout（line 33/64/71/78/102/114 行号一致），overlay_args
-  # 同款 12 个 knob；data.json 自带多轮 conversations 字段。
-  # 2026-09-17 coder npu-2 实跑：1 epoch / Qwen2.5-0.5B / 2 行 multi-turn
-  # jsonl / NPU 0.99s/it loss=1.2543 EXIT=0。
+  # 多轮对话 SFT（internlm_chat 模板）：cfg 与 single_turn 完全同构（仅
+  # map_fn 不同），data.json 自带多轮 conversations 字段；各参数理由见
+  # single_turn 行内注释（下同）。
   - path: examples/demo_data/multi_turn_1/config.py
     profile: xtuner-llm
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     exec: scripts/xtuner_train_demo.sh
     overlay_args:
-      - examples/demo_data/multi_turn_1/config.py
-      - --cfg-options pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options model.llm.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options train_dataset.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options train_dataloader.dataset.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options custom_hooks.0.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options custom_hooks.1.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options model.llm.quantization_config=None
-      - --cfg-options train_dataset.dataset.data_files.train=${TARGET_ROOT}/examples/demo_data/multi_turn_1/data.json
-      - --cfg-options train_dataloader.dataset.dataset.data_files.train=${TARGET_ROOT}/examples/demo_data/multi_turn_1/data.json
-      - --cfg-options train_cfg.max_epochs=1
-      - --cfg-options evaluation_freq=100000
-      - --cfg-options save_steps=100000
+      - examples/demo_data/multi_turn_1/config.py        # 必须：train 工具的第一个参数就是 cfg 文件路径
+      - --cfg-options model.llm.pretrained_model_name_or_path=${LLM_MODEL_PATH}         # 必须：模型加载路径，不覆盖会去 HF 下载 internlm-7b
+      - --cfg-options train_dataloader.dataset.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}  # 必须：训练数据预处理的分词器
+      - --cfg-options custom_hooks.0.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}      # 必须：DatasetInfoHook 构造时就加载分词器
+      - --cfg-options custom_hooks.1.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}      # 必须：EvaluateChatHook 构造时就加载分词器
+      - --cfg-options model.llm.quantization_config=None   # 必须：关掉 cfg 默认的 bnb 4bit 量化（NPU 装不上 bitsandbytes）
+      - --cfg-options train_dataloader.dataset.dataset.data_files.train=${TARGET_ROOT}/examples/demo_data/multi_turn_1/data.json  # 必须：cfg 默认读 ./data.json（相对仓库根，不存在）
+      # 可选调优项：
+      - --cfg-options train_cfg.max_epochs=1            # 默认 3 epochs：压到 1 个
+      - --cfg-options evaluation_freq=100000           # 默认每 500 步对话评估：调大跳过
+      - --cfg-options save_steps=100000                # 默认每 500 步存 checkpoint：调大跳过
     timeout_minutes: 30
 
-  # 多轮对话 SFT recipe variant 2（更长 chat 模板）。cfg layout 同 multi_turn_1。
-  # 2026-09-17 coder npu-2 实跑：1 epoch / Qwen2.5-0.5B / 2 行 multi-turn
-  # jsonl / NPU EXIT=0。
+  # 多轮对话 SFT variant 2（更长 chat 模板）：cfg 与 multi_turn_1 同构
+  # （仅 map_fn 不同）。
   - path: examples/demo_data/multi_turn_2/config.py
     profile: xtuner-llm
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     exec: scripts/xtuner_train_demo.sh
     overlay_args:
-      - examples/demo_data/multi_turn_2/config.py
-      - --cfg-options pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options model.llm.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options train_dataset.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options train_dataloader.dataset.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options custom_hooks.0.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options custom_hooks.1.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options model.llm.quantization_config=None
-      - --cfg-options train_dataset.dataset.data_files.train=${TARGET_ROOT}/examples/demo_data/multi_turn_2/data.json
-      - --cfg-options train_dataloader.dataset.dataset.data_files.train=${TARGET_ROOT}/examples/demo_data/multi_turn_2/data.json
-      - --cfg-options train_cfg.max_epochs=1
-      - --cfg-options evaluation_freq=100000
-      - --cfg-options save_steps=100000
+      - examples/demo_data/multi_turn_2/config.py        # 必须：train 工具的第一个参数就是 cfg 文件路径
+      - --cfg-options model.llm.pretrained_model_name_or_path=${LLM_MODEL_PATH}         # 必须：模型加载路径，不覆盖会去 HF 下载 internlm-7b
+      - --cfg-options train_dataloader.dataset.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}  # 必须：训练数据预处理的分词器
+      - --cfg-options custom_hooks.0.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}      # 必须：DatasetInfoHook 构造时就加载分词器
+      - --cfg-options custom_hooks.1.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}      # 必须：EvaluateChatHook 构造时就加载分词器
+      - --cfg-options model.llm.quantization_config=None   # 必须：关掉 cfg 默认的 bnb 4bit 量化（NPU 装不上 bitsandbytes）
+      - --cfg-options train_dataloader.dataset.dataset.data_files.train=${TARGET_ROOT}/examples/demo_data/multi_turn_2/data.json  # 必须：cfg 默认读 ./data.json（相对仓库根，不存在）
+      # 可选调优项：
+      - --cfg-options train_cfg.max_epochs=1            # 默认 3 epochs：压到 1 个
+      - --cfg-options evaluation_freq=100000           # 默认每 500 步对话评估：调大跳过
+      - --cfg-options save_steps=100000                # 默认每 500 步存 checkpoint：调大跳过
     timeout_minutes: 30
 
-  # 预训练 recipe（无 chat 模板，纯文本续写）。cfg layout 与 single_turn
-  # 一致，但 custom_hooks 只有 DatasetInfoHook（1 个），没有 EvaluateChatHook。
-  # 因此 overlay_args 去掉 `custom_hooks.1.tokenizer.*`（传 11 个 knob），
-  # 多传会触发 mmengine `_merge_a_into_b` KeyError "Index 1 exceeds the
-  # length of list [...]"（2026-09-17 coder npu-2 实测复现）。
-  # 2026-09-17 coder npu-2 实跑：1 epoch / Qwen2.5-0.5B / 2 行纯文本 jsonl
-  # / NPU 1.35s/it loss=2.7254 grad_norm=2.6818 EXIT=0。
+  # 预训练（纯文本续写，无对话模板）：与 single_turn 唯一差别是 hooks 只有
+  # DatasetInfoHook 一个，因此没有 custom_hooks.1.tokenizer 那条——多传
+  # 会因列表越界报 mmengine KeyError（实测）。
   - path: examples/demo_data/pretrain/config.py
     profile: xtuner-llm
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     exec: scripts/xtuner_train_demo.sh
     overlay_args:
-      - examples/demo_data/pretrain/config.py
-      - --cfg-options pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options model.llm.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options train_dataset.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options train_dataloader.dataset.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options custom_hooks.0.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}
-      - --cfg-options model.llm.quantization_config=None
-      - --cfg-options train_dataset.dataset.data_files.train=${TARGET_ROOT}/examples/demo_data/pretrain/data.json
-      - --cfg-options train_dataloader.dataset.dataset.data_files.train=${TARGET_ROOT}/examples/demo_data/pretrain/data.json
-      - --cfg-options train_cfg.max_epochs=1
-      - --cfg-options save_steps=100000
+      - examples/demo_data/pretrain/config.py            # 必须：train 工具的第一个参数就是 cfg 文件路径
+      - --cfg-options model.llm.pretrained_model_name_or_path=${LLM_MODEL_PATH}         # 必须：模型加载路径，不覆盖会去 HF 下载 internlm-7b
+      - --cfg-options train_dataloader.dataset.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}  # 必须：训练数据预处理的分词器
+      - --cfg-options custom_hooks.0.tokenizer.pretrained_model_name_or_path=${LLM_MODEL_PATH}      # 必须：DatasetInfoHook 构造时就加载分词器
+      - --cfg-options model.llm.quantization_config=None   # 必须：关掉 cfg 默认的 bnb 4bit 量化（NPU 装不上 bitsandbytes）
+      - --cfg-options train_dataloader.dataset.dataset.data_files.train=${TARGET_ROOT}/examples/demo_data/pretrain/data.json  # 必须：cfg 默认读 ./data.json（相对仓库根，不存在）
+      # 可选调优项：
+      - --cfg-options train_cfg.max_epochs=1            # 默认 3 epochs：压到 1 个
+      - --cfg-options save_steps=100000                # 默认每 500 步存 checkpoint：调大跳过
     timeout_minutes: 30
 
-# ===== unsupported（每条附理由：coder npu-2 2026-09-15/17 实跑 exit code + 真实 traceback） =====
+# ===== unsupported（npu-2 2026-09-15/17 实跑复现，exit!=0） =====
 unsupported:
-  # 上游 sft.py bug：`build_llm_from_cfg` 在 llm_cfg 不是 dict 时跳过
-  # `llm = self._dispatch_lm_model_cfg(...)` 分支，但下一行无条件引用 `llm`
-  # → UnboundLocalError。train_lora_hf.py 走 build_lora_model → SupervisedFinetune(llm)
-  # 路径必然命中；CUDA 同样炸，非 NPU 专属。
-  # 源码：xtuner/model/sft.py:138-143
-  #   def build_llm_from_cfg(self, llm_cfg, use_varlen_attn, max_position_embeddings):
-  #       with LoadWoInit():
-  #           if isinstance(llm_cfg, dict):
-  #               llm = self._dispatch_lm_model_cfg(llm_cfg, max_position_embeddings)
-  #           llm = self._build_from_cfg_or_module(llm)   # <-- UnboundLocalError
-  # 入口：xtuner/apis/model.py:50-67 `build_lora_model` 把
-  # `AutoModelForCausalLM.from_pretrained(...)` 拿到的 PreTrainedModel 实例
-  # 直接当 `llm_cfg` 传给 `SupervisedFinetune(llm, lora=lora_config)`，命中
-  # 上面 `isinstance(llm_cfg, dict) == False` 分支跳过 dispatch，下一行
-  # `_build_from_cfg_or_module(llm)` 引用未赋值的 `llm` → UnboundLocalError。
-  # coder npu-2 实跑 (2026-09-17 fresh install, torch 2.11.0+cpu +
-  # torch_npu 2.11.0, exit_code=1):
-  #   File "xtuner/model/sft.py", line 143, in build_llm_from_cfg
-  #     llm = self._build_from_cfg_or_module(llm)
-  #                                          ^^^
-  #   UnboundLocalError: cannot access local variable 'llm' where it is not associated with a value
-  # torch_npu ERR99999 跟着 NPU 进程一并挂；非 NPU 后端问题，是 xtuner v0.2.0
-  # 上游代码缺陷，应提 issue。绕过办法：走 train_hf.py HF Trainer 路径（supported）。
+  # LoRA 版被上游 bug 卡死：build_lora_model 先用 from_pretrained 拿到模型
+  # 实例，再传给 SupervisedFinetune；而 sft.py:143 的 build_llm_from_cfg
+  # 只在收到 dict 形态的模型配置时才给 llm 变量赋值，收到模型实例时不赋值
+  # 却直接引用 → UnboundLocalError，任何后端必崩（CUDA 同样，非 NPU 问题）。
+  # v0.2.0 是最新 release 且 main 分支同样未修（2026-09-17 确认），应提
+  # issue。技术上可在 CI shim 里补一行 else: llm = llm_cfg 绕过（实测 NPU
+  # 跑通 exit 0），但会掩盖上游缺陷，故保持 unsupported。
   - examples/huggingface_trainer/train_lora_hf.py
 
-  # 双重 blocker：xtuner.apis.model.build_qlora_model 硬编 BitsAndBytesConfig
-  # （load_in_4bit / bnb_4bit_quant_type=nf4），PyPI aarch64 无 bnb wheel，
-  # bitsandbytes 0.45.0 也未 ship npu 后端；即使 bnb 在了，下游 SupervisedFinetune
-  # 的 UnboundLocalError（见 train_lora_hf.py）也会再次炸。
-  # 源码：xtuner/apis/model.py:13-26
-  #   def build_qlora_model(...):
-  #           if quantization_config is None:
-  #               quantization_config = BitsAndBytesConfig(
-  #                   load_in_4bit=True, ..., bnb_4bit_quant_type="nf4", ...)
-  #   无 NPU 分支。BitsAndBytesConfig.__init__ → post_init →
-  #   `importlib.metadata.version("bitsandbytes")` 在 bnb 包不在时
-  #   PackageNotFoundError，bnb 在了之后只支持 CUDA/ROCM/HPU backend，
-  #   NPU 仍无等价实现。
-  # coder npu-2 实跑 (2026-09-17 fresh install, exit_code=1):
-  #   File "transformers/utils/quantization_config.py", line 477, in post_init
-  #     if self.load_in_4bit and not version.parse(
-  #         importlib.metadata.version("bitsandbytes")) >= ...
-  #   importlib.metadata.PackageNotFoundError: No package metadata was found for bitsandbytes
-  # bnb 在 NPU 上无等价实现，QLoRA 不在 NPU guard 范围；改用 train_hf.py 走 plain LoRA。
+  # QLoRA 版三重死路：build_qlora_model 无条件构造 BitsAndBytesConfig 开
+  # 4bit 量化，无 NPU 分支；而 bitsandbytes 在此环境完全不可用——xtuner
+  # 锁定的 0.45.0 无 aarch64 wheel（PyPI 仅 x86_64）装不上；0.46.1+ 虽有
+  # aarch64 wheel，实测 0.47.0 import 即卡死（反复探测 Habana 后端不
+  # 返回）；且 bitsandbytes 本身不支持 NPU。即使量化这关能过，后面还会
+  # 撞上面 train_lora_hf.py 的同一个 UnboundLocalError。
   - examples/huggingface_trainer/train_qlora_hf.py
