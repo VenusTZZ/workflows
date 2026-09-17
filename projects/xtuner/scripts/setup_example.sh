@@ -161,6 +161,24 @@ with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"LLM_MODEL_PATH={local}\n")
 print("LLM_MODEL_PATH=", local)
 PY
+
+  # Launcher for `examples/demo_data/*/config.py` (mmengine cfg recipes
+  # with `with read_base(): from .map_fn import ...`). run_example.sh
+  # resolves `manifest.entry.exec` against TARGET_ROOT then does
+  # `python "$LAUNCH_PATH" "$@"` — but `python config.py` blows up on
+  # the relative import (ImportError: attempted relative import with no
+  # known parent package). This wrapper invokes
+  # `python -m xtuner.tools.train` instead, which Config.fromfile()
+  # happily reads the cfg tree. cwd = TARGET_ROOT so the cfg path is
+  # resolved relative to the release checkout (same as the supported
+  # train_hf.py entry, which is launched bare).
+  cat > "$TARGET_ROOT/scripts/xtuner_train_demo.sh" <<'SH'
+#!/usr/bin/env bash
+# Launcher used by supported demo_data/*/config.py entries. Manifest
+# invokes it as `xtuner_train_demo.sh <cfg-path> <overlay args>`.
+exec python -m xtuner.tools.train "$@"
+SH
+  chmod +x "$TARGET_ROOT/scripts/xtuner_train_demo.sh"
 }
 
 supported_profiles() {
