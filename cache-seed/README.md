@@ -142,12 +142,34 @@ cp 到 HF hub cache，同 peft 机制）：
 infer 组按例拆 profile（`accelerate-infer-phi2/sd/tts/llava`），每 job 只
 plant 本例硬编码的模型，避免单 job 拉 ~27G。
 
-**本目录装 ModelScope 没有的 2 个**（均为 dataset，已核实 MS 全站无镜像或
-等价物；例里硬编码 `load_dataset` / `snapshot_download`，只能靠本目录投递）：
-- `svjack/pokemon-blip-captions-en-zh`（~100MB，data/train parquet）—
+**已投递后移除（2026-09-17）**：accelerate 的两个 ModelScope 缺口数据集
+（均为例里硬编码 `load_dataset` / `snapshot_download`，无 MS 镜像或等价物）
+曾打包在本目录并通过 cache-seed workflow（run 35177063140）投递到 runner
+共享缓存，投递完成后 bundle 已从仓库移除以减轻每次 CI checkout：
+
+- `svjack/pokemon-blip-captions-en-zh`（~100MB）—
   distributed_speech_generation 用其 `en_text` 列；MS 只有原版
   lambdalabs/pokemon-blip-captions（无 en/zh 列），不可替代
-- `malterei/LLaVA-Video-small-swift`（~530MB，205+ 视频）— llava_next_video
+- `malterei/LLaVA-Video-small-swift`（~505MB，204 视频）— llava_next_video
   运行时 `snapshot_download(repo_type="dataset")`，os.walk 全量使用
 
-跑 tts / llava 例前必须先 dispatch cache-seed workflow（projects=accelerate）。
+**新 runner 缺数据时的重建流程**（本机代理下 → push → dispatch）：
+
+```bash
+export HF_HOME=/tmp/hf HTTPS_PROXY=http://127.0.0.1:7890
+python3 - <<'PY'
+import os
+from huggingface_hub import snapshot_download
+for repo in ("svjack/pokemon-blip-captions-en-zh", "malterei/LLaVA-Video-small-swift"):
+    snapshot_download(repo, repo_type="dataset")
+PY
+python scripts/bundle_cache.py --project accelerate \
+  --src /tmp/hf/hub/datasets--svjack--pokemon-blip-captions-en-zh \
+  --prefix hub/datasets--svjack--pokemon-blip-captions-en-zh \
+  --src /tmp/hf/hub/datasets--malterei--LLaVA-Video-small-swift \
+  --prefix hub/datasets--malterei--LLaVA-Video-small-swift
+git add cache-seed/accelerate && git commit -m "accelerate: re-seed datasets" && git push
+# 再 dispatch cache-seed workflow（projects=accelerate），完成后同样可删
+```
+
+历史 bundle 也可从 git 直接恢复：`git checkout 0242ba8 -- cache-seed/accelerate`。

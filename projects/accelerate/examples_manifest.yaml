@@ -134,9 +134,10 @@ supported:
   # 2026-09-16 PARKED 的根因（hf-mirror 对 Xet 仓库 302 到 cas-bridge 超时）
   # 已绕开：所有模型改由 setup 从 ModelScope snapshot_download 后 plant 到
   # HF hub cache（peft 同款机制，见 setup_example.sh ms_plant）；两个
-  # ModelScope 没有的数据集（pokemon-en-zh / malterei swift 视频）走
-  # cache-seed/accelerate/ 兜底投递。以下 6 条全部恢复，profile 按例拆分
-  # （infer 组每 job 只 plant 本例硬编码的模型，避免单 job 拉 ~27G）。
+  # ModelScope 没有的数据集（pokemon-en-zh / malterei swift 视频）已通过
+  # cache-seed 投递到 runner 共享缓存（bundle 投递后从仓库移除，重建
+  # runbook 见 cache-seed/README.md）。以下 6 条全部恢复，profile 按例
+  # 拆分（infer 组每 job 只 plant 本例硬编码的模型，避免单 job 拉 ~27G）。
 
   # 旧注曾按上游旧版描述（GPT-2 + ELI5 + 54G OOM）；现版 example 已改为
   # SmolLM-360M + wikitext-2 截断 500 条，360M + AdamW ≈ 4.3G，32G HBM
@@ -187,11 +188,10 @@ supported:
     timeout_minutes: 45
 
   # VITS 语音生成：facebook/mms-tts-eng（~150M，ModelScope 同名镜像 plant）
-  # + pokemon captions 数据集（833 条；ModelScope 无 en-zh 变体 →
-  # cache-seed/accelerate/ 投递，跑前需 dispatch cache-seed workflow），
-  # fp32 推理，逐条落 wav。需 scipy（wavfile）+ torchvision（VitsModel
-  # import 链拉 torchvision op 注册）。2026-09-16 coder npu-1
-  # 实跑：105 批全生成，exit 0，153s。
+  # + pokemon captions 数据集（833 条；ModelScope 无 en-zh 变体 → 已于
+  # 2026-09-17 经 cache-seed 投递到 runner 共享缓存），fp32 推理，逐条落
+  # wav。需 scipy（wavfile）+ torchvision（VitsModel import 链拉 torchvision
+  # op 注册）。2026-09-16 coder npu-1 实跑：105 批全生成，exit 0，153s。
   - path: examples/inference/distributed/distributed_speech_generation.py
     profile: accelerate-infer-tts
     runner: linux-aarch64-a2-1
@@ -201,10 +201,10 @@ supported:
     timeout_minutes: 45
 
   # LLaVA-NeXT-Video-7B-hf fp16 ≈14G（ModelScope 同名镜像 plant，冷缓存
-  # 下载计入 timeout）+ malterei swift 视频数据集（205 个视频；ModelScope
-  # 无 → cache-seed/accelerate/ 投递，跑前需 dispatch cache-seed
-  # workflow）；av 解码 8 帧/视频，bs4 逐批 generate。2026-09-16 coder
-  # npu-1 实跑：51 批全生成落盘，exit 0，836s（warm cache）。
+  # 下载计入 timeout）+ malterei swift 视频数据集（204 个视频；ModelScope
+  # 无 → 已于 2026-09-17 经 cache-seed 投递到 runner 共享缓存）；av 解码
+  # 8 帧/视频，bs4 逐批 generate。2026-09-16 coder npu-1 实跑：51 批全生成
+  # 落盘，exit 0，836s（warm cache）。
   - path: examples/inference/distributed/llava_next_video.py
     profile: accelerate-infer-llava
     runner: linux-aarch64-a2-1

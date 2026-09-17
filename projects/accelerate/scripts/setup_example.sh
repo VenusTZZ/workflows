@@ -13,8 +13,9 @@
 # the HF hub cache layout, so from_pretrained / load_dataset at example
 # runtime resolves to the planted cache and never downloads weights.
 # The two assets ModelScope does not carry (pokemon-en-zh captions,
-# malterei swift videos) are delivered by the cache-seed workflow into
-# the same shared cache root instead — see cache-seed/accelerate/.
+# malterei swift videos) were delivered into the runners' shared cache
+# root by the cache-seed workflow on 2026-09-17 (bundle since removed
+# from the repo; re-stage runbook in cache-seed/README.md).
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -169,9 +170,10 @@ GROUPS = {
 }
 
 # Datasets that cannot come from ModelScope: delivered into the shared
-# cache root by the cache-seed workflow (bundle staged from a proxied
-# local HF download). Missing → warn loudly; the example itself will
-# fail on the Xet flake if it runs without them.
+# cache root by the 2026-09-17 cache-seed dispatch (the bundle has since
+# been removed from the repo — see cache-seed/README.md for the re-stage
+# runbook if a fresh runner comes up cold). Missing → warn loudly; the
+# example itself will fail on the Xet flake if it runs without them.
 SEED_PREFLIGHT = {
     "infer-tts": ["datasets--svjack--pokemon-blip-captions-en-zh"],
     "infer-llava": ["datasets--malterei--LLaVA-Video-small-swift"],
@@ -225,8 +227,9 @@ def preflight(repo_dirs):
         refs = HUB_ROOT / repo_dir / "refs" / "main"
         if not refs.is_file():
             print(f"WARN: {repo_dir} missing from shared cache root — "
-                  f"dispatch the cache-seed workflow (projects=accelerate) "
-                  f"before expecting this example to pass", flush=True)
+                  f"this machine came up after the 2026-09-17 seed "
+                  f"delivery; re-stage via the runbook in "
+                  f"cache-seed/README.md", flush=True)
         else:
             sha = refs.read_text()
             n = sum(
