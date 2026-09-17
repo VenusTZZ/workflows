@@ -108,16 +108,17 @@ is_available True
 
 ## 安装 ROLL
 
-**克隆仓库并安装依赖。** PyPI 上的 roll 包名与本项目无关，从 GitHub 源码安装，再补齐 agentic 示例所需的依赖。
+**克隆仓库并安装依赖。** 从 GitHub 安装 ROLL，并按昇腾镜像的依赖清单安装 agentic 示例所需组件。
 
 ```shell #test-setup id="install-roll"
 git clone https://github.com/alibaba/ROLL.git
 cd ROLL
-pip install -r requirements_common.txt
+grep -v '^gem-llm' requirements_common.txt > requirements_npu.txt
+pip install -r requirements_npu.txt
+pip install --ignore-requires-python gem-llm==0.0.4
 pip install "transformers==4.57.6" "tensorboard==2.20.0"
-pip install reasoning-gym==0.1.23
-pip install --no-deps gem-llm==0.0.4
 pip install -e .
+rm requirements_npu.txt
 cd ..
 ```
 
