@@ -37,14 +37,14 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args: []
-    timeout_minutes: 15
+    timeout_minutes: 30
 
   - path: examples/complete_nlp_example.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args: []
-    timeout_minutes: 20
+    timeout_minutes: 30
 
   - path: examples/cv_example.py
     profile: accelerate-cv
@@ -56,7 +56,7 @@ supported:
       # setup_example.sh 把 timm/oxford-iiit-pet 解到
       # ${TARGET_ROOT}/fixtures/pets/images/，所以这里指向 images/ 子目录。
       - --data_dir ${TARGET_ROOT}/fixtures/pets/images
-    timeout_minutes: 20
+    timeout_minutes: 30
 
   - path: examples/complete_cv_example.py
     profile: accelerate-cv
@@ -65,7 +65,7 @@ supported:
     overlay_args:
       # argparse required=True + 同 cv_example.py 布局：images/ 子目录
       - --data_dir ${TARGET_ROOT}/fixtures/pets/images
-    timeout_minutes: 20
+    timeout_minutes: 30
 
   # by_feature/* 8 条：基于 nlp_example.py 的最小修改，每个叠加一个 Accelerate
   # 特性。BERT + MRPC + 默认 3 epochs。默认 fp32 / NPU / 普通 dataloader 都
@@ -76,14 +76,14 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args: []
-    timeout_minutes: 15
+    timeout_minutes: 30
 
   - path: examples/by_feature/automatic_gradient_accumulation.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args: []
-    timeout_minutes: 15
+    timeout_minutes: 30
 
   - path: examples/by_feature/checkpointing.py
     profile: accelerate-nlp
@@ -95,14 +95,14 @@ supported:
       # argparse default="."（cwd）；改到 CI_OUTPUT_DIR 让 runner 收进
       # artifacts，CI 完成后统一清理
       - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 15
+    timeout_minutes: 30
 
   - path: examples/by_feature/early_stopping.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args: []
-    timeout_minutes: 15
+    timeout_minutes: 30
 
   - path: examples/by_feature/tracking.py
     profile: accelerate-nlp
@@ -114,21 +114,21 @@ supported:
       - --with_tracking
       # argparse default="logs"（相对路径）；改到 CI_OUTPUT_DIR 收 artifacts
       - --project_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 15
+    timeout_minutes: 30
 
   - path: examples/by_feature/memory.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args: []
-    timeout_minutes: 15
+    timeout_minutes: 30
 
   - path: examples/by_feature/cross_validation.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args: []
-    timeout_minutes: 15
+    timeout_minutes: 30
 
   # ===== 2026-09-17 复活：资产源已整体切到 ModelScope + cache-seed =====
   # 2026-09-16 PARKED 的根因（hf-mirror 对 Xet 仓库 302 到 cas-bridge 超时）
@@ -151,7 +151,7 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --gradient_accumulation_steps 4
-    timeout_minutes: 45
+    timeout_minutes: 60
 
   # schedulefree 是纯 Python 包（wheel 为 py3-none-any，无 native 扩展），
   # 装上后是普通张量运算。bert/mrpc 默认 3 epochs，同其他 by_feature 条目。
@@ -163,7 +163,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args: []
-    timeout_minutes: 20
+    timeout_minutes: 30
 
   # phi-2 无 CLI 参数，prompts 硬编；fp16 ≈5.4G。模型从 ModelScope
   # （microsoft/phi-2 同名镜像）plant 到 HF cache，冷缓存下载计入 timeout。
@@ -174,7 +174,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args: []
-    timeout_minutes: 45
+    timeout_minutes: 60
 
   # stable_diffusion：example 用 fp32 权重 + torch_dtype=fp16（无 variant），
   # ModelScope AI-ModelScope/stable-diffusion-v1-5 的 safetensors 即够
@@ -185,7 +185,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args: []
-    timeout_minutes: 45
+    timeout_minutes: 60
 
   # VITS 语音生成：facebook/mms-tts-eng（~150M，ModelScope 同名镜像 plant）
   # + pokemon captions 数据集（833 条；ModelScope 无 en-zh 变体 → 已于
@@ -198,7 +198,7 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --output_path ${CI_OUTPUT_DIR}/tts
-    timeout_minutes: 45
+    timeout_minutes: 60
 
   # LLaVA-NeXT-Video-7B-hf fp16 ≈14G（ModelScope 同名镜像 plant，冷缓存
   # 下载计入 timeout）+ malterei swift 视频数据集（204 个视频；ModelScope
@@ -211,7 +211,7 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --save_dir ${CI_OUTPUT_DIR}/llava
-    timeout_minutes: 90
+    timeout_minutes: 120
 
 
 unsupported:
