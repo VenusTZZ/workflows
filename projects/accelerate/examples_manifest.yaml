@@ -24,15 +24,6 @@ supported:
   #   写进去的只有：
   #     - argparse required=True 必填（cv/complete_cv 的 --data_dir）
   #     - 显式 override 默认的（checkpointing_steps / output_dir / with_tracking / project_dir）
-  #   profile 约定（2026-09-17 起，资产由 cache-seed workflow 统一投递到
-  #   runner 共享缓存：ModelScope plant 见
-  #   cache-seed/accelerate/ms_seeds.yaml，ModelScope 没有的数据集走
-  #   cache-seed bundle；setup 只装栈 + 校验在位，不下载）：
-  #     accelerate-nlp        bert+glue（全体 NLP / by_feature 例）
-  #     accelerate-nlp-ar     nlp + SmolLM+wikitext（仅 grad_accum_ar）
-  #     accelerate-cv         nlp + timm/torchvision + Pets 数据
-  #     accelerate-infer-*    nlp + fire/av/diffusers/scipy/torchvision，
-  #                           phi2/sd/tts/llava 各自校验本例模型与数据集
 
   - path: examples/nlp_example.py
     profile: accelerate-nlp
@@ -132,54 +123,18 @@ supported:
     overlay_args: []
     timeout_minutes: 30
 
-  # ===== PARKED 2026-09-16（CI run 35062880797 后临时下线，等 Xet 问题解决再放开）=====
-  # 以下 6 条已通过 coder npu-1 端到端验证（torch2.9 / torch_npu 2.9.0.post2 /
-  # transformers 5.17，全部 rc=0，证据见各条注释），但 CI 首跑暴露平台网络问题：
-  # SmolLM-360M / phi-2 / SD-v1.5 / LLaVA 等 Xet-backed 仓库经 hf-mirror 时，
-  # 镜像缓存未命中会 302 到 cas-bridge.xethub.hf.co，CI runner 直连超时
-  # （HF_HUB_DISABLE_XET=1 只能改变失败模式：Xet 客户端 401 → 直连 timeout）；
-  # 镜像缓存命中时能过（同一 run 里 grad_accum_ar 后跑即成功，纯属时序运气），
-  # 即"能不能过取决于镜像缓存状态"——不可接受为 CI 依赖。
-  # 连带伤害：prepare_nlp_assets 的 SmolLM 预下把原本全绿的 cv_example /
-  # complete_cv_example 也拖挂了（cv profile 复用 nlp setup）。
-  # 放开条件（任一）：
-  #   1) CI 侧预下改为可稳定触达的源（如 runner 内先跑一次预热脚本 /
-  #      modelscope 镜像 / 非 Xet 权重复制仓）
-  #   2) runner 网络放行 cas-bridge.xethub.hf.co
-  #   3) hf-mirror 对 Xet 仓库提供稳定缓存
-  # 放开动作：取消本块注释 + setup_example.sh 里 PARKED 标记的 3 处
-  # （schedulefree pip / SmolLM 资产块 / 本块引用的 infer profile 已保留未动）。
-#  # ===== 2026-09-16 源码核对（accelerate@b795b483）后新增 =====
-#  # 旧注曾按上游旧版描述（GPT-2 + ELI5 + 54G OOM）；现版 example 已改为
-#  # SmolLM-360M + wikitext-2 截断 500 条，360M + AdamW ≈ 4.3G，32G HBM
-#  # 无压力。显式 ga=4 让 accumulation 路径真实生效（argparse 默认 1）。
-#  # 2026-09-16 coder npu-1 实跑（torch2.9+torch_npu2.9.0.post2）：3 epochs
-#  # + eval 全部完成，exit 0，213s。
-#  - path: examples/by_feature/gradient_accumulation_for_autoregressive_models.py
-#    profile: accelerate-nlp
-#    runner: linux-aarch64-a2-1
-#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-#    overlay_args:
-#      - --gradient_accumulation_steps 4
-#    timeout_minutes: 45
-
-#  # schedulefree 是纯 Python 包（wheel 为 py3-none-any，无 native 扩展），
-#  # 旧注"内部走 _C 扩展无 NPU 实现"不实；装上后是普通张量运算。
-#  # bert/mrpc 默认 3 epochs，同其他 by_feature 条目。
-#  # 2026-09-16 coder npu-1 实跑：schedulefree 1.4.1，3 epochs
-#  # accuracy 0.855 / f1 0.898，exit 0，116s。
-#  - path: examples/by_feature/schedule_free.py
-#    profile: accelerate-nlp
-#    runner: linux-aarch64-a2-1
-#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-#    overlay_args: []
-#    timeout_minutes: 20
+  # SmolLM-360M + wikitext-2 截断 500 条，360M + AdamW ≈ 4.3G，32G HBM
+  # 无压力。显式 ga=4 让 accumulation 路径真实生效（argparse 默认 1）。
+  - path: examples/by_feature/gradient_accumulation_for_autoregressive_models.py
+    profile: accelerate-nlp
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --gradient_accumulation_steps 4
+    timeout_minutes: 45
 
   # schedulefree 是纯 Python 包（wheel 为 py3-none-any，无 native 扩展），
   # 装上后是普通张量运算。bert/mrpc 默认 3 epochs，同其他 by_feature 条目。
-  # 2026-09-16 coder npu-1 实跑：schedulefree 1.4.1，3 epochs
-  # accuracy 0.855 / f1 0.898，exit 0，116s。bert/mrpc 走 ModelScope
-  # plant（accelerate-nlp profile，schedulefree 已回装 pip 列表）。
   - path: examples/by_feature/schedule_free.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-1
@@ -189,8 +144,6 @@ supported:
 
   # phi-2 无 CLI 参数，prompts 硬编；fp16 ≈5.4G。模型从 ModelScope
   # （microsoft/phi-2 同名镜像）plant 到 HF cache，冷缓存下载计入 timeout。
-  # 2026-09-16 coder npu-1 实跑：5 prompts 生成 + gather 打印完整，exit 0，
-  # 70s（含 14G 模型从缓存加载）。
   - path: examples/inference/distributed/phi2.py
     profile: accelerate-infer-phi2
     runner: linux-aarch64-a2-1
@@ -201,7 +154,6 @@ supported:
   # stable_diffusion：example 用 fp32 权重 + torch_dtype=fp16（无 variant），
   # ModelScope AI-ModelScope/stable-diffusion-v1-5 的 safetensors 即够
   # （plant 时跳过 .bin/.ckpt 重复格式，~5.5G）；3 prompts 默认 50 步。
-  # 2026-09-16 coder npu-1 实跑：50 步 ~4.5it/s，exit 0，121s。
   - path: examples/inference/distributed/stable_diffusion.py
     profile: accelerate-infer-sd
     runner: linux-aarch64-a2-1
@@ -209,23 +161,19 @@ supported:
     overlay_args: []
     timeout_minutes: 60
 
-#  # VITS 语音生成：facebook/mms-tts-eng（~150M）+ pokemon captions 数据集
-#  # （833 条），fp32 推理，逐条落 wav。需 scipy（wavfile）+ torchvision
-#  # （VitsModel import 链拉 torchvision op 注册）。2026-09-16 coder npu-1
-#  # 实跑：105 批全生成，exit 0，153s。
-#  - path: examples/inference/distributed/distributed_speech_generation.py
-#    profile: accelerate-infer
-#    runner: linux-aarch64-a2-1
-#    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-#    overlay_args:
-#      - --output_path ${CI_OUTPUT_DIR}/tts
-#    timeout_minutes: 45
+  # VITS 语音生成：facebook/mms-tts-eng（~150M）+ pokemon captions 数据集
+  # （833 条），fp32 推理，逐条落 wav。需 scipy（wavfile）+ torchvision
+  # （VitsModel import 链拉 torchvision op 注册）。
+  - path: examples/inference/distributed/distributed_speech_generation.py
+    profile: accelerate-infer
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --output_path ${CI_OUTPUT_DIR}/tts
+    timeout_minutes: 45
 
   # LLaVA-NeXT-Video-7B-hf fp16 ≈14G（ModelScope 同名镜像 plant，冷缓存
-  # 下载计入 timeout）+ malterei swift 视频数据集（204 个视频；ModelScope
-  # 无 → 已于 2026-09-17 经 cache-seed 投递到 runner 共享缓存）；av 解码
-  # 8 帧/视频，bs4 逐批 generate。2026-09-16 coder npu-1 实跑：51 批全生成
-  # 落盘，exit 0，836s（warm cache）。
+  # 下载计入 timeout）+ malterei swift 视频数据集
   - path: examples/inference/distributed/llava_next_video.py
     profile: accelerate-infer-llava
     runner: linux-aarch64-a2-1
@@ -236,12 +184,6 @@ supported:
 
 
 unsupported:
-  # 下列理由均按该路径核对源码。每条标注分类：
-  #   [平台] NPU/工具链硬缺口，装包也无法绕过
-  #   [场景] 单进程下特性不激活、退化为普通训练（多会 exit 0 但无验证价值）
-  #   [环境] setup 未装包 / 模型未预下载，修正后候选重测转 supported
-  #   [资源] 默认参数超单卡 32G HBM
-
   # [平台] TPU-only：torch_xla.runtime 无条件 import（finetune_lm_tpu.py:25），
   # torch_npu 栈没有 torch_xla，冷启即 ModuleNotFoundError
   # （coder 实跑 rc=2，与源码路径一致）
@@ -259,6 +201,7 @@ unsupported:
   # 裸 python 下 plugin 为 None → 退化为普通训练跑完；特性激活需
   # accelerate launch + ds config，而 deepspeed 不在 NPU 栈（ms-DeepSpeed 另立）。
   # 旧注"import hang + DeepSpeedPlugin init 失败"与源码不符
+  # todo check
   - examples/by_feature/deepspeed_with_config_support.py
 
   # [场景] FSDP1 + 峰值内存：FSDP wrap 仅在显式分布式类型（需 launcher）时发生
@@ -266,18 +209,21 @@ unsupported:
   # fsdp_plugin 惰性，传 overlay args 会以普通 bert/mrpc 训练跑完 exit 0，
   # 不验证 FSDP。旧注"单进程进 world_size>1 断言抛错"在裸 python 路径无法
   # 复现（accelerate/torch 源码均无该断言分支）
+  # todo check
   - examples/by_feature/fsdp_with_peak_mem_tracking.py
 
   # [场景] DDP comm hook：DDP wrap 条件是 self.multi_device（accelerator.py:1883），
   # 单进程不 wrap，DistributedDataParallelKwargs(comm_hook=...) 完全不生效，
   # example 以普通训练 exit 0；不会触发 no_sync RuntimeError（旧注有误）。
   # 特性验证需要 ≥2 进程
+  # todo check
   - examples/by_feature/ddp_comm_hook.py
 
   # [场景] LocalSGD：LocalSGD.enabled = enabled and distributed_type != NO
   # （accelerate/local_sgd.py:81），单进程下 step() 直接 no-op，静默退化为普通
   # 训练 exit 0，不会挂死（旧注"永远等不到 averaged grad"有误）；其支持列表
   # 显式含 MULTI_NPU，多卡才有意义
+  # todo check
   - examples/by_feature/local_sgd.py
 
   # [平台/版本] Megatron-LM：立即死因是 transformers >=4.57 移除了
@@ -287,19 +233,14 @@ unsupported:
   # Megatron-LM mpu + 多卡，NPU 无对应后端
   # （coder 实跑：ImportError: cannot import name 'send_example_telemetry' from
   # 'transformers.utils'，rc=2）
+  # todo check
   - examples/by_feature/megatron_lm_gpt_pretraining.py
 
   # [场景] 多进程 metric gather：单进程 gather_for_metrics 返回本地 tensor，
   # exit 0 但无 cross-rank 验证，example 本意场景缺失
   # （coder 实跑：DistributedType.NO 下 gather 返回本地 tensor）
+  # todo check
   - examples/by_feature/multi_process_metrics.py
-
-  # [环境] schedule-free 优化器：已转 supported（schedulefree 为纯 Python 包，
-  # 装包即跑；旧注"_C 扩展无 NPU 实现"不实）
-
-  # [环境] 自回归 grad accum：已转 supported（上游改为 SmolLM-360M +
-  # wikitext-2 截断 500 条，单进程可完整验证；overlay ga=4）。
-  # （历史 coder 实跑 dmesg heap_size=54760833024 OOM 属旧版 example 现象）
 
   # [平台] torch.profiler 报表：example 自己拼 sort key
   # f"self_{device.type}_time_total"（profiler.py:185-187）→ NPU 上请求
@@ -308,6 +249,7 @@ unsupported:
   # 但失去 NPU profiling 意义。属 example × 工具链兼容 bug，非 NPU 能力问题
   # （coder 实跑：AttributeError: 'FunctionEventAvg' object has no attribute
   # 'self_npu_time_total'. Did you mean: 'self_cpu_time_total'?，rc=1）
+  # todo check
   - examples/by_feature/profiler.py
 
   # [平台] DeepSpeed + ALST/Ulysses：模块级 from deepspeed.runtime.utils import
@@ -315,14 +257,9 @@ unsupported:
   # deepspeed 不在 NPU 栈（ms-DeepSpeed 另立），且 ALST/Ulysses 需要 ≥2 卡
   # 序列并行
   # （coder 实跑：ModuleNotFoundError: No module named 'deepspeed'，rc=2）
+  # todo check
   - examples/alst_ulysses_sequence_parallelism/sp-alst.py
   - examples/alst_ulysses_sequence_parallelism/sp-alst.sh
-
-  # [环境] 推理分布式（模型加载组）：已转 supported（2026-09-17 资产源切
-  # ModelScope：phi2/sd/tts/llava 按例拆 profile，模型由 cache-seed
-  # workflow 统一 plant（cache-seed/accelerate/ms_seeds.yaml），setup 只做
-  # 在位校验；pokemon/malterei 数据集走 cache-seed bundle）。florence2 与
-  # image_gen 仍 unsupported（理由见各自条目）。
 
   # [环境/引擎] PiPPy pipeline 推理：is_pippy_available 只查 torch>=2.4，
   # prepare_pippy 的 num_chunks 默认 = num_processes（inference.py:165）。
@@ -341,6 +278,7 @@ unsupported:
   # （需引擎支持 launcher 维度后重测）
   # （coder 实跑：pippy_bert 裸 python rc=1 / accelerate launch rc=1 /
   #   torchrun x1 rc=1 PipeliningShapeError，三连败证据齐全）
+  # todo check
   - examples/inference/pippy/bert.py
   - examples/inference/pippy/gpt2.py
 
@@ -350,6 +288,7 @@ unsupported:
   #     不代发），真 unsupported
   # （coder 实跑：pippy_t5 → RuntimeError（example 自抛）；pippy_llama →
   # OSError: We couldn't connect to 'https://hf-mirror.com'）
+  # todo check
   - examples/inference/pippy/t5.py
   - examples/inference/pippy/llama.py
 
@@ -364,6 +303,7 @@ unsupported:
   # 默认模型硬编 Hermes-3-Llama-3.1-8B（nd_parallel.py:39，bf16 ≈16G + 优化器
   # 态 > 32G 单卡）+ log_with=["wandb"]（:102）+ 裸 python 下 dist.all_reduce
   # 无进程组；nd_parallel_trainer.py:23 同款 8B 默认模型。runner a2-1 单卡不够
+  # todo check
   - examples/torch_native_parallelism/nd_parallel.py
   - examples/torch_native_parallelism/nd_parallel_trainer.py
 
@@ -394,9 +334,5 @@ unsupported:
   # 任何 Linux 平台同样炸，与 NPU 无关，改上游才能修。
   # 另注：默认模型 PixArt-Sigma-XL-2-1024-MS 的 T5-XXL 权重 ~20G，若上游
   # 修复后转正，建议 overlay 到 SD v1.5 控制冷缓存成本。
-  # （coder 实跑 rc=1：OSError Errno 36 @ 307/1632 images）
+  # （coder 实跑 rc=1：OSError Errno 36 @ 307/1632 images） 
   - examples/inference/distributed/distributed_image_generation.py
-
-  # [环境] 分布式推理 split-between-processes：stable_diffusion / speech_gen /
-  # llava_video / phi2 已转 supported（ModelScope plant + cache-seed 数据集）；
-  # image_gen 见上条（上游文件名 bug）。
