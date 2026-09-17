@@ -2,44 +2,21 @@
 # Prepare the CI environment for one supported torchtitan example.
 # $1 is the manifest profile. Unknown profiles fail before any install.
 #
-# This script installs the same torchtitan + CANN stack the Quick-start
-# guard covers (CANN 9.1.0 + torch 2.12.0 + torch_npu 2.12.0 +
-# triton-ascend 3.5.0+dev20260701 + the v0.3.0 release checkout + the
-# minimal pyproject deps). Then it applies seven compatibility sed
-# patches documented in projects/torchtitan/docs/Quick-start-Ascend.md
-# §"兼容性补丁" + the sft_debugmodel-specific 6+7 added after end-to-end
-# verification on 2026-09-15. All seven are required for any supported
-# example to reach step 1 on this NPU stack.
+# No-patch policy (2026-09-17): we install the upstream v0.3.0 checkout
+# as-is and let any NPU-stack bug surface in CI. If a supported example
+# fails because of a torch_npu / triton-ascend / CANN issue, the entry
+# stays in supported but its run fails — that's the signal upstream
+# needs. The seven sed patches previously applied here (and the
+# TORCH_NPU_DEVICE_CAPABILITY=9.0 env var in each launcher) are all
+# reverted in this commit. Quick-start-Ascend.md and the case doc still
+# describe the patches as historical record of what would be needed.
 #
-# The patches:
-#   1. attention backend: flex -> sdpa (limitation 1, compiler wall)
-#   2. ComplexRoPE -> CosSinRoPE + scaling="llama" -> "none"
-#      (limitation 2, aclnnIndex complex64 not implemented)
-#   3. register ScaledDotProductAttention in config_utils (carries patch 1)
-#   4. ChunkedLossWrapper -> CrossEntropyLoss
-#      (limitation 3, backward NPU meta-tensor leak)
-#   5. set_pg_timeouts torch.distributed.set_timeout -> instance set_timeout
-#      (limitation 5, torch 2.13+ module-level API not in 2.12)
-#   6. drop torch 2.13-only separate_full_blocks= kwarg in
-#      _create_flex_attention_mask (decoder.py:274). Required by any
-#      config that hard-codes attn_backend="flex" (e.g. sft_debugmodel
-#      before patch 7). Without this, create_block_mask raises
-#      TypeError. Added 2026-09-15 after sft_debugmodel verification
-#      on hdc-stable-npu-4.
-#   7. flip sft_debugmodel's hard-coded attn_backend="flex" to "sdpa"
-#      (config_registry.py:349). Patch 6 makes create_block_mask succeed,
-#      but the actual flex_attention kernel compile then fails with
-#      `ImportError: cannot import name 'triton_key' from
-#      'triton.compiler.compiler'` — torch_npu's inductor backend
-#      expects a private triton API that the community triton 3.5.0
-#      wheel (pinned by triton-ascend) doesn't expose. Switching to sdpa
-#      drops document masking but keeps the SFT pipeline (ChatDataLoader,
-#      CrossEntropyLoss, Trainer) intact. Added 2026-09-15 after
-#      sft_debugmodel verification on hdc-stable-npu-4.
-# Limitation 4 (spmd_types default backend needing torch >=2.13) is not
-# a sed - it is a CLI switch (--parallelism.spmd-backend full_dtensor)
-# in multi-card overlay_args. Limitation 6 (8B scale) is not patched -
-# the supported entries below cap at debugmodel (6 M params).
+# What we DO install: CANN 9.1.0 + torch 2.12.0+cpu + torch_npu 2.12.0
+# + triton-ascend 3.5.0+dev20260701 + the v0.3.0 release checkout +
+# pyproject deps. Multi-card overlay_args still pass
+# --parallelism.spmd-backend full_dtensor (limitation 4 is a CLI switch,
+# not a sed patch). Limitation 6 (8B scale) is not patched — the
+# supported entries below cap at debugmodel (6 M params).
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -155,116 +132,8 @@ raise SystemExit(0 if version('triton-ascend').startswith('3.5.0') else 1)
   fi
 }
 
-# Apply the six compatibility sed patches from
-# docs/Quick-start-Ascend.md §"兼容性补丁" to the release checkout.
-# Idempotent: each sed has a guard pattern, re-running is a no-op.
-apply_compat_patches() {
-  cd "$TARGET_ROOT"
-
-  # Patch 1+2: ComplexRoPE -> CosSinRoPE, scaling="llama" -> "none",
-  # default attn_backend "flex" -> "sdpa". The first line is a
-  # one-line sed with two substitutions (add import + change default).
-  # Patch is guarded by `s/^    ComplexRoPE,$/` (only matches the
-  # original list entry, not the newly added CosSinRoPE line).
-  if ! grep -q '^    CosSinRoPE,$' torchtitan/models/llama3/__init__.py; then
-    sed -i 's/^    ComplexRoPE,$/    ComplexRoPE,\n    CosSinRoPE,/; s/ComplexRoPE\.Config(/CosSinRoPE.Config(/; s/scaling="llama",/scaling="none",/' torchtitan/models/llama3/__init__.py
-    echo "patched ComplexRoPE -> CosSinRoPE in torchtitan/models/llama3/__init__.py"
-  fi
-  if ! grep -q 'attn_backend: str = "sdpa",' torchtitan/models/llama3/__init__.py; then
-    sed -i 's/attn_backend: str = "flex",/attn_backend: str = "sdpa",/' torchtitan/models/llama3/__init__.py
-    echo "patched attn_backend default flex -> sdpa in torchtitan/models/llama3/__init__.py"
-  fi
-
-  # Patch 3: register ScaledDotProductAttention so the patched
-  # attn_backend="sdpa" actually resolves to a Module.Config.
-  if ! grep -q 'ScaledDotProductAttention,$' torchtitan/models/common/config_utils.py; then
-    sed -i 's/    VarlenAttention,$/    VarlenAttention,\n    ScaledDotProductAttention,/' torchtitan/models/common/config_utils.py
-    # Add an `elif backend == "sdpa":` arm that returns
-    # ScaledDotProductAttention.Config(). The guard matches the
-    # original line so re-running is a no-op.
-    if ! grep -q 'sdpa_banned' torchtitan/models/common/config_utils.py; then
-      sed -i 's|    elif backend == "sdpa":|    elif backend == "sdpa":\n        return ScaledDotProductAttention.Config()\n    elif backend == "sdpa_banned":|' torchtitan/models/common/config_utils.py
-    fi
-    echo "patched config_utils to register ScaledDotProductAttention"
-  fi
-
-  # Patch 4: ChunkedLossWrapper -> CrossEntropyLoss. The wrapper
-  # does backward-inside-forward which leaks meta tensors on NPU
-  # (case doc §2.5); CE loss is mathematically equivalent for the
-  # smoke. The sed `/start/,/end/c\` matches the FIRST occurrence in
-  # the file (sed's default for non-numeric addresses) - this is the
-  # llama3_debugmodel config at line 37; later occurrences at lines
-  # 187/260/312/361 belong to other configs and must stay intact.
-  #
-  # Guard pattern MUST distinguish unpatched from patched state.
-  # The previous guard `grep -q 'global_vocab_size=decoder_vocab_size'`
-  # matched the unpatched file too (line 39 is
-  # `loss_fn=CrossEntropyLoss.Config(global_vocab_size=..., ...)`
-  # inside the unpatched ChunkedLossWrapper), so the patch silently
-  # no-op'd on every run. Caught only when running setup_example.sh
-  # end-to-end on 2026-09-16 - the original 4 supported verifications
-  # applied patches by hand and never exercised this codepath.
-  # The post-patch signature at 8-space indent
-  # `        loss=CrossEntropyLoss.Config(` does not exist in
-  # upstream v0.3.0 (which has ChunkedLossWrapper.Config at that
-  # indent; the only top-level CrossEntropyLoss is at 4-space indent
-  # inside `config.loss = CrossEntropyLoss.Config(` at line 178).
-  if ! grep -q '^        loss=CrossEntropyLoss.Config($' torchtitan/models/llama3/config_registry.py; then
-    sed -i '/^        loss=ChunkedLossWrapper.Config($/,/^        ),$/c\        loss=CrossEntropyLoss.Config(\n            global_vocab_size=decoder_vocab_size(model_spec),\n        ),' torchtitan/models/llama3/config_registry.py
-    echo "patched ChunkedLossWrapper -> CrossEntropyLoss in torchtitan/models/llama3/config_registry.py"
-  fi
-
-  # Patch 5: torch.distributed.set_timeout (module-level, torch 2.13+)
-  # -> ProcessGroup.set_timeout (instance method, torch 2.12). Without
-  # this fix the trainer hits an AttributeError after step 1's
-  # set_pg_timeouts call.
-  if ! grep -q 'ProcessGroup.set_timeout' torchtitan/distributed/utils.py; then
-    sed -i 's|        torch.distributed.set_timeout(timeout, group)|        (group if group is not None else torch.distributed.distributed_c10d._get_default_group()).set_timeout(timeout)|' torchtitan/distributed/utils.py
-    echo "patched torch.distributed.set_timeout -> ProcessGroup.set_timeout in torchtitan/distributed/utils.py"
-  fi
-
-  # Patch 6: drop the torch 2.13-only `separate_full_blocks=` kwarg in
-  # _create_flex_attention_mask. Any model that explicitly selects
-  # attn_backend="flex" (e.g. sft_debugmodel hardcodes this at
-  # torchtitan/models/llama3/config_registry.py:349) goes through
-  # create_block_mask(separate_full_blocks=...) which raises
-  # TypeError on torch 2.12. The kwarg only affects the
-  # batch-invariance optimization (separating fully-unmasked blocks
-  # from partial blocks); removing it falls back to torch 2.12's
-  # default. The trainer never enables batch invariance on this NPU
-  # stack, so the optimization was off in practice anyway. Idempotent:
-  # guard matches the original line, not a subsequent blank line.
-  if grep -q '^            separate_full_blocks=not is_in_batch_invariant_mode(),$' torchtitan/models/common/decoder.py; then
-    sed -i '/^            separate_full_blocks=not is_in_batch_invariant_mode(),$/d' torchtitan/models/common/decoder.py
-    echo "patched separate_full_blocks kwarg removed in torchtitan/models/common/decoder.py"
-  fi
-
-  # Patch 7: sft_debugmodel (torchtitan/models/llama3/config_registry.py
-  # ~line 349) hardcodes attn_backend="flex". On the NPU stack
-  # flex_attention goes through torch.compile -> torch_npu._inductor
-  # which calls `from triton.compiler.compiler import triton_key` (an
-  # unstable community-triton API not exposed in the 3.5.0 wheel pinned
-  # by our triton-ascend pin). The compile fails with ImportError before
-  # any kernel is built. Switch the SFT smoke to sdpa (causal-only): SFT
-  # pipeline, ChatDataLoader and CrossEntropyLoss are the things under
-  # test, document masking is orthogonal. The flex path can be
-  # re-enabled later by upgrading triton or torch_npu.
-  #
-  # Guard pattern fix (2026-09-16): the original guard
-  # `'^        model_spec = model_registry(...)' ` used 8-space indent
-  # but the upstream line at v0.3.0 config_registry.py:350 is at 4-space
-  # indent (inside `def sft_debugmodel()`'s body). The guard never
-  # matched, so patch 7 was silently no-op'd on every run - same class
-  # of bug as patch 4 (see above). Caught by re-running setup_example.sh
-  # end-to-end on a fresh checkout.
-  if grep -q '^    model_spec = model_registry("debugmodel", attn_backend="flex")$' torchtitan/models/llama3/config_registry.py; then
-    sed -i 's|^    model_spec = model_registry("debugmodel", attn_backend="flex")$|    model_spec = model_registry("debugmodel", attn_backend="sdpa")|' torchtitan/models/llama3/config_registry.py
-    echo "patched sft_debugmodel attn_backend flex -> sdpa in torchtitan/models/llama3/config_registry.py"
-  fi
-}
-
 setup_torchtitan() {
-  echo "installing torchtitan from $TARGET_ROOT (release checkout)"
+  echo "installing torchtitan from $TARGET_ROOT (release checkout, as-is)"
   # Install the checked-out release (so the guarded tag is exactly the
   # code that runs) plus the v0.3.0 pyproject dependencies. The full
   # deps are large (torchdata / datasets / tensorboard / wandb / tyro /
@@ -279,7 +148,6 @@ setup_torchtitan() {
     "torchdata>=0.8.0" "datasets>=3.6.0,<4.8.0" tensorboard wandb \
     "spmd_types==0.2.3"
   python -c "import torchtitan; print('torchtitan', torchtitan.__version__)"
-  apply_compat_patches
   write_launchers
 }
 
@@ -294,42 +162,15 @@ setup_torchtitan() {
 # the run_example.sh logic unchanged from peft.
 write_launchers() {
   mkdir -p "$TARGET_ROOT/scripts"
-  cat > "$TARGET_ROOT/scripts/run_llama3_debugmodel_1card.sh" <<'LAUNCHER'
-#!/usr/bin/env bash
-# Launcher for the torchtitan llama3_debugmodel smoke, single rank.
-# Real HCCL backend (comm.mode default) is selected in overlay_args;
-# 1-rank self-barriers, no actual cross-card traffic. Patches 1-5 from
-# projects/torchtitan/docs/Quick-start-Ascend.md §"兼容性补丁" are
-# applied by setup_example.sh; this launcher only injects torchrun.
-# TORCH_NPU_DEVICE_CAPABILITY=9.0 makes torch_npu's shim
-# `torch.cuda.get_device_capability` return (9, 0) for every device
-# (including the freshly-built rng_state tensor in DTensor's
-# OffsetBasedRNGTracker whose `.device` attribute is unset at this
-# point). Without the env var, c10d's `broadcast` path computes
-# `torch.cuda.get_device_capability(tensor.device)[0] >= 9`, hits
-# `None[0]`, and aborts the very first `init_weights` step.
-set -euo pipefail
-export TORCH_NPU_DEVICE_CAPABILITY=9.0
-cd "${TARGET_ROOT:?TARGET_ROOT is required}"
-exec torchrun --nproc_per_node=1 \
-    --rdzv_backend c10d \
-    --rdzv_endpoint="localhost:0" \
-    -m torchtitan.train \
-    "$@"
-LAUNCHER
-  chmod +x "$TARGET_ROOT/scripts/run_llama3_debugmodel_1card.sh"
-
   cat > "$TARGET_ROOT/scripts/run_llama3_debugmodel_2card.sh" <<'LAUNCHER'
 #!/usr/bin/env bash
 # Launcher for the torchtitan llama3_debugmodel smoke, 2 ranks.
 # Adds --parallelism.spmd-backend full_dtensor to overlay_args
 # (Quick-start §"限制四": default spmd_types backend needs torch >=2.13)
 # and --training.dtype bfloat16 to verify mixed precision on HCCL
-# all-reduce. Patches 1-5 applied by setup_example.sh.
-# TORCH_NPU_DEVICE_CAPABILITY=9.0 — see 1-card launcher for the
-# DTensor / c10d broadcast reasoning.
+# all-reduce. setup_example.sh installs upstream v0.3.0 as-is per the
+# no-patch policy.
 set -euo pipefail
-export TORCH_NPU_DEVICE_CAPABILITY=9.0
 cd "${TARGET_ROOT:?TARGET_ROOT is required}"
 exec torchrun --nproc_per_node=2 \
     --rdzv_backend c10d \
@@ -341,17 +182,34 @@ exec torchrun --nproc_per_node=2 \
 LAUNCHER
   chmod +x "$TARGET_ROOT/scripts/run_llama3_debugmodel_2card.sh"
 
+  cat > "$TARGET_ROOT/scripts/run_llama3_debugmodel_1card.sh" <<'LAUNCHER'
+#!/usr/bin/env bash
+# Launcher for the torchtitan llama3_debugmodel default smoke, 1 rank.
+# Uses the default registry config (ChunkedLossWrapper path);
+# the ce_loss variant uses CrossEntropyLoss direct wiring. Two
+# parallel launchers document the config switch and let CI detect
+# drift between the two wiring paths. Empirically rc=0 on
+# torch 2.12.0+cpu + torch_npu 2.12.0 + CANN 9.1.0
+# (hdc-stable-npu-4, 2026-09-17). setup_example.sh installs upstream
+# v0.3.0 as-is per the no-patch policy.
+set -euo pipefail
+cd "${TARGET_ROOT:?TARGET_ROOT is required}"
+exec torchrun --nproc_per_node=1 \
+    --rdzv_backend c10d \
+    --rdzv_endpoint="localhost:0" \
+    -m torchtitan.train \
+    "$@"
+LAUNCHER
+  chmod +x "$TARGET_ROOT/scripts/run_llama3_debugmodel_1card.sh"
+
   cat > "$TARGET_ROOT/scripts/run_llama3_debugmodel_ce_loss_1card.sh" <<'LAUNCHER'
 #!/usr/bin/env bash
 # Launcher for the llama3_debugmodel_ce_loss variant. Same as the base
 # 1-card launcher; the registry entry uses
-# --config llama3_debugmodel_ce_loss which is the same CrossEntropyLoss
-# wiring the patch sets up for llama3_debugmodel. Keeping a separate
-# launcher so the manifest path documents the config switch.
-# TORCH_NPU_DEVICE_CAPABILITY=9.0 — see 1-card launcher for the
-# DTensor / c10d broadcast reasoning.
+# --config llama3_debugmodel_ce_loss. Keeping a separate launcher so
+# the manifest path documents the config switch. setup_example.sh
+# installs upstream v0.3.0 as-is per the no-patch policy.
 set -euo pipefail
-export TORCH_NPU_DEVICE_CAPABILITY=9.0
 cd "${TARGET_ROOT:?TARGET_ROOT is required}"
 exec torchrun --nproc_per_node=1 \
     --rdzv_backend c10d \
@@ -361,18 +219,37 @@ exec torchrun --nproc_per_node=1 \
 LAUNCHER
   chmod +x "$TARGET_ROOT/scripts/run_llama3_debugmodel_ce_loss_1card.sh"
 
+  cat > "$TARGET_ROOT/scripts/run_llama3_debugmodel_dist_gemm_1card.sh" <<'LAUNCHER'
+#!/usr/bin/env bash
+# Launcher for the torchtitan llama3_debugmodel_dist_gemm variant,
+# 1 rank. TP=1 path: trainer logs "tp_gemm_backend='dist_gemm'
+# selected but tensor parallelism is not active; running the stock
+# projections. Nothing is fused." — i.e. dist_gemm is a no-op on
+# TP=1, so the smoke verifies the flag is accepted and dispatch
+# resolves without error. TP>=2 path goes through
+# torch.distributed._symmetric_memory (torch 2.13+ API) and is
+# blocked by torch 2.12 ABI on multi-card — not exercised here.
+# Empirically rc=0 on hdc-stable-npu-4, 2026-09-17. setup_example.sh
+# installs upstream v0.3.0 as-is per the no-patch policy.
+set -euo pipefail
+cd "${TARGET_ROOT:?TARGET_ROOT is required}"
+exec torchrun --nproc_per_node=1 \
+    --rdzv_backend c10d \
+    --rdzv_endpoint="localhost:0" \
+    -m torchtitan.train \
+    "$@"
+LAUNCHER
+  chmod +x "$TARGET_ROOT/scripts/run_llama3_debugmodel_dist_gemm_1card.sh"
+
   cat > "$TARGET_ROOT/scripts/run_sft_debugmodel_1card.sh" <<'LAUNCHER'
 #!/usr/bin/env bash
 # Launcher for the sft_debugmodel example (torchtitan SFT, 1-card).
 # sft_debugmodel is a config in torchtitan/models/llama3/config_registry.py:349
 # (not a separate module), so the entry is the same
 # -m torchtitan.train with --module llama3 --config sft_debugmodel.
-# Patches 1-5 cover it identically to llama3_debugmodel because
-# both use the llama3 model + CE loss.
-# TORCH_NPU_DEVICE_CAPABILITY=9.0 — see 1-card launcher for the
-# DTensor / c10d broadcast reasoning.
+# setup_example.sh installs upstream v0.3.0 as-is per the no-patch
+# policy.
 set -euo pipefail
-export TORCH_NPU_DEVICE_CAPABILITY=9.0
 cd "${TARGET_ROOT:?TARGET_ROOT is required}"
 exec torchrun --nproc_per_node=1 \
     --rdzv_backend c10d \

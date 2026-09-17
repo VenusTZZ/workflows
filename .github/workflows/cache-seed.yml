@@ -1,0 +1,84 @@
+# Generic runner-cache seeder - manual maintenance workflow.
+#
+# Two seeding halves (both idempotent, both target SHARED_CACHE_ROOT,
+# default ~/.cache/huggingface):
+#   1. repo bundles - cache-seed/<project>/<prefix>/<file> content that
+#      ModelScope does not carry (gated repos, niche datasets), staged
+#      from a proxied local HF download:
+#        cache-seed/<project>/<prefix>/<file>        -> <root>/<prefix>/<file>        (cp + verify)
+#        cache-seed/<project>/<prefix>/<file>.part-* -> <root>/<prefix>/<file>        (cat + verify)
+#   2. ModelScope plants - cache-seed/<project>/ms_seeds.yaml declares
+#      the assets the examples hardcode; scripts/ms_seed.py downloads
+#      from ModelScope and plants them into the HF hub cache layout
+#      (refs/main = real upstream sha) so example-time
+#      from_pretrained / load_dataset resolve locally. The pool shares
+#      one persistent cache volume, so one dispatch warms every runner.
+#
+# Single sha256 check per bundle file (see scripts/cache_seed.py):
+#   bundle_cache.py  (staging)   streams sha256, writes manifest.yaml
+#   cache_seed.py    (delivery)  re-streams sha256 after copy/cat,
+#                                aborts on mismatch
+#
+# Idempotent - re-dispatch any time; an already-warm machine finishes
+# in minutes. The matrix fans out to cover several runner machines per
+# dispatch. Re-dispatch when: new bundles / ms_seeds entries landed,
+# an upstream repo moved (sha drift), or the pool grew.
+
+name: cache-seed
+
+on:
+  workflow_dispatch:
+    inputs:
+      projects:
+        description: 'Comma-separated project filter under cache-seed/ (empty = all)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cache-seed
+  # idempotent, but let a running seed finish instead of cancelling
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    runs-on: linux-aarch64-a2-1
+    # ModelScope plants for a fully cold cache move ~30G (accelerate 27G
+    # + peft 3G); shared volume makes extra matrix slots no-ops.
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        # ONE slot: the pool shares a single persistent cache volume, so
+        # one seeding pass covers every runner (the 4-slot fan-out from
+        # the per-machine era only stacked queue pressure — see run
+        # 35197422474 waiting 13+ min for runners). Bump back up if the
+        # pool ever switches to per-machine caches.
+        slot: [1]
+    container:
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    env:
+      # 共享缓存根；不设时 Python 走 ~/.cache/huggingface。本地 / 自建 runner
+      # 想换路径直接 export SHARED_CACHE_ROOT=/path/to/cache 覆盖即可。
+      PIP_INDEX_URL: http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple
+      PIP_TRUSTED_HOST: cache-service.nginx-pypi-cache.svc.cluster.local
+      PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
+      PIP_TIMEOUT: "120"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install seeder stack
+        run: |
+          python -m pip install -U pip
+          # huggingface_hub 仅 post_verify.kind=hf_cache 时用得到，pyyaml 读
+          # manifest / ms_seeds，modelscope 供 ms_seed.py 拉取（pin 理由见
+          # scripts/ms_seed.py：1.40.1 + hub 0.4.2 import 必挂）
+          python -m pip install "huggingface_hub<1.0" pyyaml "modelscope==1.37.0"
+
+      - name: Seed shared cache (repo bundles)
+        run: python scripts/cache_seed.py --projects "${{ inputs.projects }}"
+
+      - name: Seed shared cache (ModelScope plants)
+        run: python scripts/ms_seed.py --projects "${{ inputs.projects }}"

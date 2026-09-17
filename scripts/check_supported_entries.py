@@ -21,7 +21,7 @@ import argparse
 import json
 import os
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 
@@ -60,6 +60,11 @@ def validate(supported: list[dict], target_root: Path
         entry['overlay_args'] = overlay_args
         if exec_path is not None:
             entry['exec'] = exec_path.strip()
+        # Display name for the run-example job label: basename of path
+        # with extension stripped (e.g. examples/sft/run_peft.sh ->
+        # run_peft). Workflow templates use this so the matrix leg label
+        # is the script name rather than its full relative path.
+        entry['name'] = PurePosixPath(path).stem
         entries.append(entry)
     return entries, errors
 

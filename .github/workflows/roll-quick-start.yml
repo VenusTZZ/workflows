@@ -1,0 +1,47 @@
+# ROLL quick start guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/quick-start-template.yml;
+# this file only declares what varies per project: concurrency,
+# runner, container image + options, upstream repo, monitored doc,
+# and the test entry command. The guard loop, cache I/O, state relay
+# and publishing all live in the engine.
+#
+# The doc clones vLLM/vLLM-Ascend/ROLL from GitHub and builds
+# vLLM-Ascend from source (SOC_VERSION=ascend910b1), so the shared
+# CANN devel image must carry gcc/cmake - it does (9.1.0-910b).
+# The example auto-downloads Qwen2.5-0.5B-Instruct (~1 GB) into the
+# default modelscope cache; a shared cache volume is mounted for CI
+# persistence (same convention as trl / peft / openrlhf).
+
+name: roll-quick-start
+
+concurrency:
+  group: ${{ github.event_name == 'schedule' && 'roll-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+on:
+  # Enable after the first successful workflow_dispatch run.
+  # schedule:
+  #   - cron: '35 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  roll-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      project: roll
+      test_runner: '["linux-aarch64-a2-1"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      container_options: >-
+        --shm-size=32g
+        --volume=/data/ci-cache/modelscope/roll:/root/.cache/modelscope
+      # Two vLLM source builds (~20-40 min) + requirements_common +
+      # ~1 GB model download + a 2-step agentic train run on one card.
+      timeout_minutes: 240
+      upstream_repo: alibaba/ROLL
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/roll/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/roll/docs/Quick-start-Ascend.md
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

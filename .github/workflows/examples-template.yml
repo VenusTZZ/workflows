@@ -18,6 +18,10 @@ on:
         description: Dispatch-only ref under test (defaults to main)
         type: string
         default: ''
+      examples_repo:
+        description: Repo containing the example scripts (defaults to upstream_repo)
+        type: string
+        default: ''
       max_parallel:
         description: Max parallel run-example matrix legs
         type: number
@@ -206,17 +210,31 @@ jobs:
           ref: ${{ needs.monitor.outputs.target_ref }}
           path: target
 
+      # Split mode (examples_repo set): the example scripts live in a
+      # separate repo from the monitored upstream. Release tags do not
+      # exist in the examples repo, so it always follows its default
+      # branch (DeepSpeedExamples uses master, not main).
+      - name: Checkout examples repo
+        if: inputs.examples_repo != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.examples_repo }}
+          path: examples
+
       - name: Check supported entries and derive matrix
         id: check
+        env:
+          # Non-split: the example tree is the upstream checkout itself.
+          EXAMPLES_ROOT: ${{ inputs.examples_repo != '' && 'examples' || 'target' }}
         run: |
           set -euo pipefail
           python3 -m pip install -q pyyaml
           python3 workflows/scripts/check_supported_entries.py \
-            --target-root target \
+            --target-root "$EXAMPLES_ROOT" \
             --manifest "workflows/projects/${{ inputs.project }}/examples_manifest.yaml"
 
   run-example:
-    name: run-example (${{ matrix.example.path }})
+    name: ${{ matrix.example.name }}
     needs: [monitor, manifest-check]
     if: needs.manifest-check.outputs.has_supported == 'true'
     runs-on: ${{ matrix.example.runner }}
@@ -232,15 +250,11 @@ jobs:
     env:
       PROJECT_ROOT: ${{ github.workspace }}/workflows/projects/${{ inputs.project }}
       TARGET_ROOT: ${{ github.workspace }}/target
+      # Split mode: examples live in their own checkout; non-split: the
+      # example tree is the upstream checkout itself (TARGET_ROOT).
+      EXAMPLES_ROOT: ${{ inputs.examples_repo != '' && format('{0}/examples', github.workspace) || format('{0}/target', github.workspace) }}
       FIXTURE_DIR: ${{ github.workspace }}/workflows/projects/${{ inputs.project }}/fixtures
       HF_ENDPOINT: https://hf-mirror.com
-      # modelscope snapshot_download re-hashes every cached file against
-      # the server sha256 and re-downloads on mismatch. Default-off in the
-      # SDK ("just meet expectation by default", caching.py) — a corrupt
-      # cache would fail every run forever without this. Must be set before
-      # modelscope is imported (module-level constant). Cost: a few seconds
-      # of sha256 per setup for multi-GB caches.
-      MODELSCOPE_ENABLE_DEFAULT_HASH_VALIDATION: "true"
       # When the mirror passes xet metadata through, hf_xet downloads
       # chunks straight from xethub.hf.co hosts, bypassing HF_ENDPOINT
       # (unreachable from the CN runners) — same fix as llm-compressor.
@@ -248,6 +262,13 @@ jobs:
       # 302s to cas-bridge.xethub.hf.co regardless; those must be
       # pre-downloaded (see peft supertuning's fixture).
       HF_HUB_DISABLE_XET: "1"
+      # evaluate's metric caches (predictions/references arrow files) are
+      # per-job scratch with zero cross-job value — keep them OFF the
+      # shared persistent volume (default ~/.cache/huggingface/metrics).
+      # That volume is also where cross_validation hit Errno 5 EIO on a
+      # metrics-file close (run 35188975420) and where every glue-metric
+      # leg would otherwise contend on the same fixed path.
+      HF_METRICS_CACHE: ${{ github.workspace }}/.hf-metrics
       PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
       PIP_TIMEOUT: "120"
     container:
@@ -264,6 +285,13 @@ jobs:
           repository: ${{ inputs.upstream_repo }}
           ref: ${{ needs.monitor.outputs.target_ref }}
           path: target
+
+      - name: Checkout examples repo
+        if: inputs.examples_repo != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.examples_repo }}
+          path: examples
 
       - name: Setup example environment
         env:
@@ -283,7 +311,7 @@ jobs:
             2>&1 | tee "$GITHUB_WORKSPACE/output/train.log"
 
   validate-results:
-    name: publish-result (${{ matrix.example.path }})
+    name: publish-result (${{ matrix.example.name }})
     needs: [monitor, manifest-check, run-example]
     if: always() && needs.manifest-check.outputs.has_supported == 'true'
     runs-on: ubuntu-latest
@@ -304,7 +332,7 @@ jobs:
           TRIGGER: ${{ needs.monitor.outputs.trigger }}
           EXAMPLE_PATH: ${{ matrix.example.path }}
           IMAGE: ${{ matrix.example.image }}
-          EXPECTED_JOB_NAME: run-example (${{ matrix.example.path }})
+          EXPECTED_JOB_NAME: ${{ matrix.example.name }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
