@@ -19,6 +19,14 @@
 # (no generation), so the eval needs only forward passes — fits the 1-step
 # smoke pattern used by the rest of the manifest.
 #
+# doc_to_choice is required by the multiple_choice task: lm_eval's
+# construct_requests() (api/task.py:1311) calls self.doc_to_choice(doc) to
+# extract the list of candidates; without it, doc_to_choice raises TypeError
+# (api/task.py:1258, "doc_to_choice was called but not set in config"). For
+# TruthfulQA mc2 the choices live at doc.mc2_targets.choices, and labels at
+# doc.mc2_targets.labels — lm_eval picks the highest-loglikelihood choice
+# whose label==1 as the gold answer (see ConfigurableTask.process_results).
+#
 # Metric is `acc` (built-in) instead of `mc2` (custom TruthfulQA-specific
 # aggregation in lm_eval's truthfulqa/utils.py) because we want a metric
 # that's guaranteed importable from a stock lm-eval install, with no
@@ -31,7 +39,8 @@ output_type: multiple_choice
 training_split: null
 validation_split: train
 doc_to_text: "{{question}}\nA:"
-doc_to_target: "{{mc2_targets.choices}}"
+doc_to_choice: "{{mc2_targets.choices}}"
+doc_to_target: "{{mc2_targets.labels}}"
 target_delimiter: " "
 metric_list:
   - metric: acc
