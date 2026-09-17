@@ -15,23 +15,29 @@ scan:
     - torchtitan/docs                                # 文档源
     - torchtitan/protocols                           # 结构化日志协议定义
     - torchtitan/tests                               # 自测 + tests/assets tokenizer
-    - torchtitan/experiments/rl/rollout              # vLLM rollout (CUDA-only)
-    - torchtitan/experiments/rl/renderer.py          # vLLM renderer (CUDA-only)
-    - torchtitan/experiments/rl/rollout_recorder.py  # vLLM recorder (CUDA-only)
-    - torchtitan/experiments/rl/components           # vLLM comm hooks (CUDA-only)
-    - torchtitan/experiments/rl/actors              # vLLM actors (CUDA-only)
-    - torchtitan/experiments/rl/environment         # env wrappers (gym / cuda)
-    - torchtitan/experiments/rl/losses               # grpo / dapo losses
-    - torchtitan/experiments/rl/models               # rl-specific model heads
-    - torchtitan/experiments/rl/observability        # rl-specific logging
-    - torchtitan/experiments/rl/routing              # rl router (cuda)
-    - torchtitan/experiments/rl/rubrics              # rl rubric scoring
-    - torchtitan/experiments/rl/scripts              # rl shell launchers
-    - torchtitan/experiments/rl/tests               # rl tests
-    - torchtitan/experiments/rl/types.py            # rl types
-    - torchtitan/experiments/rl/controller.py       # rl controller
-    - torchtitan/experiments/rl/controller_metrics.py  # rl controller metrics
-    - torchtitan/experiments/rl/batch_invariance.py  # rl batch invariance test
+    # ===== rl/ 子树：utility 模块（不涉及）=====
+    # 不放 unsupported 因为这些是 import 库不是入口点。真正的 rl
+    # 入口（rl/train.py + rl/generate.py + rl/scripts/loss_compare.py）
+    # 已在 unsupported 段。下面这些是它们 import 的工具 / 数据结构 /
+    # actor 类定义，不是 example 形态：
+    - torchtitan/experiments/rl/rollout              # Rollout / RolloutGroup / Turn dataclass（被 rl/train.py import）
+    - torchtitan/experiments/rl/renderer.py          # RENDERER_BY_MODEL 字典 + Renderer 注册（被 rl/components 间接 import）
+    - torchtitan/experiments/rl/rollout_recorder.py  # RolloutRecorder JSONL 序列化工具
+    - torchtitan/experiments/rl/components           # Batcher / TrainingSampleBuilder / WeightSync / WorkBuffer
+    - torchtitan/experiments/rl/actors               # Generator / PolicyTrainer 类（actor 框架，monarch 依赖）
+    - torchtitan/experiments/rl/environment          # Message / Token dataclass + gym wrapper
+    - torchtitan/experiments/rl/losses               # DAPOLoss / GRPOLoss 类
+    - torchtitan/experiments/rl/models               # rl-specific attention / cast_linear / vllm_worker
+    - torchtitan/experiments/rl/observability        # rl-specific metrics（被 rl/controller_metrics import）
+    - torchtitan/experiments/rl/routing              # InterGeneratorRouter / IntraGeneratorRouter
+    - torchtitan/experiments/rl/rubrics              # RewardFn abstract + rubric 评分
+    # rl/scripts 子包：__init__.py 由 **/__init__.py glob 兜底，
+    # loss_compare.py 是真实入口（已转 unsupported 段）。
+    - torchtitan/experiments/rl/tests                # rl 包内单测（**/tests/** 兜底）
+    - torchtitan/experiments/rl/types.py             # rl 共享 dataclass types
+    - torchtitan/experiments/rl/controller.py        # async controller 协调逻辑（_rollout_loop 等）
+    - torchtitan/experiments/rl/controller_metrics.py  # MetricsTimer 工具
+    - torchtitan/experiments/rl/batch_invariance.py  # BatchInvariantFlexConverter + runtime patches
     # GraphTrainer 内部的非 example 入口（被 precompile_main.py / run_train_precompile.sh import，
     # 但自身不能独立 dispatch）：
     - torchtitan/experiments/graph_trainer/precompile.py
@@ -443,11 +449,20 @@ unsupported:
   #       ModuleNotFoundError: No module named 'vllm'
   #       （line 27: from vllm import EngineArgs, LLMEngine,
   #       SamplingParams）
+  #   - rl/scripts/loss_compare.py rc=1
+  #       GRPO loss regression 检测脚本（与顶层 scripts/loss_compare.py
+  #       同 pattern），通过 subprocess 跑 rl/train.py；自身 main() 也会
+  #       触发从 `scripts.loss_compare` import——v0.3.0 仓库根没有
+  #       `scripts/loss_compare.py`（仅 rl/scripts/ 下有这一份），该
+  #       sibling import 必 fail；同时它子进程调用的 rl/train.py 因
+  #       monarch 缺失也 fail。两层 root cause 都是 CUDA-only RL 栈。
   # 注释里说的 "vllm-ascend ABI 对齐 torch 2.10" 是在 vLLM 真装上后
   # 才相关；当前栈连 vllm + monarch 都没装，import 阶段就 fail。
-  # 退役条件：monarch + vllm-ascend（torch 2.12 ABI）安装到位。
+  # 退役条件：monarch + vllm-ascend（torch 2.12 ABI）安装到位 + 仓库
+  # 根补回 scripts/loss_compare.py。
   - torchtitan/experiments/rl/train.py
   - torchtitan/experiments/rl/generate.py
+  - torchtitan/experiments/rl/scripts/loss_compare.py
 
   # ===== Forge / graph_trainer / torchft / transformers_modeling_backend =====
   # 实测证据（2026-09-15）：
