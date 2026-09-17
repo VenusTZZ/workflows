@@ -121,13 +121,15 @@ supported:
 
   # SmolLM-360M + wikitext-2 截断 500 条，360M + AdamW ≈ 4.3G，32G HBM
   # 无压力。显式 ga=4 让 accumulation 路径真实生效（argparse 默认 1）。
+  # 资产：SmolLM/wikitext 走 ModelScope plant（accelerate-nlp-ar profile，
+  # setup 时 validate_ar_assets 校验在位）。
   - path: examples/by_feature/gradient_accumulation_for_autoregressive_models.py
-    profile: accelerate-nlp
+    profile: accelerate-nlp-ar
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --gradient_accumulation_steps 4
-    timeout_minutes: 45
+    timeout_minutes: 60
 
   # schedulefree 是纯 Python 包（wheel 为 py3-none-any，无 native 扩展），
   # 装上后是普通张量运算。bert/mrpc 默认 3 epochs，同其他 by_feature 条目。
