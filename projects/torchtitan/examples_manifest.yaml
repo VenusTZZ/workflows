@@ -31,16 +31,12 @@ scan:
     - torchtitan/experiments/rl/observability        # rl-specific metrics（被 rl/controller_metrics import）
     - torchtitan/experiments/rl/routing              # InterGeneratorRouter / IntraGeneratorRouter
     - torchtitan/experiments/rl/rubrics              # RewardFn abstract + rubric 评分
-    # rl/scripts 子包：__init__.py 由 **/__init__.py glob 兜底，
-    # loss_compare.py 是真实入口（已转 unsupported 段）。
+    # rl/scripts 子包：__init__.py 由 **/__init__.py glob 兜底，loss_compare.py 是真实入口（已转 unsupported 段）。
     - torchtitan/experiments/rl/tests                # rl 包内单测（**/tests/** 兜底）
     - torchtitan/experiments/rl/types.py             # rl 共享 dataclass types
     - torchtitan/experiments/rl/controller.py        # async controller 协调逻辑（_rollout_loop 等）
     - torchtitan/experiments/rl/controller_metrics.py  # MetricsTimer 工具
     - torchtitan/experiments/rl/batch_invariance.py  # BatchInvariantFlexConverter + runtime patches
-    # GraphTrainer 内部的非 example 入口（被 precompile_main.py / run_train_precompile.sh import，
-    # 但自身不能独立 dispatch）：
-    - torchtitan/experiments/graph_trainer/precompile.py
     # GraphTrainer 内部的非 example 入口（被 precompile_main.py / run_train_precompile.sh import，
     # 但自身不能独立 dispatch）：
     - torchtitan/experiments/graph_trainer/precompile.py
@@ -248,25 +244,26 @@ unsupported:
   #       no-op，trainer.log 打 "tp_gemm_backend='dist_gemm' selected
   #       but tensor parallelism is not active; running the stock
   #       projections. Nothing is fused."）。
-  #       仍留 unsupported：TP≥2 的 dist_gemm 真路径走
-  #       torch.distributed._symmetric_memory（torch 2.13+ API）做
-  #       cross-process param shard；torch 2.12 无此模块。验证 TP≥2
-  #       需要 2-card runner 切到 TP=2 + dist_gemm，与 2-card debugmodel
-  #       smoke 不重叠。
+  #       仍留 unsupported：实测绿但留作「不跑只为不增加 CI 成本」——
+  #       跟 supported #2 llama3_debugmodel_ce_loss 共用同一 trainer
+  #       路径，dist_gemm 在 TP=1 不激活，多一条 smoke = 多 ~10min
+  #       CI 零信号增量。TP≥2 真路径走 torch.distributed._
+  #       symmetric_memory（torch 2.13+ API）做 cross-process param
+  #       shard；torch 2.12 无此模块；并且 2-card 上跑 TP=2 + dist_gemm
+  #       必撞同 supported #3 的 c10d broadcast，无独立信号。
   #   - llama3_debugmodel_varlen_attn
   #       rc=1（exitcode 1 但 root cause 在 trainer init 阶段被裁切，
   #       rc=2 间接信号）—— 需要 varlen 包路径 + 模型端
   #       inner_attention=VarlenAttention 走通；与上面一样涉及
   #       torch 2.13+ 路径，未做端到端验证。
-  #   - llama3_debugmodel_flex
-  #       rc=1；ValueError: Config function 'llama3_debugmodel_flex'
-  #       not found in torchtitan.models.llama3.config_registry.
-  #       （v0.3.0 上游根本没注册这个函数；manifest 该条 stale，
-  #       不应再被引擎命中；保留以免上游再加回同名 entry。）
+  # （llama3_debugmodel_flex 这一条在 2026-09-17 源码审计中确认为
+  # stale 死代码：grep models/llama3/config_registry.py 找不到
+  # def llama3_debugmodel_flex；attn_backend="flex" 只在 sft_debugmodel
+  # 内部作 model_registry 参数出现。Engine 永远不会 dispatch 到该
+  # manifest entry，已从 unsupported 移除。）
   # 退役条件：torch 2.13 ABI 适配 / 上游不复活 flex debug entry。
   - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_dist_gemm
   - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_varlen_attn
-  - torchtitan/models/llama3/config_registry.py:llama3_debugmodel_flex
 
   # ===== qwen3 族：分三类失败（triton_key / OOM / 文件缺失） =====
   # 实测证据（2026-09-15）：
@@ -305,8 +302,10 @@ unsupported:
   #     - qwen3_8b_first_85_pct_layers_nvfp4
   #
   # 退役条件：(A) triton-ascend 暴露 triton_key 或 qwen3 patch 1+2
-  # 默认 sdpa；(B) NPU 适配 Flash-3；(C) 双卡/四卡 runner 上线；
-  # (D) 资产预下载；(E) torchao NVFP4 prototype。
+  # 默认 sdpa；(B) NPU 适配 Flash-3；(C) ≥8 GB HBM 单卡不够，需
+  # 量化/CPU offload + 多卡；(D) 资产预下载；(E) torchao NVFP4
+  # prototype。注：linux-aarch64-a2-2（2 卡 64 GB HBM）不能解 (C)，
+  # 因为 AdamW fp32 + 8B+ 单 shard 已超 32 GB；需要 ≥8 卡或 CPU offload。
   - torchtitan/models/qwen3/config_registry.py:qwen3_debugmodel
   - torchtitan/models/qwen3/config_registry.py:qwen3_debugmodel_flex_flash
   - torchtitan/models/qwen3/config_registry.py:qwen3_debugmodel_nvfp4
@@ -323,21 +322,30 @@ unsupported:
   - torchtitan/models/qwen3/config_registry.py:qwen3_32b
   - torchtitan/models/qwen3/config_registry.py:sft_qwen3_8b_math
 
-  # ===== qwen3_5 族：模块根本未挂到 train.py 的 config_registry 调度链 =====
-  # 实测证据（2026-09-15）：9 个 entry 全部 rc=1，错误一致：
-  #   ImportError: Cannot import config_registry for module 'qwen3_5'
-  #   from torchtitan.models, torchtitan.experiments, or
-  #   torchtitan.experiments.rl.examples
-  # 即 torchtitan/models/qwen3_5/ 目录存在（config_registry.py 在）
-  # 但没被 torchtitan/train.py 的 MODULES 列表注册；调用
-  # `--module qwen3_5` 直接走 dispatcher 拒绝路径。这与 RoPE /
-  # RMSNorm / FFN kernel 的 NPU 兼容性无关——manifest 上一版说的
-  # "kernel 未验证" 假设不成立：是 dispatcher wiring 缺失。
+  # ===== qwen3_5 族：model.py 顶层 import spmd_types + fla 库缺失 =====
+  # 2026-09-17 源码审计修正：之前 manifest 写"模块未挂到 dispatcher
+  # 调度链"是错的——`torchtitan/models/__init__.py:7-18`
+  # `_supported_models` 显式含 "qwen3_5"，`models/qwen3_5/__init__.py`
+  # 有完整 `model_registry` + `parallelize_qwen3_5` + state_dict_adapter
+  # wiring。真实根因：
+  #   - `models/qwen3_5/model.py:13` 硬导入 `import spmd_types as spmd`
+  #     （默认 `parallelism.spmd-backend` 后端，需 torch ≥2.13 的
+  #     FSDP dp_mesh_dims 翻译；torch 2.12 无此模块——同 supported #3
+  #     注释里说的 multi-card ValueError。）
+  #   - `models/qwen3_5/model.py:15-21` 硬导入 fla 库：
+  #     `from fla.modules.conv.triton.ops import CausalConv1dFunction`
+  #     `from fla.ops.gated_delta_rule import ...`（社区
+  #     flash-linear-attention，本栈没装；本地 Python 直接验证
+  #     ModuleNotFoundError: No module named 'fla'）。
+  # 实测证据（2026-09-15）：9 个 entry 全部 rc=1；import 链在 fla /
+  # spmd_types 阶段 fail，dispatcher 收到的是 ImportError traceback 末
+  # 尾的 "Cannot import config_registry for module 'qwen3_5'..." 包装
+  # 错误，看起来像 dispatcher 没注册，实际是 import 提前 fail。
   # 影响条目（9 个）：
   #   qwen35_debugmodel, _varlen_attn, _moe, _0_8b, _2b, _4b,
   #   _9b, _27b, _35b_a3b
-  # 退役条件：上游把 qwen3_5 加入 train.py MODULES，或在
-  # torchtitan/models/qwen3_5/__init__.py 暴露 model_registry 入口。
+  # 退役条件：fla 库发布 NPU 适配 wheel + torch 升级到 ≥2.13
+  # （spmd_types 后端可用）。
   - torchtitan/models/qwen3_5/config_registry.py:qwen35_debugmodel
   - torchtitan/models/qwen3_5/config_registry.py:qwen35_debugmodel_varlen_attn
   - torchtitan/models/qwen3_5/config_registry.py:qwen35_debugmodel_moe
@@ -388,16 +396,30 @@ unsupported:
   - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_671b
   - torchtitan/models/deepseek_v3/config_registry.py:deepseek_v3_671b_float8
 
-  # ===== kimi 族：模块未挂到 train.py 的 config_registry 调度链 =====
-  # 实测证据（2026-09-15）：3 个 entry 全部 rc=1，错误一致：
-  #   ImportError: Cannot import config_registry for module 'kimi_k2_7'
-  #   from torchtitan.models, torchtitan.experiments, or
-  #   torchtitan.experiments.rl.examples
-  # 同 qwen3_5：torchtitan/models/kimi_k2_7/ 目录存在但 dispatcher
-  # 没注册。注释里 "kimi_k2_5 有 vision encoder" 是真假设——但实际
-  # 连普通 LLM 路径都跑不通。
+  # ===== kimi 族：spmd_types 缺失 + 继承 deepseek_v3 整条链 =====
+  # 2026-09-17 源码审计修正：之前 manifest 写"模块未挂到 dispatcher
+  # 调度链"是错的——同 qwen3_5，`kimi_k2_7` 在
+  # `torchtitan/models/__init__.py:7-18` `_supported_models` 列表里，
+  # `models/kimi_k2_7/__init__.py` 有完整 `model_registry` wiring。
+  # 真实根因：
+  #   - `models/kimi_k2_7/model.py:13` 硬导入 `import spmd_types as spmd`
+  #     （同 qwen3_5，需要 torch ≥2.13；本地 Python 验证
+  #     `ModuleNotFoundError: No module named 'spmd_types'`）。
+  #   - `models/kimi_k2_7/model.py:24`
+  #     `from torchtitan.models.deepseek_v3 import build_mla_moe_layers`
+  #     — kimi 把 MoE 层从 deepseek_v3 直接 import 过来，所以继承
+  #     deepseek_v3 整条链的所有上游 NPU blocker（triton_key /
+  #     CustomClassBase / MXFP8 / float8 量化 / expert_parallel_degree
+  #     要求等）。具体见上面 deepseek_v3 段的实测错误码。
+  #   - `models/kimi_k2_7/model.py:30`
+  #     `from .vision_encoder import KimiK25VisionEncoder`（kimi_vl_a3b
+  #     走 vision 路径，multimodal 数据加载需要额外 tokenizer 资产）。
+  # 实测证据（2026-09-15）：3 个 entry 全部 rc=1，import 链 fail
+  # 路径跟 qwen3_5 类似，错误表面看像 dispatcher 没注册，实际是
+  # spmd_types / deepseek_v3 链 import 提前 fail。
   # 影响条目：kimi_k2_5_debugmodel, kimi_vl_a3b, kimi_k2_5
-  # 退役条件：上游把 kimi_k2_7 加入 train.py MODULES。
+  # 退役条件：torch 升级到 ≥2.13（spmd_types）+ deepseek_v3 链所有
+  # 上游 NPU blocker 解除 + kimi_vl_a3b 资产预下载。
   - torchtitan/models/kimi_k2_7/config_registry.py:kimi_k2_5_debugmodel
   - torchtitan/models/kimi_k2_7/config_registry.py:kimi_vl_a3b
   - torchtitan/models/kimi_k2_7/config_registry.py:kimi_k2_5
