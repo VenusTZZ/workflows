@@ -66,16 +66,35 @@ def plant(ms_id: str, hf_id: str, kind: str, root: Path,
           allow_patterns: list[str] | None) -> None:
     from modelscope import snapshot_download
 
+    sha = fetch_sha(hf_id, kind)
+    repo_kind = "models" if kind == "model" else "datasets"
+    repo_dir = root / "hub" / f"{repo_kind}--{hf_id.replace('/', '--')}"
+    snap_dir = repo_dir / "snapshots" / sha
+    refs = repo_dir / "refs" / "main"
+
+    # Fast path: already seeded at the current upstream sha — skip the
+    # modelscope call entirely. Without this, snapshot_download would
+    # hash-verify every existing file in its cache (silent, minutes for
+    # multi-GB repos) even when there is nothing new to plant.
+    if (refs.is_file() and refs.read_text().strip() == sha
+            and snap_dir.is_dir()
+            and any(p.is_file() for p in snap_dir.rglob("*"))):
+        n = sum(1 for p in snap_dir.rglob("*") if p.is_file())
+        print(f"[skip] {hf_id}@{sha[:8]} already seeded ({n} files)",
+              flush=True)
+        return
+
+    print(f"[fetch] {hf_id} <- {ms_id} (ModelScope)"
+          + (f" patterns={allow_patterns}" if allow_patterns else "")
+          + " — 大仓库在 MS 缓存不齐时会先静默哈希校验/下载，"
+            f"期间无逐文件输出，属正常", flush=True)
+
     model_cache = Path(os.environ.get(
         "MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope")))
     src = Path(snapshot_download(
         ms_id, cache_dir=str(model_cache), repo_type=kind,
         allow_patterns=allow_patterns,
     ))
-    sha = fetch_sha(hf_id, kind)
-    repo_kind = "models" if kind == "model" else "datasets"
-    repo_dir = root / "hub" / f"{repo_kind}--{hf_id.replace('/', '--')}"
-    snap_dir = repo_dir / "snapshots" / sha
     snap_dir.mkdir(parents=True, exist_ok=True)
     (repo_dir / "refs").mkdir(exist_ok=True)
     # no trailing newline — hub compares this string to the snapshot
@@ -95,7 +114,7 @@ def plant(ms_id: str, hf_id: str, kind: str, root: Path,
             continue  # warm cache: keep the already-planted copy
         shutil.copy2(item, dest)
         n_bytes += item.stat().st_size
-    print(f"planted {hf_id}@{sha[:8]} ({n_bytes // (1024 * 1024)} MB new)",
+    print(f"[done] {hf_id}@{sha[:8]} ({n_bytes // (1024 * 1024)} MB new)",
           flush=True)
 
 
