@@ -45,6 +45,15 @@ supported:
   # 用它做 (target_root/path).exists() 校验）；exec 是真正的可执行
   # launcher（setup 写入 target/scripts/），它内部 exec torchrun
   # -m torchtitan.train "$@" —— overlay_args 透传给 torchtitan.train。
+  #
+  # 2026-09-17 no-patch policy 之后：这 4 条 entry 留在 supported
+  # 但 CI 预期失败——torchtitan v0.3.0 release 自称 device-agnostic /
+  # 支持 torch_npu，「能支持」成立；失败根因是上游 torch_npu / triton-
+  # ascend / CANN 栈各自的 bug，按 policy 不在 setup 层绕开，留作
+  # upstream signal。预期失败点见 docs/case-torchtitan-v0.3.0-torch2.12-
+  # npu.md §六「2026-09-17 no-patch 复盘」末尾表。当上游对应 issue 修
+  # 掉后 CI 自动转绿，不需要再 review / 撤 patch。
+  #
   # v0.3.0 上游 (release tag) 在本栈的兼容性状态：
   # - 单卡 1-card debugmodel / debugmodel_ce_loss / sft_debugmodel：
   #   Quick-start 文档验证过；CI 第 34087315070 号 run green
@@ -57,7 +66,7 @@ supported:
   #
   # 2026-09-15 端到端实跑证据（hdc-stable-npu-4 实测，CANN 9.1.0 +
   # torch 2.12.0+cpu + torch_npu 2.12.0 + triton-ascend 3.5.0+dev20260701
-  # + torchtitan v0.3.0 checkout + 7 个 sed 补丁）：
+  # + torchtitan v0.3.0 checkout + 7 个 sed 补丁，已于 2026-09-17 撤掉）：
   # - llama3_debugmodel 1-card: 2 步完成，loss 8.05→7.78，内存 0.22 GiB
   # - llama3_debugmodel_ce_loss 1-card: 2 步完成，loss 8.23→7.97
   # - sft_debugmodel 1-card: 2 步完成，loss 8.08→7.67，ChatDataLoader 正常
@@ -69,8 +78,10 @@ supported:
   # --comm.mode default 让 c10d 走真 HCCL（1-rank self-barrier）。
   # --parallelism.spmd-backend 留空（默认 spmd_types 在 dp_shard=1
   # 时 torchtitan 跳过该路径，不会触发 "torch >=2.13 注解翻译" 分支）。
-  # 测试目的：smoke 验证 patch 1-7 后 torchtitan 在 NPU 单卡能完整
-  # 跑 2 步（init + forward + backward + optimizer step）。
+  # 测试目的：smoke 验证 torchtitan v0.3.0 在 NPU 单卡能完整跑 2 步
+  # （init + forward + backward + optimizer step）。
+  # no-patch policy：当前预期在 init_weights 的 c10d broadcast 失败
+  # （torch_npu shim bug，None[0]）；上游修复后自动转绿。
   - path: torchtitan/train.py
     profile: torchtitan
     runner: linux-aarch64-a2-1
@@ -89,11 +100,14 @@ supported:
     timeout_minutes: 20
 
   # 2) 单卡 + CE loss 配置变体：llama3_debugmodel_ce_loss 是上游
-  # registry 内置的 CE 损失等价配置，与 patch 4 替换的
-  # CrossEntropyLoss 完全同源；保留它作为独立 supported 是为了
-  # 在每次 upgrade 时验证 patch 4 与上游 CE 配置仍对齐（漂移信号）。
-  # 测试目的：smoke 验证 patch 4 改的代码路径在 v0.3.0 release 与
-  # HEAD 之间未漂移。
+  # registry 内置的 CE 损失等价配置（CrossEntropyLoss 直接接线，不走
+  # ChunkedLossWrapper）。保留它作为独立 supported 是为了在每次
+  # upgrade 时验证上游 CE 配置的 wiring 与 ChunkedLossWrapper 入口
+  # 同步未漂移。
+  # no-patch policy：ChunkedLossWrapper 在 NPU 触发 meta 张量泄漏
+  # （case doc §2.5），但配置默认走 ChunkedLossWrapper 是上游决策，
+  # 不在 setup 层 patch。ce_loss 变体绕开这条路径；预期仍会卡在
+  # c10d broadcast 同 #1。
   - path: torchtitan/train.py
     profile: torchtitan
     runner: linux-aarch64-a2-1
@@ -112,12 +126,15 @@ supported:
     timeout_minutes: 20
 
   # 3) 双卡：FSDP shard=2 + full_dtensor 后端 + bf16。
-  # --parallelism.spmd-backend full_dtensor 是 patch 4 的多卡等价
-  # 命令（Quick-start §"限制四"：默认 spmd_types 后端需 torch >=2.13
-  # 的 FSDP dp_mesh_dims 翻译，2.12 上 multi-card 必触发 ValueError）。
+  # --parallelism.spmd-backend full_dtensor 是 CLI 切换（不是 sed
+  # patch）：默认 spmd_types 后端需 torch >=2.13 的 FSDP dp_mesh_dims
+  # 翻译，2.12 上 multi-card 必触发 ValueError（Quick-start §限制四）。
   # --training.dtype bfloat16 是混合精度 smoke；不强校验数值，仅
   # 验证 DTensor forward + HCCL all-reduce + bf16 cast 整条链路不
   # 触发 NPU 算子缺口。
+  # no-patch policy：预期在 init_weights 同 #1 撞 c10d broadcast；
+  # 修好后可能进一步撞 torch 2.13-only FSDP dp_mesh_dims 路径——
+  # 这是上游 torch 的 issue，不在 setup 层 patch。
   # ASCEND_RT_VISIBLE_DEVICES 由 runner 注入（双卡 runner 暴露 0,1）。
   - path: torchtitan/train.py
     profile: torchtitan
@@ -141,17 +158,15 @@ supported:
   # 4) SFT example 1-card：--module llama3 --config sft_debugmodel。
   # sft_debugmodel 是 torchtitan/models/llama3/config_registry.py:349
   # 注册的 SFT 配置（不是独立 module），训练走 torchtitan/train.py
-  # 同一入口。复用 patch 1-5 + launcher，smoke 验证 SFT 数据通路。
-  # patch 6+7 是为了让 sft 在 NPU 上跑通而新增：
-  #   patch 6 — 删 _create_flex_attention_mask 里的
-  #     separate_full_blocks=...（torch 2.13 才有的 kwarg）；
-  #   patch 7 — 把 sft_debugmodel 写死的 attn_backend="flex" 改为
-  #     "sdpa"（flex_attention 在 torch_npu._inductor 里 import
-  #     `from triton.compiler.compiler import triton_key`，但
-  #     community triton 3.5.0 不暴露这个 API，导致 compile 失败）。
-  #     切到 sdpa 后 SFT 走 causal mask，丢文档边界 mask，但
-  #     ChatDataLoader / CrossEntropyLoss / Trainer 这些 SFT pipeline
-  #     节点仍被覆盖，smoke 仍有效。
+  # 同一入口。smoke 验证 SFT 数据通路（ChatDataLoader /
+  # CrossEntropyLoss / Trainer）。
+  # no-patch policy：sft_debugmodel 写死 attn_backend="flex"，走到
+  # torch_npu._inductor 时 import `triton_key` 失败（community triton
+  # 3.5.0 不暴露）；同时 _create_flex_attention_mask 用 torch 2.13-only
+  # 的 separate_full_blocks kwarg。两条都是上游决策，不在 setup 层
+  # 绕开。预期失败点：c10d broadcast（同 #1）→ 修了之后撞 triton_key
+  # import / separate_full_blocks TypeError。退役条件：上游让 sft
+  # 默认走 sdpa 或暴露 triton_key，或 torch 2.13 ABI 适配。
   - path: torchtitan/train.py
     profile: torchtitan
     runner: linux-aarch64-a2-1
@@ -172,7 +187,8 @@ supported:
 unsupported:
   # ===== 规模：8B / 70B / 405B 在本栈 OOM / 拒绝启动 =====
   # 2026-09-15 实测证据（单卡 ASCEND_RT_VISIBLE_DEVICES=0，
-  # 32 GB × 1 卡，patches 1-7 已应用）：
+  # 32 GB × 1 卡，当时 7 个 sed patch 已应用；2026-09-17 撤 patch，
+  # 重新走会先在 init_weights 撞 c10d broadcast，再撞下面列的根因）：
   #   - llama3_8b            rc=1
   #       torch.OutOfMemoryError: NPU out of memory. Tried to allocate
   #       1.96 GiB (NPU 0; 29.49 GiB total capacity; 27.96 GiB already
