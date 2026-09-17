@@ -297,23 +297,6 @@ unsupported:
   # 训练流程不依赖 metric 真值，只在 epoch 末尾打 accuracy，可直接砍
   - examples/monteclora_finetuning/sequence_classification_finetune_monteclora.py
 
-  # bloomz-7b1（main() 局部变量，换模型须改源码）+ deepspeed ZeRO-3：随附 config
-  # 实为无 offload、单进程 fp32（文件名 cpu_offload 名不副实）：L64
-  #   self.device_type = torch.accelerator.current_accelerator().type if hasattr(torch, "accelerator") else "cuda"
-  # torch 2.9 没 torch.accelerator → else 分支固定走 "cuda" → L65
-  # device_module = torch.cuda → empty_cache/memory_allocated 在 NPU 上崩
-  # （与 bloomz-7b1 容量无关，10M 模型同样卡）。**翻案前置 1 处源码 patch**：
-  # :64 改为 `self.device_type = "npu"`（或写动态探测：
-  #   self.device_type = next((n for n in ("npu","cuda","xpu") if getattr(torch, n).is_available()), "cpu")
-  # ）。deepspeed-NPU 构建是另一层（环境级），单独验证
-  - examples/causal_language_modeling/peft_lora_clm_accelerate_ds_zero3_offload.py
-
-  # bart-large + deepspeed ZeRO-3（无 offload + 单进程 fp32）：同 B3 patch 模式，
-  # L57 device_type fall back "cuda" → :58 device_module = torch.cuda 在 NPU 上崩。
-  # **翻案前置 1 处源码 patch**：:57 `self.device_type = "npu"`（同上动态探测）。
-  # deepspeed-NPU 构建是另一层（环境级），单独验证
-  - examples/conditional_generation/peft_lora_seq2seq_accelerate_ds_zero3_offload.py
-
   # 训练循环 NPU 实测**挂在梯度估计阶段**：脚本 :178
   #   `device = torch.device("cuda" if torch.cuda.is_available() else "cpu")`
   # torch.cuda 在 NPU 上 False → 落 CPU；estimate_gradients 内部 forward+backward
@@ -334,27 +317,26 @@ unsupported:
   # 最易候选
   - examples/conditional_generation/peft_lora_seq2seq_accelerate_fsdp.py
 
+  # bloomz-7b1（main() 局部变量，换模型须改源码）+ deepspeed ZeRO-3：随附 config
+  # 实为无 offload、单进程 fp32（文件名 cpu_offload 名不副实）；仅剩
+  # deepspeed-NPU 构建未验证（环境级）
+  - examples/causal_language_modeling/peft_lora_clm_accelerate_ds_zero3_offload.py
+
+  # 默认模型已是 bart-large（:107，T0_3B 已注释）——原"T0_3B"过时；deepspeed
+  # ZeRO-3 无 offload + 1 进程，仅剩 deepspeed-NPU 构建未验证，翻案候选
+  - examples/conditional_generation/peft_lora_seq2seq_accelerate_ds_zero3_offload.py
+
   # epoch 0 + eval 已完成（bart-base），全量未确认，候选；零 argparse（模型/epoch
   # 均硬编码），压时长须改源码
   - examples/conditional_generation/peft_adalora_seq2seq.py
 
   # 原"单卡 32G / 同 eva"不成立：bf16 + device_map="auto"（:239,:462）多卡自动
   # 切分 + --model_name 可换小模型（README 有 gpt2 示例）；仅剩家族 FA 推断，
-  # 翻案候选。**3 处 patch**：(1) 替换默认模型 `meta-llama/Llama-3.1-8B-Instruct`
-  # → `gpt2`（coder 已缓存）；(2) `utils.py` 三处 load_dataset 改 HF-Mirror（coder
-  # 直连 huggingface.co hang）；(3) `device_map="auto"` 在 torch_npu 上等价
-  # `device_map={"": "npu:0"}`——BF16 + 124M GPT2 单卡够；num_train/num_eval 压到 100/20
+  # 翻案候选
   - examples/orthogonal_subspace_learning/osf_continual_learning.py
 
   # 原"单卡 32G"不成立：device_map="auto"（:83,:102）多卡切分、模型本就必须 CLI
-  # 传入；阻塞为家族 FA 推断（默认 sdpa dispatch）；--bits 默认 fp32，翻案候选。
-  # **3 处 patch**：(1) `from transformers import BitsAndBytesConfig` 必能 import
-  # （即使 bits=fp32 走不到实例化）；(2) PiSSA SVD init 同 [[peft-lora-ga-cuda-is-available-npu-bug]]
-  # ——init_lora_weights="pissa" 在 from_pretrained 时跑 SVD，model.to("npu") 须在
-  # PeftModel.from_pretrained 之前显式调；(3) 走 SFTTrainer 默认 chunked_nll 同
-  # [[trl-chunked-nll-functools-partial-bug]]，device_map="auto" → partial，inspect.signature
-  # 崩，须 --loss_type nll 绕开。bits=fp32 不调 bnb 但 import 链路仍走 transformers；
-  # imdb cache 在 coder，--dataset_field text label
+  # 传入；阻塞为家族 FA 推断（默认 sdpa dispatch）；--bits 默认 fp32，翻案候选
   - examples/pissa_finetuning/pissa_finetuning.py
 
   # ===== C. 阻塞（架构/bnb/xformers/7B+FA/SD 时长/trl 版本） =====
