@@ -290,16 +290,23 @@ PY
 }
 
 # Smoke-validate the planted inference models: resolve the snapshot via
-# the hub cache (local_files_only) and check the weight files exist.
-# A full from_pretrained here would just duplicate what the example does.
+# refs/main and check the weight files exist. A full from_pretrained
+# here would just duplicate what the example does.
+# NOTE: deliberately NOT snapshot_download(local_files_only=True) —
+# huggingface_hub 1.x caches the full HF repo listing (trees/<sha>.json,
+# written by any earlier networked call, e.g. from_pretrained during a
+# previous leg's run step) and then *requires* every listed file to
+# exist, including .gitattributes — which ModelScope snapshots never
+# contain (verified), so the check would detonate on any warm runner
+# (llava, run 35188975420). The plant's contract is "from_pretrained
+# finds its files", not "complete vs the HF listing"; from_pretrained
+# does per-file lookups and never needs .gitattributes.
 validate_infer_assets() {
   # $1 = infer group name
   python - "$1" <<'PY'
 import os
 import sys
 from pathlib import Path
-os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
-from huggingface_hub import snapshot_download
 
 CHECKS = {
     "infer-phi2": ("microsoft/phi-2", "model",
@@ -317,7 +324,11 @@ CHECKS = {
                     [f"model-0000{i}-of-00003.safetensors" for i in (1, 2, 3)]),
 }
 repo, kind, must_have = CHECKS[sys.argv[1]]
-snap = Path(snapshot_download(repo, repo_type=kind, local_files_only=True))
+hub_root = Path(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
+repo_kind = "models" if kind == "model" else "datasets"
+repo_dir = f"{repo_kind}--{repo.replace('/', '--')}"
+sha = (hub_root / repo_dir / "refs" / "main").read_text().strip()
+snap = hub_root / repo_dir / "snapshots" / sha
 missing = [f for f in must_have if not (snap / f).is_file()]
 if missing:
     raise SystemExit(f"{repo}: planted snapshot missing {missing}")
