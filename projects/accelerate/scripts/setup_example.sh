@@ -91,6 +91,24 @@ from datasets import load_dataset
 ds = load_dataset("nyu-mll/glue", "mrpc")
 print("mrpc splits:", {k: len(v) for k, v in ds.items()})
 PY
+
+  # PARKED 2026-09-16：SmolLM-360M / wikitext-2 预下块下线。SmolLM 是
+  # Xet-backed 仓库，镜像缓存未命中时 hf-mirror 302 到 cas-bridge，
+  # CI runner 直连超时（run 35062880797 里 cv_example / complete_cv_example
+  # 因此被拖挂——cv profile 复用本函数）。其唯一使用者
+  # by_feature/gradient_accumulation_for_autoregressive_models.py 已随
+  # manifest PARKED 块下线，恢复时两处一起放开：
+  # python - <<'PY'
+  # import os
+  # os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+  # os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+  # from transformers import AutoModelForCausalLM, AutoTokenizer
+  # AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-360M")
+  # AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM-360M")
+  # from datasets import load_dataset
+  # ds = load_dataset("Salesforce/wikitext", "wikitext-2-v1")
+  # print("smollm OK, wikitext-2 splits:", {k: len(v) for k, v in ds.items()})
+  # PY
 }
 
 # Smoke-validate the SmolLM + wikitext plants (cache hits only).
@@ -218,11 +236,11 @@ setup_accelerate-nlp() {
   python -m pip install -e "$TARGET_ROOT" "torch==2.9.0" "torch_npu==2.9.0.post2"
   # scikit-learn is needed by the `evaluate` library's glue metric (sklearn's
   # f1_score, matthews_corrcoef); not a direct dep of evaluate or transformers
-  # so it must be listed explicitly. schedulefree is a pure-Python wheel
-  # needed only by by_feature/schedule_free.py (tiny, kept in the base list).
+  # so it must be listed explicitly.
+  # PARKED 2026-09-16: schedulefree 纯 Python 包本身无害，但其唯一使用者
+  # by_feature/schedule_free.py 已随 manifest PARKED 块下线，先不进列表。
   python -m pip install \
-    transformers datasets evaluate safetensors scikit-learn schedulefree \
-    "torch==2.9.0"
+    transformers datasets evaluate safetensors scikit-learn "torch==2.9.0"
   python -c "
 import torch, torch_npu
 assert torch.__version__.startswith('2.9.0'), \
@@ -260,17 +278,43 @@ print('timm', timm.__version__,
   prepare_pets_data
 }
 
-# Shared pip stack for the four inference/distributed examples. Each
-# example then gets its own model plant group so a job only pulls the
-# weights it actually hardcodes (phi-2 5.5G / SD 5.5G / mms 145M /
-# llava 14G — planting all four per job would move ~27G).
-# - fire: speech_gen + llava CLI entry
-# - av: llava video decode
-# - diffusers: stable_diffusion pipeline
-# - scipy: speech_gen wavfile output
-# - torchvision: DiffusionPipeline / VitsModel import chains pull the
-#   torchvision op registrations (same ABI pin as cv profile).
-setup_infer_base() {
+# Pre-download inference assets for the accelerate-infer profile
+# (examples/inference/distributed/*). snapshot_download fetches without
+# instantiating, so the 16G llava weights do not spike host RAM. All via
+# the HF mirror (engine sets HF_ENDPOINT; set default for local runs).
+# HF_HUB_DISABLE_XET is exported above: Xet-backed repos (SD v1.5 etc.)
+# cannot reconstruct chunks through the mirror (401).
+prepare_infer_assets() {
+  python - <<'PY'
+import os
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+from huggingface_hub import snapshot_download
+for repo, repo_type in [
+    ("microsoft/phi-2", "model"),
+    ("llava-hf/LLaVA-NeXT-Video-7B-hf", "model"),
+    ("malterei/LLaVA-Video-small-swift", "dataset"),
+    ("stable-diffusion-v1-5/stable-diffusion-v1-5", "model"),
+    ("facebook/mms-tts-eng", "model"),
+]:
+    path = snapshot_download(repo, repo_type=repo_type)
+    print(repo, "->", path)
+from datasets import load_dataset
+for name in ("svjack/pokemon-blip-captions-en-zh",):
+    ds = load_dataset(name)
+    print(name, "splits:", {k: len(v) for k, v in ds.items()})
+PY
+}
+
+setup_accelerate-infer() {
+  # Inference profile = NLP profile + generation/vision deps + models.
+  # PARKED 2026-09-16: the manifest entries using this profile are parked
+  # (hf-mirror Xet issue, see manifest PARKED block), so nothing invokes
+  # this profile right now — kept defined for the re-enable.
+  # torchvision: DiffusionPipeline → transformers.AutoImageProcessor pulls
+  # the torchvision op registrations; pin the same ABI-matched build as the
+  # cv profile (image's default torchvision pairs with its original torch,
+  # not our pinned 2.9.0). scipy: speech example's scipy.io.wavfile.
   setup_accelerate-nlp
   python -m pip install \
     fire av diffusers scipy "torchvision==0.24.0" "torch==2.9.0"
