@@ -2,17 +2,21 @@ version: 1
 scan:
   root: recipes
   include_extensions: ['.py']
+  # 三层互斥模型，**exclude 只放"不是 entry point"的东西**：
+  #   scan.exclude — 扫描阶段不进入（包初始化、YAML 配置整目录、upstream
+  #                  实验区整目录、SLURM 启动器、markdown 文档）
+  #   supported    — 实跑过 exit 0 的 recipe
+  #   unsupported  — 扫描到了但实跑 fail 的 recipe（必须附实测堆栈）
+  # 任何出现在 scan.exclude 的路径都不应再出现在 unsupported 里。
   # files-only 模型（docs/examples-guard-engine.md §2.7）。exclude 项为目录
-  # 路径（递归剪枝）或 glob（`**` 跨目录，匹配相对 target root 的路径），
-  # 排除"不是 example 的配套物"：包初始化、YAML 配置、SLURM 启动器、
-  # markdown 文档。扫描工具的 exclude 支持随发现 workflow 的 PR 落地；
+  # 路径（递归剪枝）或 glob（`**` 跨目录，匹配相对 target root 的路径）。
   # examples 引擎不扫描，本段当前只是声明。
   exclude:
     - recipes/__init__.py                # 包初始化（import 会 ModuleNotFoundError）
-    - recipes/configs/                  # YAML 配置，需要 recipe 文件驱动，不可独立 launch
+    - recipes/configs/                  # YAML 配置整目录，需要 recipe 文件驱动，不可独立 launch
+    - recipes/dev/                      # upstream 实验性/早期/论文复现区（README 状态表 GRPO single-device 标 🚧=WIP；generate_v2 是 generate 实验版；early_exit_finetune/layer_dropout 是 LayerSkip/LITE/LayerDrop 论文复现；grpo 走 torchtune.dev.grpo 包而 pyproject 没暴露 torchtune.dev 子包，import 必炸）
     - recipes/quantization.md           # 文档（quantize 配套说明）
     - recipes/full_finetune_multinode.slurm  # SLURM 启动器（需要集群调度）
-    - 'recipes/dev/*.yaml'              # 早期实验/研究配置
 
 supported:
   # ===== 已在 coder hdc-stable-npu-4（910B4×2, torch 2.11.0, torch_npu 2.11.0,
@@ -125,28 +129,6 @@ supported:
       - checkpointer.output_dir=${CI_OUTPUT_DIR}  # 量化结果落 CI 工作目录
     timeout_minutes: 15
 
-  # 实验性推理 v2（research-grade）：Qwen2.5-0.5B 单条 prompt
-  # generate_v2 主入口是 cfg.prompt + cfg.log_level（@config.parse 路由到 cfg）；
-  # upstream configs/ 都不带 log_level，必须显式提供，否则 Missing key
-  - path: recipes/dev/generate_v2.py
-    profile: torchtune
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --config recipes/configs/generation.yaml
-      - model._component_=torchtune.models.qwen2_5.qwen2_5_0_5b
-      - tokenizer._component_=torchtune.models.qwen2_5.qwen2_5_tokenizer
-      - tokenizer.path=${TT_MODEL_PATH}/vocab.json
-      - tokenizer.merges_file=${TT_MODEL_PATH}/merges.txt
-      - checkpointer.checkpoint_dir=${TT_MODEL_PATH}
-      - checkpointer.checkpoint_files=[model.safetensors]
-      - checkpointer.model_type=QWEN2
-      - 'prompt.user="What is the smallest prime number greater than 1?"'
-      - 'prompt.system=null'
-      - max_new_tokens=20
-      - log_level=INFO  # generate_v2 显式读 cfg.log_level 设置 logger；不传会 ConfigAttributeError
-    timeout_minutes: 15
-
   # 评测：Qwen2.5-0.5B + lm_eval + 自定义 ci_truthfulqa_mc2 任务（本地 JSON 驱动）
   # eleuther_eval recipe 在 __init__ 强检 `version("lm-eval") < "0.4.5"`
   # （**字符串比较**，不是 packaging.version——0.4.10-0.4.49 都被误拒；
@@ -186,11 +168,12 @@ supported:
       - max_seq_length=512  # upstream 默认 4096：2 行短问答压短
     timeout_minutes: 15
 
-# ===== unsupported（每条附 runtime-verified / static-only 标签 + 实测失败堆栈） =====
+# ===== unsupported（每条附 runtime-verified 标签 + 实测失败堆栈） =====
 # 2026-09-15 在 coder hdc-stable-npu-4（910B4×2, torch 2.12.0+cpu, torch_npu 2.12.0,
-# CANN 9.x）逐例跑：10 distributed 都走到 init_process_group 抛 NCCL 错；1 个
-# dev/grpo 在 import 阶段 ModuleNotFoundError（更上游），1 个 dev/generate_v2_distributed
-# 在 NCCL 前还需要 log_level overlay；3 个 single-device 也都被覆盖了真实跑
+# CANN 9.x）逐例跑：recipes/dev/* 4 个文件（multi_dataset/early_exit/generate_v2_dist/grpo）
+# 已经在 scan.exclude 里随 recipes/dev/ 整目录排除，本段不再列入。
+# 剩下 10 个文件全是 recipes/ 顶层的分布式或多卡路径，torch_npu 没 NCCL 必崩；
+# 3 个 single-device 缺配套依赖，无法启动。
 unsupported:
   # ===== runtime-verified: NCCL 在 init_process_group 抛 RuntimeError =====
   # 8 个 distributed recipes 全部在 `_patched_new_process_group_helper`（torch_npu
@@ -205,17 +188,6 @@ unsupported:
   - recipes/qat_distributed.py                     # runtime-verified: NCCL @ qat_distributed.py:950 `init_process_group("cuda:nccl,cpu:gloo")`
   - recipes/qat_lora_finetune_distributed.py       # runtime-verified: NCCL @ qat_lora_finetune_distributed.py:965 `init_process_group(backend="gloo" if cfg.device == "cpu" else "nccl")`
   - recipes/knowledge_distillation_distributed.py  # runtime-verified: NCCL @ knowledge_distillation_distributed.py:968 `init_process_group("cuda:nccl,cpu:gloo")`
-  - recipes/dev/lora_finetune_distributed_multi_dataset.py  # runtime-verified: NCCL @ line 951 `init_process_group("cuda:nccl,cpu:gloo")`
-  - recipes/dev/early_exit_finetune_distributed.py # runtime-verified: NCCL @ line 1059 同上 cfg.device cpu?nccl 条件
-  - recipes/dev/generate_v2_distributed.py         # runtime-verified: 需先加 log_level=INFO overlay（否则先 ConfigAttributeError: Missing key log_level @ line 263），再补到 line 87 `dist.init_process_group(backend="nccl")` 抛 NCCL
-
-  # ===== runtime-verified: 上游 import 错误（在 NCCL 之前就崩） =====
-  # dev/grpo_full_finetune_distributed.py:23 写 `from torchtune.dev.grpo.generation
-  # import generate`，但 torchtune 仓库根没有 `torchtune/dev/` 目录（只有
-  # `recipes/dev/`，recipes 是另一个 package）。pyproject.toml 没把 torchtune.dev
-  # 暴露成可导入模块，连 `python recipes/dev/grpo_*.py` 也 import 不通。即使能 import，
-  # GRPO 还依赖 `verl` (verl not installed on this runner)
-  - recipes/dev/grpo_full_finetune_distributed.py
 
   # ===== runtime-verified: 缺配套依赖，无法启动 =====
   # knowledge_distillation_single_device.py: `find recipes/configs -iname '*knowledge*'`
@@ -237,6 +209,3 @@ unsupported:
   # supported: 块对应 entry；2026-09-17 在 coder hdc-stable-npu-2 端到端
   # 跑通 exit 0，acc=1.0 / 0.92s / 1.56GB HBM）
   # - recipes/eleuther_eval.py
-
-  # ===== static-only（被 scan.exclude 排除，独立 launch 不会被发现） =====
-  - recipes/configs/
