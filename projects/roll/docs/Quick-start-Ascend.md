@@ -129,6 +129,7 @@ python -c "import roll.pipeline.agentic.env_manager.traj_env_manager; print('rol
 ```
 
 ```shell #test-result id="verify-roll"
+...
 roll ok
 ```
 
