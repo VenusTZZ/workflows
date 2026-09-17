@@ -7,7 +7,7 @@
 | 上游信号 | torchtitan **v0.3.0**（2026-09-03 发布，首个 stable release，此前 v0.2.2 均为 prerelease） |
 | 触发原因 | 上游发版自动触发重测，CI 失败 |
 | 首次结论 | **CI 全绿**（run 34087315070，单卡 + 双卡训练各 2 步完整跑通） |
-| 2026-09-17 复盘 | **撤掉全部 7 条 sed patch + 4 个 launcher 里的 `TORCH_NPU_DEVICE_CAPABILITY=9.0` env var**。按 no-patch policy，torchtitan 的「支持 torch_npu / 设备无关」主张应在 upstream 实现里兑现，不在 setup 层绕。CI 现在预期失败，4 条 supported entry 留为「能支持但因上游 bug 失败」的占位，等 torch_npu / torchtitan 各自修好对应问题后自动转绿。详见 §六。 |
+| 2026-09-17 复盘 | **撤掉全部 7 条 sed patch + 4 个 launcher 里的 `TORCH_NPU_DEVICE_CAPABILITY=9.0` env var**。按 no-patch policy，torchtitan 的「支持 torch_npu / 设备无关」主张应在 upstream 实现里兑现，不在 setup 层绕。CI 现在预期失败，**3 条** supported entry 留为「能支持但因上游 bug 失败」的占位（原 4 条 #1 default llama3_debugmodel 1card 与 #2 ce_loss 变体共享 launcher，仅 --config 区别，no-patch 下 default 的 ChunkedLossWrapper 路径是已知 NPU meta tensor leak，没法既留着 default 又让 ce_loss 单独信号，所以合并掉），等 torch_npu / torchtitan 各自修好对应问题后自动转绿。详见 §六。 |
 | 环境 | Ascend 910B4 × 2 / CANN 9.1.0 / Python 3.12.13 / torch 2.12.0+cpu / torch_npu 2.12.0 / triton-ascend 3.5.0+dev20260701 |
 
 ## 一、问题概述
@@ -132,21 +132,27 @@ master 均已修复但未回合 2.12.0，修复手段全部是 sed 镜像上游 
 - patch 4（ChunkedLossWrapper → CE loss）、patch 6/7（flex → sdpa）是**绕开 NPU 栈的限制**，本质也是上游决策
 - `TORCH_NPU_DEVICE_CAPABILITY=9.0` 是绕 torch_npu 自己的 c10d shim bug（None[0] 崩溃），跟 torchtitan 完全无关；用户的判断「torchtitan 已经支持 torch_npu」暗含「那 torch_npu 应该自己处理这个 bug 而不是让上游训练框架 export env var」
 
-据此在 commit `hdc` 上撤掉：
+据此在 commit `publish-hdc` 上撤掉：
 
 - `apply_compat_patches` 整个函数（7 条 sed + 调用点）
 - 4 个 launcher 里的 `export TORCH_NPU_DEVICE_CAPABILITY=9.0` 行
 - setup_example.sh 顶部「7 条 patch 列表」长注释改为「no-patch policy」说明
+- supported entry 数量从 4 砍到 3：默认 `llama3_debugmodel` 1card 跟
+  `#2` ce_loss 变体共用同一 launcher（仅 `--config` flag 不同），default
+  走 ChunkedLossWrapper 在 NPU 是 case doc §2.5 已知的 meta tensor leak，
+  no-patch 下两条同 launcher 重复跑零增量信号 → default 这条挪到
+  unsupported「配置精简」分类
+- 同步删 setup_example.sh 里 `run_llama3_debugmodel_1card.sh` 的生成
+  （不再被 manifest 引用，避免 setup 留孤儿 launcher）
 - Quick-start-Ascend.md 的「兼容性补丁」一节仍保留作为历史档案（不撤，那份是 patch 知识的载体）
 
-**预期后果**：4 条 supported entry（1card、1card_ce、2card、sft_1card）现在 CI 全失败。failure 落点会是：
+**预期后果**：3 条 supported entry（1card_ce、2card、sft_1card）现在 CI 全失败。原 4 条里的 default `llama3_debugmodel` 1card 已合并到 unsupported「配置精简」分类（与 #2 共享 launcher + no-patch 下 ChunkedLossWrapper 是已知 NPU bug，留两条同 launcher 没信号）。剩下 3 条的 failure 落点会是：
 
 | Entry | 预计首个 failure 点 | 上游归属 |
 |---|---|---|
-| 1card | `OffsetBasedRNGTracker` → `c10d broadcast` → `None[0]` TypeError | torch_npu shim（撤 env var 后必现）|
-| 1card_ce | 同上 | 同上 |
+| 1card_ce | `OffsetBasedRNGTracker` → `c10d broadcast` → `None[0]` TypeError | torch_npu shim（撤 env var 后必现）|
 | 2card | 同上 + `--parallelism.spmd-backend full_dtensor` 路径上的 `dp_mesh_dims` 限制 | torch_npu shim + torch 2.13-only FSDP API |
-| sft_1card | 同 1card + `create_block_mask(separate_full_blocks=...)` TypeError | torch 2.13-only kwarg（patch 6 撤了）|
+| sft_1card | 同 1card_ce + `create_block_mask(separate_full_blocks=...)` TypeError | torch 2.13-only kwarg（patch 6 撤了）|
 
 这正是 policy 想要的 signal：CI 替我们盯住「上游的 device-agnostic 主张 vs 实际可用度」之间的差距。等任意上游修了对应 issue，CI 自动转绿，不需要再 review / 撤 patch。
 

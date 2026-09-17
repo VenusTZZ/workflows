@@ -40,13 +40,13 @@ scan:
     - '**/requirements*.txt'
 
 supported:
-  # 4 条支持 example，全部走 setup 写入的 .sh launcher（exec 字段）。
+  # 3 条支持 example（#2 #3 #4），全部走 setup 写入的 .sh launcher（exec 字段）。
   # path 字段统一填 `torchtitan/train.py`（上游真实文件，manifest-check
   # 用它做 (target_root/path).exists() 校验）；exec 是真正的可执行
   # launcher（setup 写入 target/scripts/），它内部 exec torchrun
   # -m torchtitan.train "$@" —— overlay_args 透传给 torchtitan.train。
   #
-  # 2026-09-17 no-patch policy 之后：这 4 条 entry 留在 supported
+  # 2026-09-17 no-patch policy 之后：这 3 条 entry 留在 supported
   # 但 CI 预期失败——torchtitan v0.3.0 release 自称 device-agnostic /
   # 支持 torch_npu，「能支持」成立；失败根因是上游 torch_npu / triton-
   # ascend / CANN 栈各自的 bug，按 policy 不在 setup 层绕开，留作
@@ -55,9 +55,8 @@ supported:
   # 掉后 CI 自动转绿，不需要再 review / 撤 patch。
   #
   # v0.3.0 上游 (release tag) 在本栈的兼容性状态：
-  # - 单卡 1-card debugmodel / debugmodel_ce_loss / sft_debugmodel：
-  #   Quick-start 文档验证过；CI 第 34087315070 号 run green
-  #   跑过 1-card（run-example/llama3_debugmodel_1card）+ 2-card。
+  # - 单卡 1-card debugmodel_ce_loss / sft_debugmodel：Quick-start 验证过；
+  #   CI 第 34087315070 号 run green 跑过 1-card + 2-card。
   # - 多卡 2-card debugmodel：Quick-start 验证过。
   # debugmodel: dim=256 / 6 层 / 16 head / vocab 2048 (~6 M 参数)，
   # 30 GB HBM 完全够装，FSDP shard=2 切分后单卡仅 ~24 GB 占用。
@@ -67,37 +66,11 @@ supported:
   # 2026-09-15 端到端实跑证据（hdc-stable-npu-4 实测，CANN 9.1.0 +
   # torch 2.12.0+cpu + torch_npu 2.12.0 + triton-ascend 3.5.0+dev20260701
   # + torchtitan v0.3.0 checkout + 7 个 sed 补丁，已于 2026-09-17 撤掉）：
-  # - llama3_debugmodel 1-card: 2 步完成，loss 8.05→7.78，内存 0.22 GiB
   # - llama3_debugmodel_ce_loss 1-card: 2 步完成，loss 8.23→7.97
   # - sft_debugmodel 1-card: 2 步完成，loss 8.08→7.67，ChatDataLoader 正常
   # - llama3_debugmodel 2-card (full_dtensor + dp_shard=2 + bf16): 2 步完成，
   #   global batch size=2 生效，loss 16.06→15.48（reduce-by-dp_shard）。
   # 实测命令记录在 /tmp/torchtitan-verify/ 与 setup_example.sh 内嵌注释里。
-
-  # 1) 单卡基线：默认 backend / 默认 dtype / 默认 spmd 后端。
-  # --comm.mode default 让 c10d 走真 HCCL（1-rank self-barrier）。
-  # --parallelism.spmd-backend 留空（默认 spmd_types 在 dp_shard=1
-  # 时 torchtitan 跳过该路径，不会触发 "torch >=2.13 注解翻译" 分支）。
-  # 测试目的：smoke 验证 torchtitan v0.3.0 在 NPU 单卡能完整跑 2 步
-  # （init + forward + backward + optimizer step）。
-  # no-patch policy：当前预期在 init_weights 的 c10d broadcast 失败
-  # （torch_npu shim bug，None[0]）；上游修复后自动转绿。
-  - path: torchtitan/train.py
-    profile: torchtitan
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    exec: scripts/run_llama3_debugmodel_1card.sh
-    overlay_args:
-      - --module llama3
-      - --config llama3_debugmodel
-      - --comm.mode default
-      - --training.steps 2
-      - --training.local-batch-size 1
-      - --training.seq-len 256
-      - --metrics.log-freq 1
-      - --metrics.disable-color-printing
-      - --dump-folder ${CI_OUTPUT_DIR}/llama3_debugmodel_1card
-    timeout_minutes: 20
 
   # 2) 单卡 + CE loss 配置变体：llama3_debugmodel_ce_loss 是上游
   # registry 内置的 CE 损失等价配置（CrossEntropyLoss 直接接线，不走
@@ -185,6 +158,24 @@ supported:
     timeout_minutes: 20
 
 unsupported:
+  # ===== 配置精简（no-patch policy 下与另一 supported entry 冗余） =====
+  # 2026-09-17 决定：
+  #   - llama3_debugmodel (default)
+  #     rc=1（no-patch policy 下预期）；跟 #2 llama3_debugmodel_ce_loss
+  #     共用同一 launcher（run_llama3_debugmodel_1card.sh vs
+  #     run_llama3_debugmodel_ce_loss_1card.sh，body 完全相同，
+  #     2026-09-17 撤 patch 后仅 --config flag 区别：
+  #     "llama3_debugmodel" → "llama3_debugmodel_ce_loss"）。
+  #     no-patch policy 下 default config 走 ChunkedLossWrapper，在
+  #     NPU 上是 case doc §2.5 已知的 meta tensor leak，不在 setup 层
+  #     patch；同时 ce_loss 变体走 CrossEntropyLoss 直连路径，验证
+  #     面更全。两条同时留 supported = 同 launcher 双跑，CI 成本翻倍
+  #     信号零增量，所以只留 ce_loss 变体。
+  #     退役条件：不退役。如果未来 ChunkedLossWrapper 在 NPU 上被上游
+  #     修好，可以单独加回这条作为对照（default vs ce_loss wiring
+  #     漂移检测），但目前没必要保留两条同 launcher 的 supported。
+  - torchtitan/models/llama3/config_registry.py:llama3_debugmodel
+
   # ===== 规模：8B / 70B / 405B 在本栈 OOM / 拒绝启动 =====
   # 2026-09-15 实测证据（单卡 ASCEND_RT_VISIBLE_DEVICES=0，
   # 32 GB × 1 卡，当时 7 个 sed patch 已应用；2026-09-17 撤 patch，

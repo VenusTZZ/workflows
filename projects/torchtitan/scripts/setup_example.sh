@@ -162,22 +162,6 @@ setup_torchtitan() {
 # the run_example.sh logic unchanged from peft.
 write_launchers() {
   mkdir -p "$TARGET_ROOT/scripts"
-  cat > "$TARGET_ROOT/scripts/run_llama3_debugmodel_1card.sh" <<'LAUNCHER'
-#!/usr/bin/env bash
-# Launcher for the torchtitan llama3_debugmodel smoke, single rank.
-# Real HCCL backend (comm.mode default) is selected in overlay_args;
-# 1-rank self-barriers, no actual cross-card traffic. setup_example.sh
-# installs upstream v0.3.0 as-is per the no-patch policy.
-set -euo pipefail
-cd "${TARGET_ROOT:?TARGET_ROOT is required}"
-exec torchrun --nproc_per_node=1 \
-    --rdzv_backend c10d \
-    --rdzv_endpoint="localhost:0" \
-    -m torchtitan.train \
-    "$@"
-LAUNCHER
-  chmod +x "$TARGET_ROOT/scripts/run_llama3_debugmodel_1card.sh"
-
   cat > "$TARGET_ROOT/scripts/run_llama3_debugmodel_2card.sh" <<'LAUNCHER'
 #!/usr/bin/env bash
 # Launcher for the torchtitan llama3_debugmodel smoke, 2 ranks.
