@@ -71,8 +71,8 @@ print('DeepSpeed version:', deepspeed.__version__)
 }
 
 # Download models from ModelScope and expose their local paths to the run step
-# via GITHUB_ENV (same pattern as projects/trl). overlay_args reference
-# ${OPT_125M_PATH} so the example gets a concrete local dir.
+# via GITHUB_ENV (same pattern as projects/trl). overlay_args reference these
+# variables so examples receive concrete local directories.
 ms_download_models() {
   # modelscope>=1.38 splits hub code into modelscope-hub; pin the last pre-split
   # release because the runner mirror may only expose an older hub for the latest wheel.
@@ -89,20 +89,28 @@ for pair in sys.argv[1:]:
 PY
 }
 
-patch_hello_wikitext() {
-  local target="$EXAMPLES_ROOT/training/HelloDeepSpeed/train_bert_ds.py"
-  python3 - "$target" <<'PY'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-text = path.read_text(encoding='utf-8')
-old = 'datasets.load_dataset("wikitext",'
-new = 'datasets.load_dataset("Salesforce/wikitext",'
-if old not in text:
-    raise SystemExit(f'wikitext load_dataset not found in {path}')
-path.write_text(text.replace(old, new, 1), encoding='utf-8')
-print(f'patched {path}: wikitext -> Salesforce/wikitext')
+# Redirect the renamed wikitext dataset at interpreter startup without editing
+# the DeepSpeedExamples checkout. The shim is scoped to this CI job through
+# GITHUB_ENV and leaves every other datasets.load_dataset call unchanged.
+install_hello_dataset_shim() {
+  local shim_dir="$GITHUB_WORKSPACE/.ci/deepspeed-sitecustomize"
+  mkdir -p "$shim_dir"
+  cat > "$shim_dir/sitecustomize.py" <<'PY'
+import datasets as _datasets
+
+_original_load_dataset = _datasets.load_dataset
+
+
+def _patched_load_dataset(path, *args, **kwargs):
+    if path == "wikitext":
+        path = "Salesforce/wikitext"
+    return _original_load_dataset(path, *args, **kwargs)
+
+
+_datasets.load_dataset = _patched_load_dataset
 PY
+  echo "PYTHONPATH=$shim_dir${PYTHONPATH:+:$PYTHONPATH}" >> "$GITHUB_ENV"
+  echo "installed wikitext runtime redirect in $shim_dir"
 }
 
 # Copy a fixture into the DeepSpeed-Chat data/ dir that local/jsonfile reads.
@@ -118,23 +126,27 @@ plant_chat_fixture() {
 
 setup_deepspeed() {
   install_deepspeed_source
-  echo "installing HelloDeepSpeed dependencies"
+  echo "installing dependencies from the HelloDeepSpeed and CIFAR requirements baselines"
   PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple" \
-    python -m pip install "tokenizers>=0.22.0,<0.23" datasets transformers fire loguru "sh==1.14.2" tqdm pytz tensorboard torchvision
-  patch_hello_wikitext
+    python -m pip install "tokenizers>=0.22.0,<0.23" "transformers<5" datasets \
+      fire loguru "sh==1.14.2" tqdm pytz tensorboard \
+      "torchvision==0.24.0" "pillow>=7.1.0" matplotlib
+  install_hello_dataset_shim
 }
 
 # Shared DeepSpeed-Chat setup: DS source + transformers + opt-125m + fixture.
 setup_ds_chat() {
   local fixture="$1"
   install_deepspeed_source
-  python -m pip install modelscope transformers datasets accelerate
   # DeepSpeed-Chat steps import the top-level dschat package (sibling of the
   # step dirs); install it editable so 'from dschat.utils... import' resolves.
   # --no-deps: its setup.py pins deepspeed/torch/transformers which we already
-  # provide (source install / image); only tensorboard is genuinely missing.
+  # provide (source install / image). Install the remaining declared deps
+  # explicitly so pip cannot replace the NPU torch stack or source DeepSpeed.
   python -m pip install --no-deps -e "$EXAMPLES_ROOT/applications/DeepSpeed-Chat"
-  python -m pip install tensorboard sentencepiece
+  python -m pip install "transformers>=4.31.0,<5,!=4.33.2" \
+    "datasets>=2.8.0" "accelerate>=0.15.0" "sentencepiece>=0.1.97" \
+    "protobuf==3.20.3" tensorboard
   ms_download_models "OPT_125M_PATH=facebook/opt-125m"
   plant_chat_fixture "$fixture"
 }
@@ -146,8 +158,39 @@ setup_ds_chat_rlhf() { setup_ds_chat ci_rlhf_8.json; }
 
 setup_ds_infer() {
   install_deepspeed_source
-  python -m pip install modelscope transformers accelerate
+  python -m pip install "transformers<5" accelerate
   ms_download_models "OPT_125M_PATH=facebook/opt-125m"
+}
+
+setup_ds_autotp_equivalence() {
+  install_deepspeed_source
+  # Qwen3 support is present in current 4.x transformers; keep the upper bound
+  # below the next major release to avoid unreviewed API changes.
+  python -m pip install "transformers>=4.51.0,<5" safetensors
+  ms_download_models "QWEN3_06B_PATH=Qwen/Qwen3-0.6B"
+}
+
+verify_installed_runtime() {
+  python - <<'PY'
+import os
+from pathlib import Path
+
+import deepspeed
+import torch
+import torch_npu
+
+source_root = Path(os.environ["TARGET_ROOT"]).resolve()
+deepspeed_file = Path(deepspeed.__file__).resolve()
+print("runtime torch:", torch.__version__)
+print("runtime torch_npu:", torch_npu.__version__)
+print("runtime deepspeed:", deepspeed.__version__, deepspeed_file)
+try:
+    deepspeed_file.relative_to(source_root)
+except ValueError as exc:
+    raise SystemExit(
+        f"DeepSpeed was not imported from target source {source_root}: "
+        f"{deepspeed_file}") from exc
+PY
 }
 
 supported_profiles() {
@@ -172,3 +215,4 @@ python -m pip install -U pip setuptools wheel
 ensure_torch_stack
 
 "setup_${PROFILE}"
+verify_installed_runtime
