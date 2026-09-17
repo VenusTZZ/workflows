@@ -209,6 +209,12 @@ unsupported:
   # 退役条件：上 supported 后跟其他 supported 一起靠 CI 信号退役。
 
   # ===== 规模：8B / 70B / 405B 在本栈 OOM / 拒绝启动 =====
+  # 这些大参数配置是 torchtitan/models/llama3/config_registry.py
+  # 里的独立 def（llama3_8b / llama3_70b / llama3_405b），各自硬编
+  # 码 num_layers / hidden_dim / num_heads / intermediate_size ——
+  # 不是「debugmodel + scale」开关，所以**没法换成小模型测**：
+  # model class 相同（都是 Llama3），但 arch spec 是另一份 frozen
+  # dataclass，HBM 是唯一 gate。
   # 2026-09-15 实测证据（单卡 ASCEND_RT_VISIBLE_DEVICES=0，
   # 32 GB × 1 卡，当时 7 个 sed patch 已应用；2026-09-17 撤 patch，
   # 重新走会先在 init_weights 撞 c10d broadcast，再撞下面列的根因）：
@@ -230,6 +236,10 @@ unsupported:
   #       （NPU 端 torchao 未 ship 这两个 prototype 模块）。
   # 退役条件：双卡 64 GB / 4 卡 128 GB / CPU offload DTensor dispatch
   # 修复任一达成；或 torchao 发布 NPU NVFP4/MXFP8 prototype wheel。
+  # **代码路径证据**：supported #1 (llama3_debugmodel, Llama3 model
+  # class) 2026-09-17 在同栈跑通 rc=0，loss 8.17→7.84 — 说明 Llama3
+  # model class 的 NPU forward/backward 链本身可用，8B/70B/405B 的
+  # OOM 纯是 HBM 容量不够，不是 arch 漂移。
   - torchtitan/models/llama3/config_registry.py:llama3_8b
   - torchtitan/models/llama3/config_registry.py:llama3_8b_first_85_pct_layers_nvfp4
   - torchtitan/models/llama3/config_registry.py:llama3_8b_mxfp8
@@ -262,10 +272,15 @@ unsupported:
   # ===== Variants 受限于上游 torch 2.13+ 依赖 =====
   # 实测证据（2026-09-15）：
   #   - llama3_debugmodel_varlen_attn
-  #       rc=1（exitcode 1 但 root cause 在 trainer init 阶段被裁切，
-  #       rc=2 间接信号）—— 需要 varlen 包路径 + 模型端
-  #       inner_attention=VarlenAttention 走通；与上面一样涉及
-  #       torch 2.13+ 路径，未做端到端验证。
+  #       rc=1 — 真实 root cause（2026-09-17 在 hdc-stable-npu-4 实测）：
+  #       `torch/nn/attention/varlen.py:110 _varlen_attn` 调
+  #       `torch.ops.aten._flash_attention_forward` 撞
+  #       NotImplementedError（同 gpt_oss / triton_key 类，是 NPU
+  #       端没 ship 这个 kernel；CUDA-only）。
+  #       → 这是「kernel 不在 NPU 后端」类，跟 torch 版本无关，是
+  #       torch_npu 2.12.0 没注册 _flash_attention_forward 的
+  #       PrivateUse1 kernel。退役条件：torch_npu 适配
+  #       _flash_attention_forward kernel。
   # （llama3_debugmodel_flex 这一条在 2026-09-17 源码审计中确认为
   # stale 死代码：grep models/llama3/config_registry.py 找不到
   # def llama3_debugmodel_flex；attn_backend="flex" 只在 sft_debugmodel
@@ -307,6 +322,20 @@ unsupported:
   #         FileNotFoundError: Tokenizer path
   #         './assets/hf/Qwen3-0.6B' does not exist
   #         （非 debug 尺寸要求本地 Qwen3 tokenizer 资产，本栈未下载）
+  #         —— **ModelScope 替代方案**（2026-09-17 探测 modelscope.cn
+  #         /api/v1/models HTTP 200）：
+  #           Qwen/Qwen3-0.6B        HTTP 200 ✓
+  #           Qwen/Qwen3-1.7B        HTTP 200 ✓
+  #           Qwen/Qwen3-0.6B-Instruct HTTP 404 ✗（未镜像）
+  #           Qwen/Qwen3-1.7B-Instruct HTTP 404 ✗（未镜像）
+  #         → 上 setup 层 patch：把 hf_assets_path 从
+  #         ./assets/hf/Qwen3-{0.6B,1.7B} 软链到
+  #         ~/.cache/modelscope/Qwen/Qwen3-{0.6B,1.7B}（用
+  #         `modelscope download --model Qwen/Qwen3-0.6B` 预下载），
+  #         或在 setup 时 export TORCHTITAN_HF_ASSETS_PATH 指向
+  #         modelscope 缓存。但 no-patch policy 下不动 setup 层；
+  #         留给后续单独 PR。退役条件：setup 层 patch + modelscope
+  #         pre-download 步骤，或 HF 镜像。
   #
   # (E) 量化条目 NVFP4 ImportError（同 llama3 量化的 B 类）：
   #     - qwen3_debugmodel_nvfp4
@@ -318,6 +347,11 @@ unsupported:
   # 量化/CPU offload + 多卡；(D) 资产预下载；(E) torchao NVFP4
   # prototype。注：linux-aarch64-a2-2（2 卡 64 GB HBM）不能解 (C)，
   # 因为 AdamW fp32 + 8B+ 单 shard 已超 32 GB；需要 ≥8 卡或 CPU offload。
+  # **大模型硬编码**：(C) 类条目（qwen3_14b / _30b_a3b / _32b /
+  # sft_qwen3_8b_math）是 config_registry.py 里的独立 def，各自硬编
+  # 码 num_layers / hidden_dim —— 不是「debugmodel + scale」开关，
+  # 所以没法换成小模型测。qwen3 model class 的代码路径
+  # 同 llama3，arch 不漂移，瓶颈是 HBM。
   - torchtitan/models/qwen3/config_registry.py:qwen3_debugmodel
   - torchtitan/models/qwen3/config_registry.py:qwen3_debugmodel_flex_flash
   - torchtitan/models/qwen3/config_registry.py:qwen3_debugmodel_nvfp4
@@ -474,6 +508,18 @@ unsupported:
   # 退役条件：给 flux 写专属 train launcher（不走 manager.py
   # _load_config 的子模块查找路径）+ HF 资产预下载；>=flux_dev/schnell
   # 多卡 HBM；torchao MXFP8 NPU 适配。
+  # **ModelScope 替代方案**（2026-09-17 探测 modelscope.cn
+  # /api/v1/models HTTP 200）—— 即便 dispatcher 修了，flux 仍需
+  # HF 资产，HF 在 China runner 被墙，ModelScope 镜像可走：
+  #     google/t5-v1_1-xxl                HTTP 200 ✓
+  #     AI-ModelScope/t5-v1_1-xxl         HTTP 200 ✓
+  #     openai/clip-vit-large-patch14     HTTP 404 ✗
+  #     AI-ModelScope/clip-vit-large-patch14 HTTP 200 ✓
+  #     black-forest-labs/FLUX.1-dev      HTTP 200 ✓
+  #     AI-ModelScope/FLUX.1-dev          HTTP 200 ✓
+  # → `modelscope download --model AI-ModelScope/clip-vit-large-patch14`
+  # 预下载到 ~/.cache/modelscope 后，FLUX trainer 的 HF tokenizer 走
+  # HF_HOME=~/.cache/modelscope 路径能解析到。
   - torchtitan/models/flux/config_registry.py:flux_debugmodel
   - torchtitan/models/flux/config_registry.py:flux_dev
   - torchtitan/models/flux/config_registry.py:flux_schnell
@@ -527,8 +573,16 @@ unsupported:
   #       monarch 缺失也 fail。两层 root cause 都是 CUDA-only RL 栈。
   # 注释里说的 "vllm-ascend ABI 对齐 torch 2.10" 是在 vLLM 真装上后
   # 才相关；当前栈连 vllm + monarch 都没装，import 阶段就 fail。
-  # 退役条件：monarch + vllm-ascend（torch 2.12 ABI）安装到位 + 仓库
-  # 根补回 scripts/loss_compare.py。
+  # **vLLM 验证延后**：依赖 vllm + monarch 的 RL 系列（rl/train.py
+  # + rl/generate.py + rl/scripts/loss_compare.py + 下面 RL examples
+  # 三个 module）属于 vLLM 依赖链，先不动。参考
+  # projects/speculators/ 看护（已用
+  # `swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/vllm-ascend/
+  # vllm-ascend:v0.23.0` 镜像 + 8 条 supported 跑通 DFlash / Eagle3
+  # 等 vLLM-based 训练 / 推理链路）；speculators 项目验证 vllm-ascend
+  # v0.23.0 镜像在 NPU 上 OK 后，再回头验证 torchtitan RL 系列。
+  # 退役条件：speculators 项目跑通后 + monarch + vllm-ascend（torch 2.12
+  # ABI）安装到位 + 仓库根补回 scripts/loss_compare.py。
   - torchtitan/experiments/rl/train.py
   - torchtitan/experiments/rl/generate.py
   - torchtitan/experiments/rl/scripts/loss_compare.py
@@ -565,6 +619,18 @@ unsupported:
   #       -2507，moe 拉 Qwen3-30B-A3B，sft 拉 Qwen3-0.6B / 4B。
   #       注释里说的 "HF AutoModel.from_pretrained 在本栈未验证"
   #       是更下游的问题——前置条件（HF 连通）都还不满足。
+  #       —— **ModelScope 替代方案**（2026-09-17 探测 modelscope.cn
+  #       /api/v1/models HTTP 200）：
+  #           Qwen/Qwen3-0.6B             HTTP 200 ✓
+  #           Qwen/Qwen3-0.6B-Instruct    HTTP 404 ✗（未镜像）
+  #           Qwen/Qwen3-1.7B             HTTP 200 ✓
+  #           Qwen/Qwen3-1.7B-Instruct    HTTP 404 ✗（未镜像）
+  #           Qwen/Qwen3-4B-Instruct-2507 HTTP 200 ✓（tmb debugmodel 用）
+  #           Qwen/Qwen3-30B-A3B          HTTP 200 ✓（tmb debugmodel_moe 用）
+  #       5/6 资产可走 ModelScope；2 个 sft 用的 -Instruct 0.6B/1.7B
+  #       镜像没 ship。退役条件：setup 层用 modelscope pre-download
+  #       + HF_HOME 指向 modelscope 缓存，或补齐剩下 2 个 Instruct
+  #       镜像，或换 HF 镜像。
   # 退役条件：
   #   forge    — torch_npu + cudagraph NPU 等价物 + ForgeEngine 解析
   #   graph    — graph_trainer 与主线 CompileConfig 字段对齐 + aclgraph
@@ -625,7 +691,7 @@ unsupported:
   - torchtitan/experiments/graph_trainer/run_train_precompile.sh
   - torchtitan/experiments/graph_trainer/autoresearch/scripts/run_benchmark.sh
 
-  # ===== RL examples（CUDA-only 依赖链） =====
+  # ===== RL examples（CUDA-only 依赖链 + vLLM 依赖） =====
   # 上游 _supported_experiments 显式收录 3 个 RL example module：
   # alphabet_sort / dapo_math / search_r1。各自的 config_registry.py
   # 直接 import rl.actors.generator / rl.actors.trainer /
@@ -634,12 +700,16 @@ unsupported:
   # NCCL-only 的 batch invariance 等）。即使 rl/train.py + rl/generate.py
   # 解决了 vLLM / monarch 缺失问题，RL example 这层还多一层 RL 专属
   # CUDA-only 组件依赖。
+  # **vLLM 验证延后**（同 rl/train.py 段说明）：依赖 vllm + monarch
+  # 的整条链，先不动。参考 projects/speculators/ 用
+  # `vllm-ascend:v0.23.0` 镜像跑通 8 条 supported 之后，再回头验证。
   # 影响条目：
   #   - rl/examples/alphabet_sort/config_registry.py:rl_grpo_qwen3_*
   #   - rl/examples/dapo_math/config_registry.py:rl_grpo_qwen3_*
   #   - rl/examples/search_r1/config_registry.py:rl_search_r1_qwen3_*
-  # 退役条件：rl.actors/components/batch_invariance 提供 NPU 后端，或
-  # 上游把 RL rollout / batch invariance 拆成 backend-pluggable。
+  # 退役条件：speculators vllm-ascend 跑通 + rl.actors/components/batch_
+  # invariance 提供 NPU 后端，或上游把 RL rollout / batch invariance
+  # 拆成 backend-pluggable。
   - torchtitan/experiments/rl/examples/alphabet_sort/config_registry.py
   - torchtitan/experiments/rl/examples/dapo_math/config_registry.py
   - torchtitan/experiments/rl/examples/search_r1/config_registry.py
