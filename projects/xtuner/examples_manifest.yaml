@@ -9,9 +9,18 @@ scan:
   # 非 exclude 的理由：零 cfg 改动可端到端跑通（2026-09-15/16/17 coder npu-2
   # 全 EXIT=0），具体机制见下方 supported 块注释。
   #
-  # 同目录 map_fn.py（每个 demo 一份 sibling 模块）没有 __main__，本 manifest
-  # 不列；data.json / README.md 不是 .py/.sh，被 include_extensions 自然过滤。
-  exclude: []
+  # map_fn.py 是每个 demo 的 sibling 模块（定义 dataset_map_fn），
+  # `examples/demo_data/<sub>/config.py` 用 `with read_base(): from .map_fn
+  # import ...` 相对导入它。没有 `if __name__ == '__main__'`，裸
+  # `python map_fn.py` 跑只会触发 module-level docstring/function def 后
+  # 正常退出但什么也不做，不是 example。归 exclude 而非 unsupported：
+  # unsupported 表示"扫描到但 launch 有 blocker"，这里连 launchable 都不算。
+  # data.json / README.md 不是 .py/.sh，被 include_extensions 自然过滤。
+  exclude:
+    - examples/demo_data/single_turn/map_fn.py   # sibling of single_turn/config.py
+    - examples/demo_data/multi_turn_1/map_fn.py  # sibling of multi_turn_1/config.py
+    - examples/demo_data/multi_turn_2/map_fn.py  # sibling of multi_turn_2/config.py
+    - examples/demo_data/pretrain/map_fn.py       # sibling of pretrain/config.py
 
 # ===== supported（coder npu-2 910B4×2, torch2.11/torch_npu2.11, CANN9.1 实跑 exit 0） =====
 supported:
