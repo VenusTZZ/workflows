@@ -40,7 +40,7 @@ Python 3.xxx
 **安装 torch 与 torch_npu。** 使用严格配套的版本安装 NPU 运行时。
 
 ```shell #test-setup id="install-torch"
-pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0
+pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 "numpy==1.26.4"
 pip install --no-deps torch-npu==2.10.0.post4
 ```
 
