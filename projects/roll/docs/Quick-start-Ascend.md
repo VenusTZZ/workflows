@@ -155,6 +155,7 @@ logging_dir: ./output/logs
 output_dir: ./output
 system_envs:
   USE_MODELSCOPE: '1'
+  VLLM_ASCEND_ENABLE_NZ: '0'
 
 track_with: tensorboard
 tracker_kwargs:
