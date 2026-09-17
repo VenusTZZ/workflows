@@ -215,9 +215,14 @@ print('torchtune', md.version('torchtune'), '/ torchao', torchao.__version__, '/
   python -m pip install "modelscope==1.37.0"
   # lm_eval is only needed for the eleuther_eval recipe (not declared as
   # an upstream dep of torchtune). The recipe's __init__ checks
-  # lm-eval >= 0.4.5; pin to the lowest series that the mirror reliably
-  # has so we don't trigger a fresh fetch on every re-run.
-  python -m pip install "lm-eval>=0.4.5,<0.5"
+  # `version("lm-eval") < "0.4.5"` (recipes/eleuther_eval.py:446) using
+  # STRING comparison (importlib.metadata.version returns a string, no
+  # version coercion), not packaging.version. So "0.4.13" < "0.4.5" is
+  # True ("0.4.1" prefix beats "0.4.5" lexicographically) and 0.4.10-0.4.49
+  # all get rejected — only 0.4.5-0.4.9 and 0.4.50+ pass. Pin exact 0.4.5
+  # (lowest acceptable) to keep the floor obvious; the import chain only
+  # uses evaluator/models/tasks/utils which is stable across 0.4.x.
+  python -m pip install "lm-eval==0.4.5"
   python - <<'PY'
 import os
 # Non-TTY CI logs: throttle tqdm refreshes instead of disabling.

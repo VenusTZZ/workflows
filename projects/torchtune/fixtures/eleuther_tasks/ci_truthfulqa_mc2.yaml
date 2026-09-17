@@ -5,9 +5,15 @@
 # root. Tasks defined here override the built-in truthfulqa_mc2 (which would
 # pull from HF datasets) so we can run end-to-end without HF access.
 #
-# data_files is a path *relative to this YAML's directory*: lm_eval's JSON
-# dataset loader resolves it via the task's include path. The actual JSON
-# lives one level up at fixtures/ci_truthfulqa_2.json.
+# data_files is resolved by datasets.load_dataset() against the cwd of
+# the python process (datasets/data_files.py:295 resolve_pattern takes
+# an explicit base_path, but load_dataset defaults it to ""). The
+# engine runs recipes with cwd=$TARGET_ROOT, and prepare_fixtures() in
+# setup_example.sh mirrors $FIXTURE_DIR/ into $TARGET_ROOT/fixtures/,
+# so the JSON lives at $TARGET_ROOT/fixtures/ci_truthfulqa_2.json. We
+# therefore write a path RELATIVE TO cwd, not relative to this YAML
+# (../ would resolve against cwd and point one level above $TARGET_ROOT,
+# which is the workflows checkout — wrong side of the fixtures mirror).
 #
 # output_type=multiple_choice makes lm_eval rank each choice by loglikelihood
 # (no generation), so the eval needs only forward passes — fits the 1-step
@@ -20,7 +26,7 @@
 task: ci_truthfulqa_mc2
 dataset_path: json
 dataset_kwargs:
-  data_files: ../ci_truthfulqa_2.json
+  data_files: fixtures/ci_truthfulqa_2.json
   split: train
 output_type: multiple_choice
 training_split: null
