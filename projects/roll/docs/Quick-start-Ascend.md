@@ -292,9 +292,7 @@ python examples/start_agentic_pipeline.py --config_path agentic_frozen_lake_npu 
 ```
 
 ```shell #test-result id="run-agentic"
-...
-pipeline complete!
-...
+...pipeline complete!...
 ```
 
 **校验训练产物。** 训练指标写入 output/tensorboard，校验事件文件存在。
