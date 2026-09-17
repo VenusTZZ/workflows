@@ -9,13 +9,12 @@
 #
 # Asset sourcing (2026-09-17, supersedes the 2026-09-16 hf-mirror Xet
 # incident): every model/dataset the supported examples hardcode is
-# fetched from ModelScope (China-reachable, no Xet) and planted into
-# the HF hub cache layout, so from_pretrained / load_dataset at example
-# runtime resolves to the planted cache and never downloads weights.
-# The two assets ModelScope does not carry (pokemon-en-zh captions,
-# malterei swift videos) were delivered into the runners' shared cache
-# root by the cache-seed workflow on 2026-09-17 (bundle since removed
-# from the repo; re-stage runbook in cache-seed/README.md).
+# seeded into the runners' shared cache root by the cache-seed workflow
+# (ModelScope download → HF hub cache layout; spec:
+# cache-seed/accelerate/ms_seeds.yaml, executed by scripts/ms_seed.py).
+# The pool shares one persistent cache volume, so one dispatch warms
+# every runner. Setup here only installs the stack and validates the
+# seeded assets resolve locally; nothing downloads weights at runtime.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -73,187 +72,6 @@ raise SystemExit(
   fi
   echo "installing torch==2.9.0 torch_npu==2.9.0.post2"
   pip_ascend torch==2.9.0 torch_npu==2.9.0.post2
-}
-
-# ModelScope → HF hub cache plant (peft's proven mechanism):
-#   snapshot_download from ModelScope (China mirror, no Xet) → cp into
-#   ~/.cache/huggingface/hub/<models|datasets>--<hf_id>/snapshots/<sha>/
-#   with refs/main written to the real upstream sha (queried via the HF
-#   API — xet-free metadata only). from_pretrained(<hf_id>) /
-#   load_dataset(<hf_id>) then resolves to the planted cache and never
-#   touches weight downloads.
-# cp (not symlink): symlinks into the modelscope cache break when that
-#   cache is recycled by another job; after cp the HF cache is
-# self-contained. Existing files are skipped, so a warm runner finishes
-# in seconds.
-# Pinned to 1.37.0 (same as peft): 1.40.1's "modelscope-hub>=0.4.2"
-# floor dies on DEFAULT_CREDENTIALS_PATH import with the mirror-lagged
-# hub 0.4.2.
-ms_plant() {
-  # $1 = asset group: nlp | nlp-ar | cv | infer-phi2 | infer-sd |
-  #                   infer-tts | infer-llava
-  python - "$1" <<'PY'
-import os
-import sys
-import shutil
-from pathlib import Path
-
-# Non-TTY CI logs: throttle tqdm refreshes instead of disabling.
-os.environ.setdefault("TQDM_MININTERVAL", "15")
-
-from modelscope import snapshot_download
-
-MODEL_CACHE = Path(os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope")))
-HUB_ROOT = Path(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
-HF_API = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/") + "/api"
-
-# (ms_id, hf_id, kind, allow_patterns). allow_patterns trims formats we
-# never load (onnx/, duplicate .bin/.ckpt/.h5/.msgpack) so the plant
-# moves the minimum bytes the example actually reads.
-GROUPS = {
-    # every NLP / by_feature example: bert-base-cased (hardcoded BARE id
-    # in the scripts → plant to models--bert-base-cased) + glue mrpc.
-    # NOTE: MS dataset downloads treat patterns as subtree roots
-    # ("mrpc/*" → root /mrpc), matching peft's proven usage; the README
-    # is fetched from the mirror API at load_dataset resolution (tiny,
-    # xet-free — only LFS weights were ever flaky).
-    "nlp": [
-        ("AI-ModelScope/bert-base-cased", "bert-base-cased", "model",
-         ["*.json", "model.safetensors", "vocab.txt"]),
-        ("nyu-mll/glue", "nyu-mll/glue", "dataset", ["mrpc/*"]),
-    ],
-    # gradient_accumulation_for_autoregressive_models.py: SmolLM-360M
-    # (skip the 3.9G onnx/ sidecar) + wikitext-2-v1.
-    "nlp-ar": [
-        ("HuggingFaceTB/SmolLM-360M", "HuggingFaceTB/SmolLM-360M", "model",
-         ["*.json", "*.txt", "model.safetensors"]),
-        ("Salesforce/wikitext", "Salesforce/wikitext", "dataset",
-         ["wikitext-2-v1/*"]),
-    ],
-    # cv_example.py / complete_cv_example.py: timm/oxford-iiit-pet parquet.
-    "cv": [
-        ("timm/oxford-iiit-pet", "timm/oxford-iiit-pet", "dataset",
-         ["data/*"]),
-    ],
-    # inference/distributed/phi2.py: hardcoded "microsoft/phi-2" (same
-    # id exists on ModelScope).
-    "infer-phi2": [
-        ("microsoft/phi-2", "microsoft/phi-2", "model", None),
-    ],
-    # inference/distributed/stable_diffusion.py: hardcoded
-    # "stable-diffusion-v1-5/stable-diffusion-v1-5"; example loads fp32
-    # weights with torch_dtype=fp16 (no variant=), so the ModelScope
-    # fp32 mirror suffices — safetensors only, skip .bin/.ckpt dupes.
-    "infer-sd": [
-        ("AI-ModelScope/stable-diffusion-v1-5",
-         "stable-diffusion-v1-5/stable-diffusion-v1-5", "model",
-         ["model_index.json", "*/*.json", "*/model.safetensors",
-          "*/diffusion_pytorch_model.safetensors", "tokenizer/*",
-          "feature_extractor/*"]),
-    ],
-    # inference/distributed/distributed_speech_generation.py: hardcoded
-    # "facebook/mms-tts-eng" (skip duplicate pytorch_model.bin). Its
-    # pokemon captions dataset is NOT on ModelScope — cache-seed
-    # delivers it (preflight below).
-    "infer-tts": [
-        ("facebook/mms-tts-eng", "facebook/mms-tts-eng", "model",
-         ["*.json", "model.safetensors"]),
-    ],
-    # inference/distributed/llava_next_video.py: hardcoded
-    # "llava-hf/LLaVA-NeXT-Video-7B-hf" (same id on ModelScope, 14G).
-    # Its malterei/LLaVA-Video-small-swift video dataset is NOT on
-    # ModelScope — cache-seed delivers it (preflight below).
-    "infer-llava": [
-        ("llava-hf/LLaVA-NeXT-Video-7B-hf",
-         "llava-hf/LLaVA-NeXT-Video-7B-hf", "model", None),
-    ],
-}
-
-# Datasets that cannot come from ModelScope: delivered into the shared
-# cache root by the 2026-09-17 cache-seed dispatch (the bundle has since
-# been removed from the repo — see cache-seed/README.md for the re-stage
-# runbook if a fresh runner comes up cold). Missing → warn loudly; the
-# example itself will fail on the Xet flake if it runs without them.
-SEED_PREFLIGHT = {
-    "infer-tts": ["datasets--svjack--pokemon-blip-captions-en-zh"],
-    "infer-llava": ["datasets--malterei--LLaVA-Video-small-swift"],
-}
-
-
-def fetch_sha(hf_id, kind):
-    import requests
-    url = f"{HF_API}/{kind}s/{hf_id}"
-    r = requests.get(url, timeout=30)
-    r.raise_for_status()
-    return r.json().get("sha") or r.json().get("oid")
-
-
-def plant(ms_id, hf_id, kind, allow_patterns=None):
-    src = Path(snapshot_download(
-        ms_id,
-        cache_dir=str(MODEL_CACHE),
-        repo_type=kind,
-        allow_patterns=allow_patterns,
-    ))
-    sha = fetch_sha(hf_id, kind)
-    repo_kind = "models" if kind == "model" else "datasets"
-    repo_dir = HUB_ROOT / f"{repo_kind}--{hf_id.replace('/', '--')}"
-    snap_dir = repo_dir / "snapshots" / sha
-    snap_dir.mkdir(parents=True, exist_ok=True)
-    (repo_dir / "refs").mkdir(exist_ok=True)
-    # no trailing newline — hub compares this string to the snapshot
-    # folder name without stripping
-    (repo_dir / "refs" / "main").write_text(sha)
-    n_bytes = 0
-    for item in src.rglob("*"):
-        if not item.is_file():
-            continue
-        dest = snap_dir / item.relative_to(src)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if dest.is_symlink():
-            # replace a legacy symlink-based plant: links into the
-            # modelscope cache break when that cache is recycled
-            dest.unlink()
-        elif dest.exists():
-            continue  # warm runner: keep the already-planted copy
-        shutil.copy2(item, dest)
-        n_bytes += item.stat().st_size
-    print(f"planted {hf_id}@{sha[:8]} ({n_bytes // (1024 * 1024)} MB new)",
-          flush=True)
-
-
-def preflight(repo_dirs):
-    for repo_dir in repo_dirs:
-        refs = HUB_ROOT / repo_dir / "refs" / "main"
-        if not refs.is_file():
-            print(f"WARN: {repo_dir} missing from shared cache root — "
-                  f"this machine came up after the 2026-09-17 seed "
-                  f"delivery; re-stage via the runbook in "
-                  f"cache-seed/README.md", flush=True)
-        else:
-            sha = refs.read_text()
-            n = sum(
-                1 for _ in (HUB_ROOT / repo_dir / "snapshots" / sha).rglob("*")
-                if _.is_file()
-            )
-            print(f"seeded {repo_dir}@{sha[:8]} ({n} files)", flush=True)
-
-
-group = sys.argv[1]
-failures: list[str] = []
-for ms_id, hf_id, kind, patterns in GROUPS[group]:
-    try:
-        plant(ms_id, hf_id, kind, allow_patterns=patterns)
-    except Exception as exc:
-        failures.append(f"{ms_id}: {type(exc).__name__}: {exc}")
-        print(f"FAIL plant {ms_id}: {exc}", flush=True)
-for repo_dir in SEED_PREFLIGHT.get(group, []):
-    preflight([repo_dir])
-if failures:
-    print(f"ms_plant({group}) incomplete: {failures}", file=sys.stderr, flush=True)
-    # Don't fail setup on plant errors — the example surfaces the real
-    # failure when it actually loads (same policy as peft).
-PY
 }
 
 # Smoke-validate the planted NLP assets by actually loading them (all
@@ -331,15 +149,34 @@ sha = (hub_root / repo_dir / "refs" / "main").read_text().strip()
 snap = hub_root / repo_dir / "snapshots" / sha
 missing = [f for f in must_have if not (snap / f).is_file()]
 if missing:
-    raise SystemExit(f"{repo}: planted snapshot missing {missing}")
-print(f"{repo} planted snapshot OK: {snap}")
+    raise SystemExit(f"{repo}: seeded snapshot missing {missing}")
+print(f"{repo} seeded snapshot OK: {snap}")
+
+# tts / llava additionally need their datasets, which are NOT on
+# ModelScope — delivered as repo bundles by the cache-seed workflow
+# (spec + history: cache-seed/README.md). Warn only: the example will
+# fail loudly on the Xet flake if they are absent.
+DATASETS = {
+    "infer-tts": ["datasets--svjack--pokemon-blip-captions-en-zh"],
+    "infer-llava": ["datasets--malterei--LLaVA-Video-small-swift"],
+}
+for repo_dir in DATASETS.get(sys.argv[1], []):
+    refs = hub_root / repo_dir / "refs" / "main"
+    if not refs.is_file():
+        print(f"WARN: {repo_dir} missing from shared cache root — "
+              f"dispatch the cache-seed workflow (see cache-seed/README.md)",
+              flush=True)
+    else:
+        snap = hub_root / repo_dir / "snapshots" / refs.read_text().strip()
+        n = sum(1 for p in snap.rglob("*") if p.is_file())
+        print(f"seeded {repo_dir} ({n} files)", flush=True)
 PY
 }
 
 # Materialize the Oxford-IIT Pet Dataset jpg files used by cv_example.py
 # + complete_cv_example.py. cv_example.py uses os.listdir(data_dir) +
 # ".jpg" filter, so the data_dir must contain the .jpg files directly.
-# The parquet now comes from the ModelScope plant (ms_plant cv); the
+# The parquet now comes from the planted shared cache; the
 # materialization loop itself is unchanged.
 prepare_pets_data() {
   local dst="$TARGET_ROOT/fixtures/pets/images"
@@ -397,16 +234,12 @@ print('accelerate', accelerate.__version__,
       '/ torch', torch.__version__,
       '/ sklearn', sklearn.__version__)
 "
-  # ModelScope client for the plant step (same pin + rationale as peft).
-  python -m pip install "modelscope==1.37.0"
-  ms_plant nlp
   validate_nlp_assets
 }
 
 setup_accelerate-nlp-ar() {
   # Autoregressive grad-accum variant = NLP base + SmolLM/wikitext.
   setup_accelerate-nlp
-  ms_plant nlp-ar
   validate_ar_assets
 }
 
@@ -424,7 +257,6 @@ import timm, torchvision
 print('timm', timm.__version__,
       '/ torchvision', torchvision.__version__)
 "
-  ms_plant cv
   prepare_pets_data
 }
 
@@ -455,25 +287,21 @@ print('av', av.__version__,
 
 setup_accelerate-infer-phi2() {
   setup_infer_base
-  ms_plant infer-phi2
   validate_infer_assets infer-phi2
 }
 
 setup_accelerate-infer-sd() {
   setup_infer_base
-  ms_plant infer-sd
   validate_infer_assets infer-sd
 }
 
 setup_accelerate-infer-tts() {
   setup_infer_base
-  ms_plant infer-tts
   validate_infer_assets infer-tts
 }
 
 setup_accelerate-infer-llava() {
   setup_infer_base
-  ms_plant infer-llava
   validate_infer_assets infer-llava
 }
 

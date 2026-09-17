@@ -111,141 +111,45 @@ setup_peft() {
     torchvision==0.24.0
   python -c "import peft, trl, transformers, datasets, accelerate; print('peft', peft.__version__, '/ trl', trl.__version__, '/ transformers', transformers.__version__)"
 
-  # Pre-download all example content from ModelScope (China-reachable)
-  # because runners cannot reliably reach HuggingFace (xet-backed files
-  # 302 to cas-bridge.xethub.hf.co, intermittently unreachable).
-  #
-  # Strategy:
-  #   - Modelscope snapshot_download (China mirror) → plant to
-  #     ~/.cache/huggingface/hub/ via symlinks, with refs/main written
-  #     to the real upstream sha (queried via HF API which is xet-free).
-  #     This way from_pretrained(<hf_id>) / load_dataset(<hf_id>, ...)
-  #     resolves to the planted cache and never touches the network.
-  #   - Qwen2.5-0.5B also gets SFT_MODEL_PATH exposed for overlay_args.
-  #
-  # Pinned to 1.37.0: the hub code split started at 1.38 and 1.40.1's
-  # "modelscope-hub>=0.4.2" floor is too loose — 1.40.1 + hub 0.4.2
-  # (mirror-lagged) dies on DEFAULT_CREDENTIALS_PATH import at
-  # modelscope import time.
-  python -m pip install "modelscope==1.37.0"
+  # Resolve seeded asset paths for overlay_args. The shared cache root
+  # is populated by the cache-seed workflow (spec:
+  # cache-seed/peft/ms_seeds.yaml — ModelScope download → HF hub cache
+  # layout, refs/main = real upstream sha; this plant used to live here
+  # in setup, moved 2026-09-17 so the seed workflow is the single
+  # writer). Nothing downloads in the example jobs anymore.
+  # Hardcoded hub ids (mt0-small / dinov2-base / glue) resolve through
+  # the same seeded cache at example runtime; missing env paths are a
+  # hard error — every example that uses them fails without them.
   python - <<'PY'
-import os, sys, shutil
+import os
 from pathlib import Path
 
-# Non-TTY CI logs: throttle tqdm refreshes instead of disabling.
-os.environ.setdefault("TQDM_MININTERVAL", "15")
+HUB_ROOT = Path(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
 
-import requests
-from modelscope import snapshot_download
-
-MODEL_CACHE = Path(os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope")))
-HUB_ROOT = Path(os.path.expanduser("~/.cache/huggingface/hub"))
-HF_API = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/") + "/api"
-
-# (1) snapshot_download → env var: 例里 overlay 传 ${VAR}，
-#     from_pretrained(<local_path>) 直接吃本地，无需 plant
+# (hf_id, env var) — consumed by manifest overlay_args
+#   ${SFT_MODEL_PATH}          sft / miss / mica / supertuning
+#   ${ROBERTA_BASE_PATH}       adamss ×2
+#   ${BERT_BASE_UNCASED_PATH}  sequence_classification
 TO_ENV = [
-    ("Qwen/Qwen2.5-0.5B",               "SFT_MODEL_PATH"),         # sft/miss/mica/supertuning
-    ("AI-ModelScope/roberta-base",      "ROBERTA_BASE_PATH"),      # adamss x2（overlay 注入）
-    ("AI-ModelScope/bert-base-uncased", "BERT_BASE_UNCASED_PATH"), # sequence_classification
+    ("Qwen/Qwen2.5-0.5B", "SFT_MODEL_PATH"),
+    ("roberta-base", "ROBERTA_BASE_PATH"),
+    ("bert-base-uncased", "BERT_BASE_UNCASED_PATH"),
 ]
 
-# (2) snapshot_download + cp plant (model): 例里硬编码 hub_id（beft/pvera），
-#     from_pretrained(<hub_id>) 必须命中本地 cache，否则会去打 xet
-#     走 cp 而非 symlink：symlink 指向 modelscope cache，后者被 pod 回收
-#     / 别的 job 清掉就会断链；cp 后 HF cache 自包含，与 modelscope 无关
-TO_PLANT_MODEL = [
-    ("bigscience/mt0-small",  "bigscience/mt0-small"),   # beft_finetuning.py 硬编码
-    ("facebook/dinov2-base",  "facebook/dinov2-base"),   # pvera/...py 硬编码
-    ("AI-ModelScope/roberta-base", "roberta-base"),       # adamss_manual: argparse schema 不收 --model_name_or_path，硬编码 from_pretrained('roberta-base')，plant 到 hub cache 命中本地
-]
-
-# (3) snapshot_download + cp plant (dataset): adamss/no_lora 用 glue mrpc，
-#     adamss_manual 默认 cola。allow_patterns 只下要的 config，避免下完整
-#     140MB 的 9 个 config。imdb 不在这里——modelscope 没 parquet 数据，
-#     走 cache-seed/peft（beans、financial_phrasebank 也走那条路）。
-TO_PLANT_DATASET = [
-    # (ms_id, hf_id, allow_patterns)
-    ("nyu-mll/glue", "nyu-mll/glue", ["mrpc/*", "cola/*"]),
-]
-
-
-def fetch_sha(hf_id, kind):
-    url = f"{HF_API}/{kind}s/{hf_id}"
-    r = requests.get(url, timeout=30)
-    r.raise_for_status()
-    return r.json().get("sha") or r.json().get("oid")
-
-
-def plant(ms_id, hf_id, kind, allow_patterns=None):
-    src = Path(snapshot_download(
-        ms_id,
-        cache_dir=str(MODEL_CACHE),
-        repo_type=kind,
-        allow_patterns=allow_patterns,
-    ))
-    sha = fetch_sha(hf_id, kind)
-    repo_kind = "models" if kind == "model" else "datasets"
-    repo_dir = HUB_ROOT / f"{repo_kind}--{hf_id.replace('/', '--')}"
-    snap_dir = repo_dir / "snapshots" / sha
-    snap_dir.mkdir(parents=True, exist_ok=True)
-    (repo_dir / "refs").mkdir(exist_ok=True)
-    # no trailing newline — hub compares this string to the snapshot
-    # folder name without stripping
-    (repo_dir / "refs" / "main").write_text(sha)
-    n_bytes = 0
-    for item in src.rglob("*"):
-        if not item.is_file():
-            continue
-        dest = snap_dir / item.relative_to(src)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if dest.is_symlink():
-            # 替换之前 symlink-based plant 留下的链（避免断链风险）
-            dest.unlink()
-        elif dest.exists():
-            continue  # 已有真实文件，跳过
-        try:
-            shutil.copy2(item, dest)
-            n_bytes += item.stat().st_size
-        except FileExistsError:
-            pass
-    print(f"planted (cp) {hf_id}@{sha[:8]} ({n_bytes // (1024 * 1024)} MB)",
-          flush=True)
-
-
-failures: list[str] = []
-
-# (1) snapshot → env var
-for ms_id, var_name in TO_ENV:
-    try:
-        local = Path(snapshot_download(ms_id, cache_dir=str(MODEL_CACHE)))
-        with open(os.environ["GITHUB_ENV"], "a") as fh:
-            fh.write(f"{var_name}={local}\n")
-        print(f"{var_name}={local}", flush=True)
-    except Exception as exc:
-        failures.append(f"{ms_id} (env): {type(exc).__name__}: {exc}")
-        print(f"FAIL {ms_id} (env): {exc}", flush=True)
-
-# (2) snapshot + plant model（脚本硬编码 hub_id）
-for ms_id, hf_id in TO_PLANT_MODEL:
-    try:
-        plant(ms_id, hf_id, "model")
-    except Exception as exc:
-        failures.append(f"{ms_id} (plant model): {type(exc).__name__}: {exc}")
-        print(f"FAIL {ms_id} (plant model): {exc}", flush=True)
-
-# (3) snapshot + plant dataset（脚本硬编码 dataset 名）
-for ms_id, hf_id, patterns in TO_PLANT_DATASET:
-    try:
-        plant(ms_id, hf_id, "dataset", allow_patterns=patterns)
-    except Exception as exc:
-        failures.append(f"{ms_id} (plant dataset): {type(exc).__name__}: {exc}")
-        print(f"FAIL {ms_id} (plant dataset): {exc}", flush=True)
-
-if failures:
-    print(f"setup_peft incomplete: {failures}", file=sys.stderr, flush=True)
-    # Don't fail setup on plant errors — examples that need planted
-    # content will surface the real failure when they actually load.
+for hf_id, var in TO_ENV:
+    repo_dir = HUB_ROOT / f"models--{hf_id.replace('/', '--')}"
+    refs = repo_dir / "refs" / "main"
+    if not refs.is_file():
+        raise SystemExit(
+            f"{hf_id} missing from shared cache root — dispatch the "
+            f"cache-seed workflow (spec: cache-seed/peft/ms_seeds.yaml)")
+    sha = refs.read_text().strip()
+    snap = repo_dir / "snapshots" / sha
+    if not snap.is_dir() or not any(snap.iterdir()):
+        raise SystemExit(f"{hf_id}: refs/main -> {sha[:8]} has no snapshot files")
+    with open(os.environ["GITHUB_ENV"], "a") as fh:
+        fh.write(f"{var}={snap}\n")
+    print(f"{var}={snap}", flush=True)
 PY
 }
 

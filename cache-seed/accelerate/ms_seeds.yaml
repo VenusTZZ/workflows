@@ -1,0 +1,63 @@
+# accelerate 例程资产的 ModelScope plant spec（由 cache-seed workflow 的
+# scripts/ms_seed.py 执行；投递一次后 runner 共享缓存全池可见）。
+# 字段：ms_id = ModelScope 仓库；hf_id = 例程里硬编码的 HF id（plant 目标，
+# 裸 id 如 bert-base-cased 表示例程写的是无 org 的 id）；kind = model |
+# dataset；allow_patterns = 只取例程真正会读的格式（跳过 onnx/、重复的
+# .bin/.ckpt/.h5 等）。MS 的 dataset 把 patterns 当子树根用。
+version: 1
+seeds:
+  # ---- 全体 NLP / by_feature 例（examples/*.py, by_feature/*.py）----
+  # bert-base-cased：例程硬编码裸 id（无 org）
+  - ms_id: AI-ModelScope/bert-base-cased
+    hf_id: bert-base-cased
+    kind: model
+    allow_patterns: ["*.json", "model.safetensors", "vocab.txt"]
+  # glue mrpc：load_dataset("nyu-mll/glue", "mrpc")
+  - ms_id: nyu-mll/glue
+    hf_id: nyu-mll/glue
+    kind: dataset
+    allow_patterns: ["mrpc/*"]
+
+  # ---- gradient_accumulation_for_autoregressive_models.py ----
+  # SmolLM-360M：跳过 3.9G onnx/ 附带文件
+  - ms_id: HuggingFaceTB/SmolLM-360M
+    hf_id: HuggingFaceTB/SmolLM-360M
+    kind: model
+    allow_patterns: ["*.json", "*.txt", "model.safetensors"]
+  # wikitext-2-v1
+  - ms_id: Salesforce/wikitext
+    hf_id: Salesforce/wikitext
+    kind: dataset
+    allow_patterns: ["wikitext-2-v1/*"]
+
+  # ---- cv_example.py / complete_cv_example.py（pets jpg 物化源）----
+  - ms_id: timm/oxford-iiit-pet
+    hf_id: timm/oxford-iiit-pet
+    kind: dataset
+    allow_patterns: ["data/*"]
+
+  # ---- inference/distributed/*（每例硬编码一个模型）----
+  # phi2.py："microsoft/phi-2"（ModelScope 同名镜像）
+  - ms_id: microsoft/phi-2
+    hf_id: microsoft/phi-2
+    kind: model
+  # stable_diffusion.py：例程用 fp32 + torch_dtype=fp16（无 variant），
+  # 只取 safetensors，跳过 .bin/.ckpt 重复格式（~24G）
+  - ms_id: AI-ModelScope/stable-diffusion-v1-5
+    hf_id: stable-diffusion-v1-5/stable-diffusion-v1-5
+    kind: model
+    allow_patterns: ["model_index.json", "*/*.json", "*/model.safetensors",
+                     "*/diffusion_pytorch_model.safetensors", "tokenizer/*",
+                     "feature_extractor/*"]
+  # distributed_speech_generation.py："facebook/mms-tts-eng"（跳过重复
+  # pytorch_model.bin）；其 pokemon captions 数据集不在 ModelScope，
+  # 走 cache-seed/accelerate/ 的 bundle 投递（见 manifest.yaml）
+  - ms_id: facebook/mms-tts-eng
+    hf_id: facebook/mms-tts-eng
+    kind: model
+    allow_patterns: ["*.json", "model.safetensors"]
+  # llava_next_video.py："llava-hf/LLaVA-NeXT-Video-7B-hf"（ModelScope
+  # 同名镜像，14G）；malterei swift 视频数据集走 bundle 投递
+  - ms_id: llava-hf/LLaVA-NeXT-Video-7B-hf
+    hf_id: llava-hf/LLaVA-NeXT-Video-7B-hf
+    kind: model

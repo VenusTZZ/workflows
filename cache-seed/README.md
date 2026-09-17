@@ -1,31 +1,36 @@
-# cache-seed：CI runner 共享缓存的 fallback 投递目录
+# cache-seed：CI runner 共享缓存的投递目录 + seed spec
 
-这个目录是 CI runner **找不到替代源时的兜底**。优先级：
+这个目录（+ cache-seed workflow）承担 CI runner 共享缓存
+（SHARED_CACHE_ROOT，默认 `~/.cache/huggingface`）的**全部**投递，两半都幂等：
 
-```
-ModelScope / HuggingFace 直接下  >  本目录 cache-seed/<project>/
-```
+1. **ModelScope plant（`ms_seeds.yaml`）**：例程硬编码的主流模型/数据集。
+   spec 声明 `ms_id / hf_id / kind / allow_patterns`，workflow 的
+   `scripts/ms_seed.py` 从 ModelScope 下载并按 HF hub cache 布局落到共享
+   缓存（`refs/main` = 真实 HF sha，例程 `from_pretrained` / `load_dataset`
+   全程命中本地，不打 xet）。**各项目 setup 不再下载任何资产**，只装栈 +
+   校验在位（peft 的 overlay env 路径从 `refs/main` 解析）。
+2. **repo bundle（`manifest.yaml` + 分片文件）**：ModelScope 也没有的
+   （gated repo、小众数据集），本机代理下 → 分片 → push → workflow 拷贝组装。
 
-- **优先**：ModelScope 在 CI 集群可达，比 hf-mirror 更稳。新增模型/数据集时
-  先看 ModelScope 是否有镜像（绝大多数主流 repo 都有，如
-  `AI-ModelScope/roberta-base`），有就直接 `from modelscope import
-  snapshot_download` 在 setup / 运行时拉，不要塞进本目录
-- **兜底**：只有 ModelScope 也没有的（如 gated repo、私有模型、上游刚发布
-  ModelScope 还没同步的），才走本目录流程：本机代理下 → 分片 → push → CI
-  runner 拷贝组装
+优先级不变：能在 ModelScope 找到镜像的资产进 `ms_seeds.yaml`，不要打成
+bundle（绝大多数主流 repo 都有，如 `AI-ModelScope/roberta-base`）。
 
-**不要无脑把所有 hub-id 内容都 push 到本目录**——能 ModelScope 就 ModelScope。
-本目录的存在只是为了解决"ModelScope 没有 + hf-mirror 不稳"的小集合。
-
-## 整体流程（仅兜底场景）
+## 整体流程
 
 ```
-本机（直连 HF）                       GitHub 仓库                CI runner
-─────────────────                     ──────────                ──────────
-huggingface_hub 下内容       ──────>  cache-seed/<project>/    cache-seed.yml
-（ModelScope 没有的）                 manifest.yaml          ─→ scripts/cache_seed.py
-scripts/bundle_cache.py       ──────>  <prefix>/<file>        ─→ 拷贝 → SHARED_CACHE_ROOT
-                                     <file>.part-aa/ab/...    → sha256 校验
+ModelScope 侧（ms_seeds.yaml，主路径）      GitHub 仓库                CI runner
+────────────────────────────              ──────────                ──────────
+                                           cache-seed/<project>/    cache-seed.yml
+                                           ms_seeds.yaml          ─→ scripts/ms_seed.py
+ModelScope（CI 集群直连）    <─────────────────────────────────────  下载 → plant →
+                                                                     <root>/hub/…
+
+repo bundle 侧（仅 ModelScope 没有的）      GitHub 仓库                CI runner
+────────────────────────────              ──────────                ──────────
+本机（代理直连 HF）                        cache-seed/<project>/    cache-seed.yml
+huggingface_hub 下内容       ──────>       manifest.yaml          ─→ scripts/cache_seed.py
+scripts/bundle_cache.py       ──────>       <prefix>/<file>        ─→ 拷贝 → SHARED_CACHE_ROOT
+                                           <file>.part-aa/ab/...    → sha256 校验
 ```
 
 ## 单校验
@@ -53,8 +58,9 @@ scripts/bundle_cache.py       ──────>  <prefix>/<file>        ─→
 
 ## 什么时候 dispatch
 
-- 新增了 ModelScope 也没有的内容
-- 上游文件改动（sha 漂移 → 重新 stage 并 seed）
+- 新增了 ms_seeds.yaml 条目（新项目接入 / 新资产）
+- 新增了 ModelScope 也没有的内容（bundle）
+- 上游文件改动（sha 漂移 → 重新 stage 并 seed；ms_seed 侧自动跟随）
 - runner 池扩容（matrix 4 路撒点，未覆盖的机器再 dispatch 一次即可）
 
 ## 加速本机的 staging
@@ -95,7 +101,7 @@ files:
 
 不要手填 sha256 —— 必须由 `bundle_cache.py` 流式算才能与拷完后一致。
 
-## peft 的现状（实测 ModelScope API 后，2026-09-16）
+## peft 的现状（实测 ModelScope API 后，2026-09-16；plant 迁入 workflow 2026-09-17）
 
 peft 9 个 supported 例的 model/dataset 来源，按例分别走哪条路：
 
@@ -104,14 +110,20 @@ peft 9 个 supported 例的 model/dataset 来源，按例分别走哪条路：
 | sft | overlay `--model_name_or_path ${SFT_MODEL_PATH}`（Qwen0.5B 本地） | overlay fixture `ci_sft_8.jsonl` |
 | miss / mica | overlay `--base_model_name_or_path ${SFT_MODEL_PATH}` | 硬编码 `imdb`（**cache-seed**）|
 | supertuning | overlay `--base_model ${SFT_MODEL_PATH}` | overlay fixture `ci_supertuning_8.jsonl` |
-| beft | 硬编码 `bigscience/mt0-small`（setup cp plant） | 硬编码 `gtfintechlab/financial_phrasebank...` → **cache-seed** |
-| pvera | 硬编码 `facebook/dinov2-base`（setup cp plant） | 硬编码 `beans` → **cache-seed** |
-| sequence_classification | overlay `--model_name_or_path ${BERT_BASE_UNCASED_PATH}` | `glue/mrpc`（setup cp plant）|
-| adamss ×2 | overlay `--model_name_or_path ${ROBERTA_BASE_PATH}` | `glue/mrpc` 或 `glue/cola`（setup cp plant）|
+| beft | 硬编码 `bigscience/mt0-small`（ms_seeds plant） | 硬编码 `gtfintechlab/financial_phrasebank...` → **cache-seed** |
+| pvera | 硬编码 `facebook/dinov2-base`（ms_seeds plant） | 硬编码 `beans` → **cache-seed** |
+| sequence_classification | overlay `--model_name_or_path ${BERT_BASE_UNCASED_PATH}` | `glue/mrpc`（ms_seeds plant）|
+| adamss ×2 | overlay `--model_name_or_path ${ROBERTA_BASE_PATH}` | `glue/mrpc` 或 `glue/cola`（ms_seeds plant）|
 
-**setup_example.sh cp plant 三类**：
-- model：脚本硬编码 hub_id 的（beft/pvera）
-- dataset：脚本硬编码 dataset 名 + allow_patterns 过滤的（glue 只取 mrpc/cola）
+**ms_seeds.yaml（`cache-seed/peft/ms_seeds.yaml`）装 ModelScope 有的**：
+- model ×5：Qwen2.5-0.5B / roberta-base（裸 id，adamss_manual 硬编码）/
+  bert-base-uncased / mt0-small / dinov2-base
+- dataset ×1：glue 只取 mrpc/cola 子树
+
+2026-09-17 前 plant 活在 peft 的 setup_example.sh（TO_ENV/TO_PLANT_MODEL/
+TO_PLANT_DATASET），现统一迁入本 workflow；peft setup 只剩从 `refs/main`
+解析 `${SFT_MODEL_PATH}` / `${ROBERTA_BASE_PATH}` / `${BERT_BASE_UNCASED_PATH}`
+三个 overlay 路径。
 
 **本目录装 ModelScope 没有 parquet 数据的 3 个**：
 - `stanfordnlp/imdb`（~80MB plain_text parquet ×3）— miss / mica 用 `train[:1%]`
@@ -119,13 +131,12 @@ peft 9 个 supported 例的 model/dataset 来源，按例分别走哪条路：
 - `gtfintechlab/financial_phrasebank_sentences_allagree` / 5768（~196KB）— beft 用
 
 `modelscope/imdb` 有 imdb.py script 但**没 parquet 数据**，所以 imdb 不走 modelscope。
-nyu-mll/glue 的 mrpc/cola parquet 在 modelscope 上 → setup 阶段 cp plant，无 push。
 
 ## accelerate 的现状（实测 ModelScope API 后，2026-09-17）
 
 accelerate 的资产源整体切换（解决 2026-09-16 hf-mirror Xet 302 事故）：
-9 个可 ModelScope 的资产全部走 setup 阶段 `ms_plant`（snapshot_download →
-cp 到 HF hub cache，同 peft 机制）：
+9 个可 ModelScope 的资产全部进 `cache-seed/accelerate/ms_seeds.yaml`，
+由 workflow 的 `scripts/ms_seed.py` 统一 plant（spec 里有每条的用途注释）：
 
 | 资产 | ModelScope id | 备注 |
 |---|---|---|
@@ -139,8 +150,8 @@ cp 到 HF hub cache，同 peft 机制）：
 | mms-tts-eng | `facebook/mms-tts-eng` | 同名镜像 |
 | LLaVA-NeXT-Video-7B-hf | `llava-hf/LLaVA-NeXT-Video-7B-hf` | 同名镜像，14G |
 
-infer 组按例拆 profile（`accelerate-infer-phi2/sd/tts/llava`），每 job 只
-plant 本例硬编码的模型，避免单 job 拉 ~27G。
+infer 组按例拆 profile（`accelerate-infer-phi2/sd/tts/llava`），各例 setup
+只校验本例硬编码的模型与数据集在位，不下载。
 
 **已投递后移除（2026-09-17）**：accelerate 的两个 ModelScope 缺口数据集
 （均为例里硬编码 `load_dataset` / `snapshot_download`，无 MS 镜像或等价物）
