@@ -60,10 +60,6 @@ supported:
       - --data_dir ${TARGET_ROOT}/fixtures/pets/images
     timeout_minutes: 30
 
-  # by_feature/* 8 条：基于 nlp_example.py 的最小修改，每个叠加一个 Accelerate
-  # 特性。BERT + MRPC + 默认 3 epochs。默认 fp32 / NPU / 普通 dataloader 都
-  # 是 argparse 默认值，nlp_example.py 这条路径不需要任何 overlay。
-
   - path: examples/by_feature/gradient_accumulation.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-1
@@ -161,16 +157,15 @@ supported:
     overlay_args: []
     timeout_minutes: 60
 
-  # VITS 语音生成：facebook/mms-tts-eng（~150M）+ pokemon captions 数据集
-  # （833 条），fp32 推理，逐条落 wav。需 scipy（wavfile）+ torchvision
-  # （VitsModel import 链拉 torchvision op 注册）。
+# VITS 语音生成：facebook/mms-tts-eng（~150M，ModelScope 同名镜像 plant）
+  # + pokemon captions 数据集
   - path: examples/inference/distributed/distributed_speech_generation.py
-    profile: accelerate-infer
+    profile: accelerate-infer-tts
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --output_path ${CI_OUTPUT_DIR}/tts
-    timeout_minutes: 45
+    timeout_minutes: 60
 
   # LLaVA-NeXT-Video-7B-hf fp16 ≈14G（ModelScope 同名镜像 plant，冷缓存
   # 下载计入 timeout）+ malterei swift 视频数据集
@@ -181,7 +176,6 @@ supported:
     overlay_args:
       - --save_dir ${CI_OUTPUT_DIR}/llava
     timeout_minutes: 120
-
 
 unsupported:
   # [平台] TPU-only：torch_xla.runtime 无条件 import（finetune_lm_tpu.py:25），
@@ -307,13 +301,6 @@ unsupported:
   - examples/torch_native_parallelism/nd_parallel.py
   - examples/torch_native_parallelism/nd_parallel_trainer.py
 
-  # [场景] accelerate launcher 配置 runner：裸 python 下 Accelerator() 不带
-  # fp8 handler，打印 state 后 exit 0，不触发 torchao（旧注"fp8 init 必触发
-  # torchao.float8 缺"不实）；fp8 场景需 accelerate launch --config_file
-  # fp8.yaml，且该 yaml 指定的是 TE 后端（NVIDIA-only）。本目录已在
-  # scan.exclude，此条仅作记录
-  - examples/config_yaml_templates/run_me.py
-
   # [平台/版本] florence2：trust_remote_code 的仓库遥控代码与 transformers
   # 5.x 不兼容——2026-09-16 coder npu-1 实跑（transformers 5.17 + 装齐
   # fire/webdataset + Florence-2-large 预下 + 8 图 mini.tar fixture）：
@@ -334,5 +321,5 @@ unsupported:
   # 任何 Linux 平台同样炸，与 NPU 无关，改上游才能修。
   # 另注：默认模型 PixArt-Sigma-XL-2-1024-MS 的 T5-XXL 权重 ~20G，若上游
   # 修复后转正，建议 overlay 到 SD v1.5 控制冷缓存成本。
-  # （coder 实跑 rc=1：OSError Errno 36 @ 307/1632 images） 
+# （coder 实跑 rc=1：OSError Errno 36 @ 307/1632 images）
   - examples/inference/distributed/distributed_image_generation.py
