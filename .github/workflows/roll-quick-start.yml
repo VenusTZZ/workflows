@@ -38,7 +38,7 @@ jobs:
         --shm-size=32g
         --volume=/data/ci-cache/modelscope/roll:/root/.cache/modelscope
       # NPU runtime wheels + requirements_common + ~1 GB model download
-      # + a 2-step agentic train run on one card.
+      # + a 1-step agentic train run on one card.
       timeout_minutes: 240
       upstream_repo: alibaba/ROLL
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/roll/docs/Quick-start-Ascend.md?ref=${{ github.sha }}

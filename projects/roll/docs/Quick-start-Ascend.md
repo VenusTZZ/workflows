@@ -138,7 +138,7 @@ roll ok
 
 FrozenLake 是 ROLL 官方快速入门的示例：Qwen2.5-0.5B-Instruct 作为策略模型，在 4×4 冰面网格中逐轮输出移动方向，绕开冰洞到达终点，环境按结果返回奖励。ROLL 用 Ray 把角色编排为独立 worker 集群：actor_train 用 FSDP2 策略更新权重，actor_infer 用 vLLM 生成动作，reference 用 HF 推理计算参考概率，三个角色共享同一张 NPU，GRPO 用组内采样基线替代 critic。模型权重首次运行自动下载到默认缓存 ~/.cache/modelscope。
 
-**写入示例配置。** 单卡昇腾版配置使用 fsdp2_train 训练、vLLM rollout 和 HF 参考模型，设备映射只留卡 0，批量收缩，只跑 2 步。
+**写入示例配置。** 单卡昇腾版配置使用 fsdp2_train 训练、vLLM rollout 和 HF 参考模型，设备映射只留卡 0，批量收缩，只跑 1 步。
 
 ```python #test-setup id="write-config"
 from pathlib import Path
@@ -163,7 +163,7 @@ tracker_kwargs:
 
 num_gpus_per_node: 1
 
-max_steps: 2
+max_steps: 1
 save_steps: 1000
 logging_steps: 1
 eval_steps: 1000
