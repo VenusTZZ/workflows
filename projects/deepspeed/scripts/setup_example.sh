@@ -124,6 +124,28 @@ plant_chat_fixture() {
   echo "planted chat fixture $fixture -> $chat_data/{train,eval}.json"
 }
 
+# DeepSpeed-Chat's setup.py uses find_packages(include=['dschat']), while the
+# dschat root is a PEP 420 namespace package without __init__.py. pip therefore
+# installs distribution metadata but does not make the source package
+# importable when the launcher changes into a training/step* directory. Expose
+# the upstream source root explicitly without editing the examples checkout.
+install_chat_source_path() {
+  local chat_root="$EXAMPLES_ROOT/applications/DeepSpeed-Chat"
+  case ":${PYTHONPATH:-}:" in
+    *":$chat_root:"*) ;;
+    *) export PYTHONPATH="$chat_root${PYTHONPATH:+:$PYTHONPATH}" ;;
+  esac
+  echo "PYTHONPATH=$PYTHONPATH" >> "$GITHUB_ENV"
+  python - <<'PY'
+import dschat
+
+paths = list(dschat.__path__)
+if not paths:
+    raise SystemExit("dschat namespace package has no source path")
+print("runtime dschat namespace:", paths)
+PY
+}
+
 setup_deepspeed() {
   install_deepspeed_source
   echo "installing dependencies from the HelloDeepSpeed and CIFAR requirements baselines"
@@ -134,19 +156,99 @@ setup_deepspeed() {
   install_hello_dataset_shim
 }
 
+# Pre-stage CIFAR-10 from a pinned ModelScope dataset revision. Both the
+# single-card and MoE examples use torchvision with root=./data and
+# download=True; a complete local tree makes torchvision skip its unreachable
+# Toronto download URL. Verify both the archive SHA-256 and torchvision's
+# official per-file MD5 list.
+plant_cifar10() {
+  local data_dir="$EXAMPLES_ROOT/training/cifar/data"
+  CIFAR10_DATA_DIR="$data_dir" python - <<'PY'
+import hashlib
+import os
+from pathlib import Path
+import time
+import urllib.request
+import zipfile
+
+from torchvision.datasets import CIFAR10
+
+URL = (
+    "https://modelscope.cn/api/v1/datasets/studyhard1/"
+    "cifar10-dataset/repo?Revision="
+    "9231e736fd8d53f7158165a07d801429b4414993&"
+    "FilePath=cifar-10-batches-py.zip"
+)
+EXPECTED_SHA256 = "4f287e6733e987d5c1ab2af557413cf0f5bc78f293765d87dc5633788246e5d7"
+data_dir = Path(os.environ["CIFAR10_DATA_DIR"]).resolve()
+archive = data_dir / "cifar-10-batches-py.zip"
+partial = archive.with_suffix(".zip.part")
+data_dir.mkdir(parents=True, exist_ok=True)
+
+
+def complete() -> bool:
+    dataset = CIFAR10.__new__(CIFAR10)
+    dataset.root = str(data_dir)
+    return dataset._check_integrity()
+
+
+if complete():
+    print("CIFAR-10 fixture already passes torchvision integrity checks:", data_dir)
+    raise SystemExit(0)
+
+for attempt in range(1, 4):
+    digest = hashlib.sha256()
+    try:
+        request = urllib.request.Request(URL, headers={"User-Agent": "cosdt-ci/1.0"})
+        with urllib.request.urlopen(request, timeout=120) as response, partial.open("wb") as output:
+            while chunk := response.read(1024 * 1024):
+                output.write(chunk)
+                digest.update(chunk)
+        actual = digest.hexdigest()
+        if actual != EXPECTED_SHA256:
+            raise RuntimeError(
+                f"CIFAR-10 archive sha256 mismatch: expected {EXPECTED_SHA256}, got {actual}"
+            )
+        partial.replace(archive)
+        break
+    except Exception:
+        partial.unlink(missing_ok=True)
+        if attempt == 3:
+            raise
+        print(f"CIFAR-10 download attempt {attempt}/3 failed; retrying", flush=True)
+        time.sleep(2 * attempt)
+
+with zipfile.ZipFile(archive) as bundle:
+    for member in bundle.infolist():
+        destination = (data_dir / member.filename).resolve()
+        if destination != data_dir and data_dir not in destination.parents:
+            raise RuntimeError(f"unsafe CIFAR-10 archive member: {member.filename}")
+    bundle.extractall(data_dir)
+archive.unlink()
+
+if not complete():
+    raise SystemExit("extracted CIFAR-10 data failed torchvision integrity checks")
+print("planted verified CIFAR-10 fixture in", data_dir)
+PY
+}
+
+setup_ds_cifar() {
+  setup_deepspeed
+  plant_cifar10
+}
+
 # Shared DeepSpeed-Chat setup: DS source + transformers + opt-125m + fixture.
 setup_ds_chat() {
   local fixture="$1"
   install_deepspeed_source
-  # DeepSpeed-Chat steps import the top-level dschat package (sibling of the
-  # step dirs); install it editable so 'from dschat.utils... import' resolves.
-  # --no-deps: its setup.py pins deepspeed/torch/transformers which we already
-  # provide (source install / image). Install the remaining declared deps
-  # explicitly so pip cannot replace the NPU torch stack or source DeepSpeed.
-  python -m pip install --no-deps -e "$EXAMPLES_ROOT/applications/DeepSpeed-Chat"
+  # Install the declared dependencies explicitly so pip cannot replace the NPU
+  # torch stack or the source DeepSpeed under test. The upstream editable
+  # package is intentionally not used: its find_packages() call produces an
+  # empty package for the PEP 420 dschat namespace.
   python -m pip install "transformers>=4.31.0,<5,!=4.33.2" \
     "datasets>=2.8.0" "accelerate>=0.15.0" "sentencepiece>=0.1.97" \
     "protobuf==3.20.3" tensorboard
+  install_chat_source_path
   ms_download_models "OPT_125M_PATH=facebook/opt-125m"
   plant_chat_fixture "$fixture"
 }

@@ -45,7 +45,7 @@ class DeepSpeedExamplesContractTests(unittest.TestCase):
     def test_multicard_entries_match_their_launch_recipes(self) -> None:
         moe = self.by_path["training/cifar/run_ds_moe.sh"]
         self.assertEqual(moe["runner"], "linux-aarch64-a2-2")
-        self.assertEqual(moe["profile"], "deepspeed")
+        self.assertEqual(moe["profile"], "ds_cifar")
         self.assertIn("--num_gpus 2", self.run_script)
         self.assertIn("--ep-world-size 2", self.run_script)
 
@@ -77,13 +77,29 @@ class DeepSpeedExamplesContractTests(unittest.TestCase):
             self.assertEqual(entry["runner"], "linux-aarch64-a2-1")
         self.assertIn("deepspeed --master_port", self.run_script)
         self.assertIn("--num_gpus 1", self.run_script)
+        self.assertIn('PYTHONPATH=$PYTHONPATH', self.setup_script)
+        self.assertIn("import dschat", self.setup_script)
+
+    def test_cifar_is_pre_staged_from_verified_modelscope_revision(self) -> None:
+        cifar = self.by_path["training/cifar"]
+        moe = self.by_path["training/cifar/run_ds_moe.sh"]
+        self.assertEqual(cifar["profile"], "ds_cifar")
+        self.assertEqual(moe["profile"], "ds_cifar")
+        self.assertIn("setup_ds_cifar", self.setup_script)
+        self.assertIn(
+            "9231e736fd8d53f7158165a07d801429b4414993",
+            self.setup_script,
+        )
+        self.assertIn(
+            "4f287e6733e987d5c1ab2af557413cf0f5bc78f293765d87dc5633788246e5d7",
+            self.setup_script,
+        )
+        self.assertIn("dataset._check_integrity()", self.setup_script)
 
     def test_setup_preserves_npu_torch_and_source_deepspeed(self) -> None:
         self.assertIn('python -m pip install -e "$src"', self.setup_script)
-        self.assertIn(
-            'python -m pip install --no-deps -e "$EXAMPLES_ROOT/',
-            self.setup_script,
-        )
+        self.assertNotIn('pip install --no-deps -e "$EXAMPLES_ROOT/',
+                         self.setup_script)
         self.assertIn("DeepSpeed was not imported from target source",
                       self.setup_script)
         self.assertNotIn("pip install -r", self.setup_script)

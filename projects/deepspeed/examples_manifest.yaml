@@ -134,14 +134,15 @@ supported:
       - '--dtype float32'
       - '--max_new_tokens 8'
     timeout_minutes: 60
-  # CIFAR10 image classification (ZeRO stage 0 + BF16): torchvision auto-downloads
-  # CIFAR-10 (~170MB, cluster-reachable). Launched via run_ds.sh because main()
+  # CIFAR10 image classification (ZeRO stage 0 + BF16): setup pre-stages a
+  # verified ModelScope mirror because torchvision's Toronto source is unreachable.
+  # Launched via run_ds.sh because main()
   # reads LOCAL_RANK injected by the deepspeed launcher (bare python would crash);
   # the wrapper passes overlay args through with $@. path is the directory so the
   # job name is "cifar" instead of colliding with HelloDeepSpeed's run_ds.sh.
   - path: training/cifar
     exec: training/cifar/run_ds.sh
-    profile: deepspeed
+    profile: ds_cifar
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
@@ -163,7 +164,7 @@ supported:
   # launcher recipe but has no $@ passthrough, so run_example.sh reproduces it
   # and appends these CI-size overrides without editing the example checkout.
   - path: training/cifar/run_ds_moe.sh
-    profile: deepspeed
+    profile: ds_cifar
     runner: linux-aarch64-a2-2
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:

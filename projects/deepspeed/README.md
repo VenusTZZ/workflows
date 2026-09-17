@@ -26,9 +26,9 @@
 | `applications/DeepSpeed-Chat/training/step2_dpo_finetuning`（exec: `main.py`） | ds_chat_dpo | DPO（ref model 内存翻倍） | 同上 | 1 epoch |
 | `applications/DeepSpeed-Chat/training/step3_rlhf_finetuning`（exec: `main.py`） | ds_chat_rlhf | RLHF（官方 `--enable_test_mode`） | opt-125m ×2（ModelScope）+ fixture | test mode 5 步 |
 | `inference/huggingface/text-generation/inference-test.py` | ds_infer | 推理（`--hf_baseline` 跳过 DS kernel） | opt-125m（ModelScope） | 8 token |
-| `training/cifar`（exec: `run_ds.sh`） | deepspeed | CIFAR10 分类（ZeRO-0 + BF16） | torchvision CIFAR-10 | 1 epoch |
+| `training/cifar`（exec: `run_ds.sh`） | ds_cifar | CIFAR10 分类（ZeRO-0 + BF16） | ModelScope 预置并校验的 CIFAR-10 | 1 epoch |
 | `training/offload_states/offload_states.py` | deepspeed / 1 卡 | ZeRO offload_states | 随机合成数据 | 小规模 |
-| `training/cifar/run_ds_moe.sh` | deepspeed / 2 卡 | CIFAR10 MoE expert parallel（EP=2） | torchvision CIFAR-10 | 1 epoch |
+| `training/cifar/run_ds_moe.sh` | ds_cifar / 2 卡 | CIFAR10 MoE expert parallel（EP=2） | ModelScope 预置并校验的 CIFAR-10 | 1 epoch |
 | `training/autotp_equivalence`（exec: `train.py`） | ds_autotp_equivalence / 4 卡 | AutoTP=1/3/4 loss 等价性 | Qwen3-0.6B（ModelScope）+ 随机 token | 每组 5 步 |
 
 **启动方式的选择**：`cifar10_deepspeed.py` 的 main() 无条件读 launcher 注入的 `LOCAL_RANK` 并调 `init_distributed()`，因此普通 CIFAR 经支持 `$@` 的上游 `run_ds.sh` 启动。CIFAR MoE 的上游脚本不透传 `$@`，项目 runner 按原配方复刻两卡 launcher、EP=2 和 MoE 参数，再追加 CI overlay。DS-Chat 官方 training_scripts 硬编码 1.3B～66B 模型且不透传任意参数，项目 runner 等价执行 `deepspeed --num_gpus 1 main.py <overlay_args>`。AutoTP equivalence 同样复刻上游 `run_gpu.sh` 的 1/3/4 卡三次启动与 loss 比较，但显式传入 ModelScope 本地模型。offload_states 与 `--hf_baseline` inference 不依赖 launcher，直接运行 `.py`。
@@ -37,7 +37,9 @@
 
 bf16_master_weight 与 pipeline_parallelism 曾进 supported，CI 实测其源码硬绑 CUDA（`torch.cuda.set_device` / `autocast(device_type="cuda")` / `--backend nccl`），装包无法解决，已移回 unsupported（需 patch，次轮候选）。
 
-DeepSpeed-Chat 的 `--data_path local/jsonfile` 从 `applications/DeepSpeed-Chat/data/{train,eval}.json` 读取（JSON Lines，字段 `prompt`/`chosen`/`rejected`）；`scripts/setup_example.sh` 在对应 profile 下把 [fixtures/](fixtures/) 里的 8 行 fixture 拷到该目录，并 `pip install --no-deps -e applications/DeepSpeed-Chat` 安装 `dschat` 包（上游 issue #813 同款问题）。模型经 `ms_download_models` 从 ModelScope 下载到本地，路径写入 `GITHUB_ENV`（`OPT_125M_PATH` / `QWEN3_06B_PATH`），overlay_args 引用本地目录。setup 按上游 requirements/setup.py 显式安装依赖，但不会从 PyPI 覆盖镜像的 `torch + torch_npu` 或 `$TARGET_ROOT` 中的 DeepSpeed 源码；安装后会校验 `deepspeed.__file__` 位于目标源码树。
+DeepSpeed-Chat 的 `--data_path local/jsonfile` 从 `applications/DeepSpeed-Chat/data/{train,eval}.json` 读取（JSON Lines，字段 `prompt`/`chosen`/`rejected`）；`scripts/setup_example.sh` 在对应 profile 下把 [fixtures/](fixtures/) 里的 8 行 fixture 拷到该目录。上游 `setup.py` 的 `find_packages(include=['dschat'])` 无法安装缺少根 `__init__.py` 的 namespace package，因此 setup 不依赖其空 editable wheel，而是把 `applications/DeepSpeed-Chat` 源码根目录写入 `PYTHONPATH` 并立即执行 `import dschat` 验证。上游 [issue #813](https://github.com/deepspeedai/DeepSpeedExamples/issues/813) 也记录了 DeepSpeed-Chat 在切换执行/缓存上下文后发生模块解析错误，但不是本次完全相同的报错。模型经 `ms_download_models` 从 ModelScope 下载到本地，路径写入 `GITHUB_ENV`（`OPT_125M_PATH` / `QWEN3_06B_PATH`），overlay_args 引用本地目录。setup 按上游 requirements/setup.py 显式安装依赖，但不会从 PyPI 覆盖镜像的 `torch + torch_npu` 或 `$TARGET_ROOT` 中的 DeepSpeed 源码；安装后会校验 `deepspeed.__file__` 位于目标源码树。
+
+CIFAR 单卡和两卡 MoE 共用 `ds_cifar` profile。setup 从固定 revision 的 ModelScope 镜像下载 CIFAR-10 zip，先校验 SHA-256，再解压到上游脚本使用的 `training/cifar/data`，最后调用 torchvision 自带的官方逐文件 MD5 清单复核。这样保留 example 的 `download=True` 原始逻辑，但完整数据已存在时不会访问 CI 中超时的 Toronto 源；其余 `deepspeed` profile 不承担这次约 170 MB 的下载。
 
 其余约 224 条列入 unsupported：同一逻辑 example 的 `.sh` 启动包装已并入对应 `.py` 条目，每一条都带一行内联中文注释，注明具体不支持原因（多机多卡 mpi/NCCL、需 ImageNet/大模型、绑 CUDA 算子、NVMe 硬件、性能基准、compression 需 patch、依赖远程 HF 数据集等），见 manifest。清单与磁盘的差异只打印路径，不使 job 失败；例外：`supported` 条目的 path 已不在磁盘上时 manifest-check 立即判红。
 
@@ -52,7 +54,7 @@ DeepSpeed-Chat 的 `--data_path local/jsonfile` 从 `applications/DeepSpeed-Chat
 
 ## 模型缓存边界
 
-薄触发器不向公共引擎传宿主缓存卷，模型在各 matrix job 的容器内准备；同一 job 的 setup 与 run 步骤可复用该容器内文件，但不保证跨 job 或跨 workflow run 复用。本看护所需模型（opt-125m 等）与数据集（fixture / CIFAR-10）均可经 ModelScope 或直接下载得到，正常路径不使用 [cache-seed](../../cache-seed/README.md)；仅当某 example 硬编码了 ModelScope 也无镜像的资产时才按 cache-seed 流程兜底投递。
+薄触发器不向公共引擎传宿主缓存卷，模型和 CIFAR-10 在各 matrix job 的容器内准备；同一 job 的 setup 与 run 步骤可复用该容器内文件，但不保证跨 job 或跨 workflow run 复用。本看护所需模型（opt-125m 等）和 CIFAR-10 均有 ModelScope 来源，正常路径不使用 [cache-seed](../../cache-seed/README.md)；仅当 ModelScope 资产变得不可用时才按 cache-seed 流程兜底投递。
 
 ## Quick Start
 
