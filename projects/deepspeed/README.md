@@ -33,7 +33,7 @@
 
 DeepSpeed-Chat 的 `--data_path local/jsonfile` 从 `applications/DeepSpeed-Chat/data/{train,eval}.json` 读取（JSON Lines，字段 `prompt`/`chosen`/`rejected`）；`scripts/setup_example.sh` 在对应 profile 下把 [fixtures/](fixtures/) 里的 8 行 fixture 拷到该目录。模型经 `modelscope.snapshot_download` 下载并 plant 到 HF hub cache，使 example 里硬编码的 `facebook/opt-125m` 离线可解析。
 
-其余约 388 条列入 unsupported 并按族群加注释（多机多卡 mpi/NCCL、需 ImageNet/大模型、绑 CUDA 算子、NVMe 硬件、性能基准、compression 需 patch 等），见 manifest。清单与磁盘的差异只打印路径，不使 job 失败；例外：`supported` 条目的 path 已不在磁盘上时 manifest-check 立即判红。
+其余约 224 条列入 unsupported：同一逻辑 example 的 `.sh` 启动包装已并入对应 `.py` 条目，每一条都带一行内联中文注释，注明具体不支持原因（多机多卡 mpi/NCCL、需 ImageNet/大模型、绑 CUDA 算子、NVMe 硬件、性能基准、compression 需 patch、依赖远程 HF 数据集等），见 manifest。清单与磁盘的差异只打印路径，不使 job 失败；例外：`supported` 条目的 path 已不在磁盘上时 manifest-check 立即判红。
 
 ## 触发
 
