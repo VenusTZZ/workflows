@@ -15,17 +15,17 @@ scan:
     - 'recipes/dev/*.yaml'              # 早期实验/研究配置
 
 supported:
-  # ===== 已在 coder hdc-stable-npu-4（910B4×2, torch 2.9.0, torch_npu 2.9.0,
+  # ===== 已在 coder hdc-stable-npu-4（910B4×2, torch 2.11.0, torch_npu 2.11.0,
   # CANN 9.x）端到端跑通（setup_example.sh 实跑 + recipe exit 0），依赖线 pin
   # 见 setup_example.sh 注释 =====
-  # 验证日期：2026-09-16；torchtune checkout=v0.6.1（latest release，engine
+  # 验证日期：2026-09-17；torchtune checkout=v0.6.1（latest release，engine
   # monitor 自动取）；workflow_dispatch default=main（匹配 peft/torchtitan 模式，
-  # main HEAD 受 torch ABI 限制不在本镜像通过——见 setup_example.sh 注释）。
+  # main HEAD 现在能跑——见 setup_example.sh 注释里 torch 2.11.0 升级解释）。
   # 关键 pin：setup_torchtune() 动态探测 common_utils.py:19 的 NF4Tensor
   # import line：
   #   v0.6.x  → torchao.dtypes.nf4tensor（pin torchao==0.13.0）
   #   main    → torchao.quantization（pin torchao==0.18.0，需 torch>=2.11；
-  #             当前 torch 2.9.0+cpu NPU 镜像下 main HEAD setup 必失败）
+  #             ensure_torch_stack() 现在装 torch 2.11.0，这条路也通了）
 
   # LoRA SFT：Qwen2.5-0.5B + 50 行 alpaca，1 step，1 卡 ~12 秒
   - path: recipes/lora_finetune_single_device.py
@@ -147,6 +147,45 @@ supported:
       - log_level=INFO  # generate_v2 显式读 cfg.log_level 设置 logger；不传会 ConfigAttributeError
     timeout_minutes: 15
 
+  # 评测：Qwen2.5-0.5B + lm_eval + 自定义 ci_truthfulqa_mc2 任务（本地 JSON 驱动）
+  # eleuther_eval recipe 在 __init__ 强检 `version("lm-eval") < "0.4.5"`
+  # （**字符串比较**，不是 packaging.version——0.4.10-0.4.49 都被误拒；
+  # 详见 setup_example.sh 注释 + 端到端跑通日期 2026-09-17），setup 装
+  # `lm-eval==0.4.5`（recipe import 链只用到 lm_eval.tasks /
+  # lm_eval.evaluator / lm_eval.models.huggingface / lm_eval.utils 这四块，
+  # 0.4.5 已稳定）。任务数据走 fixtures/ci_truthfulqa_2.json（2 行手工写的
+  # TruthfulQA mc2 格式），通过 `include_path` 指向 fixtures/eleuther_tasks/，
+  # lm_eval 的 TaskManager 把 `ci_truthfulqa_mc2` 注册为覆盖 built-in
+  # truthfulqa_mc2 的本地任务，绕开 HF datasets 拉取 truthfulqa。`acc`
+  # 指标而非原版 `mc2`：原版 mc2 是 truthfulqa/utils.py 里的自定义聚合函数，
+  # 用 built-in `acc` 避免把 utils.py 也 vendor 进 fixtures。`device=npu`
+  # overlay 把 upstream config 的 `device: cuda` 翻成 NPU。
+  # 2026-09-17 在 coder hdc-stable-npu-2 跑通：exit 0，acc=1.0 / 0.92s /
+  # 1.56GB HBM（5×5 loglikelihood 一次性跑完）。fixture YAML 需要 `data_files`
+  # 写相对 cwd 的路径（datasets 4.x resolve_pattern 用 base_path="")，并且
+  # multiple_choice 类型要求 `doc_to_choice` 显式提供，不能只给 doc_to_text /
+  # doc_to_target。
+  - path: recipes/eleuther_eval.py
+    profile: torchtune
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --config recipes/configs/qwen2_5/evaluation.yaml
+      - model._component_=torchtune.models.qwen2_5.qwen2_5_0_5b
+      - tokenizer._component_=torchtune.models.qwen2_5.qwen2_5_tokenizer
+      - tokenizer.path=${TT_MODEL_PATH}/vocab.json
+      - tokenizer.merges_file=${TT_MODEL_PATH}/merges.txt
+      - checkpointer.checkpoint_dir=${TT_MODEL_PATH}
+      - checkpointer.checkpoint_files=[model.safetensors]
+      - checkpointer.model_type=QWEN2
+      - device=npu
+      - tasks=[ci_truthfulqa_mc2]
+      - include_path=${TARGET_ROOT}/fixtures/eleuther_tasks
+      - limit=2  # fixture 只有 2 行
+      - batch_size=1  # 0.5B + 多项选择 5 个候选，loglikelihood 一次跑就行
+      - max_seq_length=512  # upstream 默认 4096：2 行短问答压短
+    timeout_minutes: 15
+
 # ===== unsupported（每条附 runtime-verified / static-only 标签 + 实测失败堆栈） =====
 # 2026-09-15 在 coder hdc-stable-npu-4（910B4×2, torch 2.12.0+cpu, torch_npu 2.12.0,
 # CANN 9.x）逐例跑：10 distributed 都走到 init_process_group 抛 NCCL 错；1 个
@@ -190,8 +229,14 @@ unsupported:
   - recipes/ppo_full_finetune_single_device.py
   # eleuther_eval.py:16 `from lm_eval.evaluator import evaluate` → `ModuleNotFoundError:
   # No module named 'lm_eval'`（runner 不预装 lm-eval；即便装上，task dict 默认
-  # 走 HF 下载 hellaswag/arc 等，CI 不可控）
-  - recipes/eleuther_eval.py
+  # 走 HF 下载 hellaswag/arc 等，CI 不可控）。2026-09-17 改：setup_example.sh
+  # 装 `lm-eval==0.4.5`（recipe `version("lm-eval") < "0.4.5"` 是字符串比较
+  # 而不是 packaging.version，0.4.10-0.4.49 全被误拒），manifest 加
+  # fixtures/eleuther_tasks/ci_truthfulqa_mc2.yaml + fixtures/ci_truthfulqa_2.json
+  # 自定义任务走 include_path，绕开 HF 拉取，recipe 转 supported（见
+  # supported: 块对应 entry；2026-09-17 在 coder hdc-stable-npu-2 端到端
+  # 跑通 exit 0，acc=1.0 / 0.92s / 1.56GB HBM）
+  # - recipes/eleuther_eval.py
 
   # ===== static-only（被 scan.exclude 排除，独立 launch 不会被发现） =====
   - recipes/configs/
