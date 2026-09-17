@@ -108,14 +108,23 @@ prepare_fixtures() {
   local src="${FIXTURE_DIR:?FIXTURE_DIR is required}"
   local dst="$TARGET_ROOT/fixtures"
   echo "preparing fixtures from $src to $dst"
-  if ! ls "$src"/*.{json,jsonl} 1>/dev/null 2>&1; then
-    echo "FATAL: no fixture files (*.json / *.jsonl) found in $src" >&2
+  # Fail-soft: we don't want to hard-fail if the project only ships a
+  # custom-task YAML and no JSON/JSONL — the eleuther_eval recipe, for
+  # example, ships fixtures/eleuther_tasks/*.yaml but no top-level JSON.
+  # The actual presence/validity of the file is checked downstream when
+  # the recipe opens it; a missing file at setup is a config bug that
+  # surfaces as a real stack trace, not a setup-script one.
+  if ! compgen -G "$src/*" >/dev/null; then
+    echo "FATAL: fixture dir $src is empty" >&2
     exit 1
   fi
   mkdir -p "$dst"
-  cp "$src"/*.json "$dst/" 2>/dev/null || true
-  cp "$src"/*.jsonl "$dst/" 2>/dev/null || true
-  echo "copied $(ls "$dst" 2>/dev/null | wc -l) fixture file(s) to $dst"
+  # Mirror the entire tree: flat *.json / *.jsonl for dataset recipes,
+  # plus *.yaml subdirs (e.g. fixtures/eleuther_tasks/) for lm_eval
+  # custom-task definitions consumed by recipes/eleuther_eval.py via
+  # cfg.include_path = ${TARGET_ROOT}/fixtures/eleuther_tasks.
+  cp -r "$src"/. "$dst"/
+  echo "copied $(find "$dst" -type f | wc -l) fixture file(s) to $dst"
 }
 
 setup_torchtune() {
