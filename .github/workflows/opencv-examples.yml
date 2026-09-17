@@ -6,7 +6,7 @@
 # parallelism. The guard loop (monitor / manifest-check / run-example
 # matrix / validate-results / save-monitor-state) lives in the engine.
 #
-# === Status (2026-09-16) ===
+# === Status (2026-09-17) ===
 # bring-up: schedule is DISABLED (per the peft / trl bring-up policy).
 # The engine's manifest-check will fail until either:
 #   (A) ``upstream_repo`` is repointed at a fork (e.g.
@@ -20,7 +20,10 @@
 # already has the example scripts (e.g. via setup_example.sh copying
 # them in) will work. The local-coder verification in this commit
 # (recorded in projects/opencv/examples_manifest.yaml comments) does
-# exactly that copy + run pattern and confirms all 8 examples exit 0.
+# exactly that copy + run pattern and confirms all 3 supported
+# examples exit 0; the 5 doc-snippet CPU algorithms (imread /
+# cvtColor / resize / draw / video) now run as a setup-time sanity
+# check (setup_example.sh step 5) rather than as supported entries.
 #
 # Once (A) or (B) is in place, re-enable the cron:
 #   schedule:
@@ -67,7 +70,9 @@ jobs:
             target_ref: ${{ inputs.target_ref }}
             # 2 (not 4): the opencv DNN inference + CANN unit tests
             # both want a single NPU; 2 parallel jobs x ~1 NPU each
-            # keeps the runner healthy. The CPU quickstart 9a-9e are
-            # all <2s each and can absorb into the same wall-clock
-            # window as the longer NPU legs.
+            # keeps the runner healthy. The 5 doc-snippet CPU
+            # algorithms used to run as 5 separate quickstart legs
+            # (9a-9e); they're now collapsed into setup_example.sh
+            # step 5 sanity check (~1s total, sequential, not
+            # parallel), so the matrix is down to 3 supported entries.
             max_parallel: 2
