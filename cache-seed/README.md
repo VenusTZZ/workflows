@@ -120,3 +120,34 @@ peft 9 个 supported 例的 model/dataset 来源，按例分别走哪条路：
 
 `modelscope/imdb` 有 imdb.py script 但**没 parquet 数据**，所以 imdb 不走 modelscope。
 nyu-mll/glue 的 mrpc/cola parquet 在 modelscope 上 → setup 阶段 cp plant，无 push。
+
+## accelerate 的现状（实测 ModelScope API 后，2026-09-17）
+
+accelerate 的资产源整体切换（解决 2026-09-16 hf-mirror Xet 302 事故）：
+9 个可 ModelScope 的资产全部走 setup 阶段 `ms_plant`（snapshot_download →
+cp 到 HF hub cache，同 peft 机制）：
+
+| 资产 | ModelScope id | 备注 |
+|---|---|---|
+| bert-base-cased | `AI-ModelScope/bert-base-cased` | 例里硬编码裸 id，plant 到 `models--bert-base-cased` |
+| glue mrpc | `nyu-mll/glue` | 同 peft |
+| oxford-iiit-pet | `timm/oxford-iiit-pet` | ~790MB parquet，cv 两例 |
+| SmolLM-360M | `HuggingFaceTB/SmolLM-360M` | 同名镜像，allow_patterns 跳过 3.9G onnx/ |
+| wikitext-2-v1 | `Salesforce/wikitext` | 只取 wikitext-2-v1/* ~7.4MB |
+| phi-2 | `microsoft/phi-2` | 同名镜像 |
+| SD v1.5 | `AI-ModelScope/stable-diffusion-v1-5` | 例用 fp32+torch_dtype=fp16（无 variant），plant 只取 safetensors ~5.5G |
+| mms-tts-eng | `facebook/mms-tts-eng` | 同名镜像 |
+| LLaVA-NeXT-Video-7B-hf | `llava-hf/LLaVA-NeXT-Video-7B-hf` | 同名镜像，14G |
+
+infer 组按例拆 profile（`accelerate-infer-phi2/sd/tts/llava`），每 job 只
+plant 本例硬编码的模型，避免单 job 拉 ~27G。
+
+**本目录装 ModelScope 没有的 2 个**（均为 dataset，已核实 MS 全站无镜像或
+等价物；例里硬编码 `load_dataset` / `snapshot_download`，只能靠本目录投递）：
+- `svjack/pokemon-blip-captions-en-zh`（~100MB，data/train parquet）—
+  distributed_speech_generation 用其 `en_text` 列；MS 只有原版
+  lambdalabs/pokemon-blip-captions（无 en/zh 列），不可替代
+- `malterei/LLaVA-Video-small-swift`（~530MB，205+ 视频）— llava_next_video
+  运行时 `snapshot_download(repo_type="dataset")`，os.walk 全量使用
+
+跑 tts / llava 例前必须先 dispatch cache-seed workflow（projects=accelerate）。
