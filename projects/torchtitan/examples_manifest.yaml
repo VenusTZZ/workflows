@@ -32,9 +32,17 @@ scan:
     - torchtitan/experiments/rl/controller.py       # rl controller
     - torchtitan/experiments/rl/controller_metrics.py  # rl controller metrics
     - torchtitan/experiments/rl/batch_invariance.py  # rl batch invariance test
+    # GraphTrainer 内部的非 example 入口（被 precompile_main.py / run_train_precompile.sh import，
+    # 但自身不能独立 dispatch）：
+    - torchtitan/experiments/graph_trainer/precompile.py
+    # GraphTrainer 内部的非 example 入口（被 precompile_main.py / run_train_precompile.sh import，
+    # 但自身不能独立 dispatch）：
+    - torchtitan/experiments/graph_trainer/precompile.py
     - '**/__init__.py'
     - '**/README.md'
-    - '**/test_*'
+    - '**/test_*'        # 文件名以 test_ 开头（fnmatch 语义，只匹配 basename）
+    - '**/tests/**'      # 兜底：tests/ 子目录里的非 test_*.py 文件（run_tests.sh、
+                        # integration_tests.py、_trainer_test_utils.py 等）
     - '**/*config*.yaml'
     - '**/*config*.json'
     - '**/requirements*.txt'
@@ -494,3 +502,78 @@ unsupported:
   # 保留注释提醒：当前唯一的 SFT smoke 入口是
   # supported 段的 #4（sft_debugmodel 1-card）。
   # 退役条件：8B offload 路径修复后。
+
+  # ===== GraphTrainer 多模型入口（CUDA-only） =====
+  # 上游 _supported_experiments 显式收录 4 个 GraphTrainer module：
+  # graph_trainer.{llama3, deepseek_v3, qwen3, muse_glimmer}。manifest
+  # 之前只列了 llama3（precompile_main.py 路径），剩下 3 个 module 是
+  # graph_trainer/{deepseek_v3,qwen3,muse_glimmer}/config_registry.py
+  # 里的独立 config（GraphTrainer + 对应 model）。GraphTrainer 的核心
+  # pass（cudagraph.py）从 torch._inductor.cudagraph_trees 直接 import
+  # _use_cuda_memory_pool_manager + CUDAGraphWrapper，是 NVIDIA CUDA
+  # Graph 专属 API；torch_npu 走 aclgraph 而非 cudagraph，这层不替换
+  # 没法跑通。precompile_main.py 是 llama3 这个 module 的 .py 入口
+  # （不在 registry 里），其他 3 个 module 也没有自己的 .py 入口——必须
+  # 通过 run_train_precompile.sh 用 torchrun -m torchtitan.train --module
+  # graph_trainer.{x} --config ... 触发。
+  # 影响条目：
+  #   - graph_trainer/deepseek_v3/config_registry.py:graph_trainer_deepseek_v3_debugmodel
+  #   - graph_trainer/qwen3/config_registry.py:graph_trainer_qwen3_debugmodel
+  #   - graph_trainer/muse_glimmer/config_registry.py:graph_trainer_muse_glimmer_debugmodel
+  #   - graph_trainer/llama3/config_registry.py:graph_trainer_llama3_debugmodel
+  #       (与 graph_trainer_llama3_debugmodel_dist_gemm 共享同一 launcher)
+  # 退役条件：torch_npu 提供与 cudagraph 等价的 aclgraph wrapper，或
+  # 上游 GraphTrainer 把 cudagraph pass 抽成 backend-pluggable 接口。
+  - torchtitan/experiments/graph_trainer/deepseek_v3/config_registry.py:graph_trainer_deepseek_v3_debugmodel
+  - torchtitan/experiments/graph_trainer/qwen3/config_registry.py:graph_trainer_qwen3_debugmodel
+  - torchtitan/experiments/graph_trainer/muse_glimmer/config_registry.py:graph_trainer_muse_glimmer_debugmodel
+  - torchtitan/experiments/graph_trainer/llama3/config_registry.py:graph_trainer_llama3_debugmodel
+
+  # ===== GraphTrainer launcher + benchmark =====
+  # run_train_precompile.sh：GraphTrainer 的专用 torchrun launcher，
+  # 加 --virtual-local-rank 给 CooR precompile artifact 用；与上面同根
+  # CUDA-only 原因。
+  # autoresearch/scripts/run_benchmark.sh：8xH100 Llama3 8B FSDP=4 TP=2
+  # benchmark（NGPU=8 硬编码），同时撞 CUDA-only（GraphTrainer）+ OOM
+  # （8B + 多卡 NCCL 集合通信）；本栈（2x 910B4 32GB）物理上跑不到这
+  # 个规模。
+  # 退役条件：同上（aclgraph 等价物）+ 双卡/四卡 runner 上线。
+  - torchtitan/experiments/graph_trainer/run_train_precompile.sh
+  - torchtitan/experiments/graph_trainer/autoresearch/scripts/run_benchmark.sh
+
+  # ===== RL examples（CUDA-only 依赖链） =====
+  # 上游 _supported_experiments 显式收录 3 个 RL example module：
+  # alphabet_sort / dapo_math / search_r1。各自的 config_registry.py
+  # 直接 import rl.actors.generator / rl.actors.trainer /
+  # rl.batch_invariance / rl.components.{batcher,training_sample_builder}
+  # 等被 exclude 标记为 CUDA-only 的子模块（vLLM rollout / monarch /
+  # NCCL-only 的 batch invariance 等）。即使 rl/train.py + rl/generate.py
+  # 解决了 vLLM / monarch 缺失问题，RL example 这层还多一层 RL 专属
+  # CUDA-only 组件依赖。
+  # 影响条目：
+  #   - rl/examples/alphabet_sort/config_registry.py:rl_grpo_qwen3_*
+  #   - rl/examples/dapo_math/config_registry.py:rl_grpo_qwen3_*
+  #   - rl/examples/search_r1/config_registry.py:rl_search_r1_qwen3_*
+  # 退役条件：rl.actors/components/batch_invariance 提供 NPU 后端，或
+  # 上游把 RL rollout / batch invariance 拆成 backend-pluggable。
+  - torchtitan/experiments/rl/examples/alphabet_sort/config_registry.py
+  - torchtitan/experiments/rl/examples/dapo_math/config_registry.py
+  - torchtitan/experiments/rl/examples/search_r1/config_registry.py
+
+  # ===== flux inference（HF 资产被墙，跟 flux_debugmodel 同根） =====
+  # models/flux/inference/infer.py + run_infer.sh 是 flux 模型的纯
+  # inference 入口：复用 FluxTrainer.Config 但只跑 forward（@torch.no_grad
+  # + record），sampling.py 用的是 generic torch + einops + PIL，没有
+  # 写死的 CUDA kernel——理论上 device-agnostic。但走 ConfigManager +
+  # FluxTrainer.build 这条链路时仍然要加载 FluxModel + FluxTokenizer +
+  # AutoEncoder，tokenizer 走 HF 资产（huggingface.co/google/t5-v1_1-xxl
+  # / tokenizer_config.json 等），跟 flux_debugmodel 训练同根被墙。
+  # 走 ConfigManager FluxTrainer.build 这条路径必撞 HF download；除非
+  # HF 资产预下载或镜像，否则 rc=124 (timeout)。
+  # 影响条目（inference 路径）：
+  #   - flux/inference/infer.py（@torch.no_grad 主函数入口）
+  #   - flux/run_infer.sh（NGPU=8 torchrun launcher，依赖 flux_inference_debugmodel 配置）
+  # 退役条件：HF 镜像 / 预下载 t5-v1_1-xxl + flux 模型权重，或 flux inference
+  # 切换到本地 tokenizer 资产路径。
+  - torchtitan/models/flux/inference/infer.py
+  - torchtitan/models/flux/run_infer.sh
