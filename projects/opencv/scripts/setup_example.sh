@@ -3,9 +3,11 @@
 # $1 is the manifest profile. Unknown profiles fail before any install.
 #
 # Profile "opencv" (the only one we ship):
-#   1. Source CANN env (toolkit + nnal/atb; cannops' custom kernel
-#      launch path links against ATB, so the opencv_test_cannops gtest
-#      binary needs both).
+#   1. Source CANN env (toolkit + nnal/atb; the ATB libs are kept in
+#      LD_LIBRARY_PATH for forward-compat with CANN-backend legs — the
+#      opencv_test_cannops gtest example that originally required them
+#      is retired, but the sourced env is harmless and the CANN build
+#      still needs the toolkit).
 #   2. Run a source build of opencv + opencv_contrib with WITH_CANN=ON
 #      if /usr/local/opencv-cann/bin/opencv_version is missing. The
 #      build is heavy (~50-70 min at -j2) and is fully idempotent; a
@@ -56,7 +58,7 @@ set +u
 source /home/coder/.hdc/env.sh 2>/dev/null || true
 set -u
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
-# nnal/atb is required by opencv_test_cannops (ATB libs in LD_LIBRARY_PATH)
+# nnal/atb: kept for CANN-backend legs (see header note 1)
 [[ -f /usr/local/Ascend/nnal/atb/set_env.sh ]] && source /usr/local/Ascend/nnal/atb/set_env.sh
 export PATH=/usr/local/sbin:$PATH
 
@@ -143,9 +145,9 @@ for _ in range(3):
     vid.write(np.zeros((320, 320, 3), dtype=np.uint8))
 vid.release()
 assert os.path.getsize("/tmp/opencv_sanity_video.avi") > 0, "VideoWriter produced empty file"
-# DNN backend probe (matches quickstart_py_version.py semantics so a
-# source-vs-wheel cv2 swap shows up here as DNN_BACKEND_CANN == 0
-# before any NPU leg pays the GE-compile tax).
+# DNN backend probe (same semantics as the Quick-start version probe:
+# a source-vs-wheel cv2 swap shows up here as DNN_BACKEND_CANN == 0
+# before any leg pays the GE-compile tax).
 assert cv2.dnn.DNN_BACKEND_CANN != 0, \
     f"cv2.dnn.DNN_BACKEND_CANN == 0 — source build didn't link CANN backend"
 print(f"setup: cv2 sanity OK (imread={img.shape} gray_mean={m:.2f} "
