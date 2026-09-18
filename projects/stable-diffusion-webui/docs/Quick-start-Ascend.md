@@ -18,6 +18,8 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 | torch | 2.9.0+cpu | 昇腾 PyPI 源 |
 | torch_npu | 2.9.0.post2 | 昇腾 PyPI 源 |
 | transformers | 4.44.2 | PyPI |
+| scikit-image | 0.25.2 | PyPI |
+| Pillow | 10.4.0 | PyPI |
 | stable-diffusion-webui | v1.10.1 | GitHub |
 | 模型 | `AI-ModelScope/sd-turbo` | ModelScope，约 3.4 GB，自动下载 |
 
@@ -64,26 +66,25 @@ HEAD xxx
 
 ## 安装依赖
 
-先把 transformers 升到 4.44.2 以匹配 Python 3.12，再装上游 requirements.txt；CLIP 无预编译包需从 GitHub 源码安装，modelscope 用于下载模型：
+按上游锁定清单安装依赖，先解除 Python 3.12 与 NPU 无法安装的钉死版本；CLIP 无预编译包从 GitHub 源码安装，modelscope 用于下载模型：
 ```shell #test-setup
 cd stable-diffusion-webui
-sed -i 's/transformers==4.30.2/transformers==4.44.2/' requirements.txt
+sed -i -e 's/transformers==4.30.2/transformers==4.44.2/' -e 's/scikit-image==0.21.0/scikit-image==0.25.2/' -e 's/Pillow==9.5.0/Pillow==10.4.0/' requirements_versions.txt
+pip install -r requirements_versions.txt
+pip install modelscope
+pip install torch==2.9.0 torchvision==0.24.0 torch_npu==2.9.0.post2
+sed -i -e 's/transformers==4.30.2/transformers==4.44.2/' -e 's/scikit-image>=0.19/scikit-image==0.25.2/' requirements.txt
 pip install -r requirements.txt
 pip install 'setuptools<70' wheel
 pip install --no-build-isolation "https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
-pip install modelscope
-# Re-pin torch/torch_npu + torchvision after all pip installs:
-# modelscope and open-clip-torch pull in torch>=2.10 / torchvision==0.25.0
-# which break torch_npu 2.9.0.post2 ABI compatibility.
-pip install torch==2.9.0 torchvision==0.24.0 torch_npu==2.9.0.post2
 ```
 
-验证依赖可用：
+验证依赖可用，并复核各包版本：
 ```shell #test id="install-webui"
-python -c "import modelscope, gradio, fastapi, transformers, tokenizers; print('deps ok', transformers.__version__)"
+python -c "import torch, torch_npu, modelscope, gradio, fastapi, transformers, tokenizers, skimage, PIL; print('deps ok', torch.__version__, torch_npu.__version__, transformers.__version__, skimage.__version__, PIL.__version__)"
 ```
 ```shell #test-result id="install-webui" fuzzy='xxx'
-deps ok xxx
+deps ok xxx xxx xxx xxx xxx
 ```
 
 ## 无头文生图（单卡 NPU）
