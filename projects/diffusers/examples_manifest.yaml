@@ -43,11 +43,11 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --pretrained_model_name_or_path ${SDXL_BASE_PATH}     # ModelScope: AI-ModelScope/stable-diffusion-xl-base-1.0
-      - --dataset_name ${THREE_D_ICON_PATH}                   # hf-mirror: linoyts/3d_icon（本地 imagefolder 目录）
-      - --instance_prompt "3d icon in the style of TOK"
+      - --pretrained_model_name_or_path hf-internal-testing/tiny-stable-diffusion-xl-pipe   # tiny（上游测试同款）
+      - --dataset_name hf-internal-testing/dummy_image_text_data                             # tiny image+text
+      - --instance_prompt "a 3d icon in the style of TOK"
       - --output_dir ${CI_OUTPUT_DIR}
-      - --caption_column prompt
+      - --caption_column text
       - --mixed_precision bf16
       - --resolution 128
       - --train_batch_size 1
@@ -90,9 +90,10 @@ supported:
   # ModelScope 既没有 amused/amused-256 也没有 m1guelpf/nouns（2026-09-17
   # 查证），二者只能走 hf-mirror（引擎已设 HF_ENDPOINT + HF_HUB_DISABLE_XET），
   # 所以 setup 不预下、由 example 运行时现取。
-  # --report_to 默认是 wandb，脚本在 wandb 缺失时直接 ImportError；CI 未装
-  # wandb，必须显式改成 tensorboard（栈里已装）。不传 --validation_prompts，
-  # 与训练-only smoke 策略一致。2026-09-17 昇腾机手动验证跑完（rc=0）。
+  # --report_to 默认是 wandb，不能改成 tensorboard：amused 会把 list 型参数
+  # （lora_target_modules 等）传进 init_trackers，tensorboard 的 add_hparams
+  # 只收标量，会 ValueError。故 profile 装 wandb，全局设 WANDB_MODE=disabled
+  # 让它离线。不传 --validation_prompts，与训练-only smoke 策略一致。
   - path: examples/amused/train_amused.py
     profile: diffusers-amused
     runner: linux-aarch64-a2-1
@@ -107,7 +108,6 @@ supported:
       - --train_batch_size 1
       - --max_train_steps 1
       - --checkpointing_steps 1
-      - --report_to tensorboard
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 60
 
@@ -168,7 +168,7 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --pretrained_teacher_model ${SD15_MODEL_PATH}      # ModelScope: AI-ModelScope/stable-diffusion-v1-5
+      - --pretrained_teacher_model hf-internal-testing/tiny-stable-diffusion-torch   # tiny teacher
       - --output_dir ${CI_OUTPUT_DIR}
       - --mixed_precision fp16
       - --resolution 512
