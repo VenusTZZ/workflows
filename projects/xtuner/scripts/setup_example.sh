@@ -172,6 +172,12 @@ PY
   # happily reads the cfg tree. cwd = TARGET_ROOT so the cfg path is
   # resolved relative to the release checkout (same as the supported
   # train_hf.py entry, which is launched bare).
+  # xtuner v0.2.0 release tree has no scripts/ dir (top-level layout is
+  # .github/docs/examples/requirements/xtuner only); without mkdir the
+  # heredoc hits "No such file or directory". Reproduced by CI run
+  # 35201067734 (2026-09-17) on every xtuner-examples config + train_hf
+  # job, because setup_xtuner-llm is shared.
+  mkdir -p "$TARGET_ROOT/scripts"
   cat > "$TARGET_ROOT/scripts/xtuner_train_demo.sh" <<'SH'
 #!/usr/bin/env bash
 # Launcher used by supported demo_data/*/config.py entries. Manifest

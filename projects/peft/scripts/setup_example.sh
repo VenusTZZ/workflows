@@ -65,20 +65,47 @@ raise SystemExit(
   pip_ascend torch==2.9.0 torch_npu==2.9.0.post2
 }
 
-# Copy CI fixture data files into the target root so that example
-# scripts can load them via a local path under $TARGET_ROOT/fixtures/
-# (same decoupling from the workflows-checkout subtree as trl).
+# Copy CI fixture data into the target root so that example scripts can
+# load them via a local path under $TARGET_ROOT/fixtures/ (same
+# decoupling from the workflows-checkout subtree as trl).
+#
+# Both flavors are supported, all top-level entries in $FIXTURE_DIR:
+#   *.jsonl    → single-file fixtures (e.g. ci_sft_8.jsonl)
+#   */         → directory fixtures (e.g. ci_alpaca_10/ with train.jsonl,
+#                ci_corda_8/ with train.jsonl + test.jsonl)
+# Examples that need a directory data_path (corda, glora, hira, olora,
+# waveft) fail with FileNotFoundError if directory fixtures are not
+# copied here — root cause of CI failures in run 35222723526.
 prepare_fixtures() {
   local src="${FIXTURE_DIR:?FIXTURE_DIR is required}"
   local dst="$TARGET_ROOT/fixtures"
   echo "preparing fixtures from $src to $dst"
-  if ! ls "$src"/*.jsonl 1>/dev/null 2>&1; then
-    echo "FATAL: no fixture files (*.jsonl) found in $src" >&2
+  if [[ ! -d "$src" ]]; then
+    echo "FATAL: fixture source dir not found: $src" >&2
     exit 1
   fi
-  mkdir -p "$dst"
-  cp "$src"/*.jsonl "$dst/"
-  echo "copied $(ls "$dst"/*.jsonl 2>/dev/null | wc -l) fixture file(s) to $dst"
+  shopt -s nullglob
+  # Top-level *.jsonl files
+  local n_files=0
+  for f in "$src"/*.jsonl; do
+    mkdir -p "$dst"
+    cp "$f" "$dst/"
+    n_files=$((n_files + 1))
+  done
+  # Top-level subdirectories (e.g. ci_alpaca_10/, ci_corda_8/)
+  local n_dirs=0
+  for d in "$src"/*/; do
+    [[ -d "$d" ]] || continue
+    mkdir -p "$dst"
+    cp -r "$d" "$dst/"
+    n_dirs=$((n_dirs + 1))
+  done
+  shopt -u nullglob
+  if (( n_files == 0 && n_dirs == 0 )); then
+    echo "FATAL: no fixture files (*.jsonl) or subdirs found in $src" >&2
+    exit 1
+  fi
+  echo "copied $n_files fixture file(s) and $n_dirs fixture dir(s) to $dst"
 }
 
 setup_peft() {

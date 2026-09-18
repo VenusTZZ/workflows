@@ -52,8 +52,14 @@ version=9.0.0
 
 确认 torch / torch_npu / sglang 都能 import 且能看到 4 张卡：
 
-```shell #test id="check-torch"
-python -c "import torch, torch_npu; from importlib.metadata import version; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('sglang', version('sglang')); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+```python #test id="check-torch"
+import torch, torch_npu
+from importlib.metadata import version
+print('torch=', torch.__version__)
+print('torch_npu=', torch_npu.__version__)
+print('sglang', version('sglang'))
+print('is_available:', torch.npu.is_available())
+print('count:', torch.npu.device_count())
 ```
 
 输出结果如下：
@@ -68,8 +74,7 @@ count: 4
 
 汇总镜像信息：
 
-```shell #test id="image-probe"
-python -c "
+```python #test id="image-probe"
 import sys, torch, torch_npu
 from importlib.metadata import version
 print('python', sys.version.split()[0])
@@ -78,7 +83,6 @@ print('torch_npu', torch_npu.__version__)
 print('sglang', version('sglang'))
 print('npu_available', torch.npu.is_available())
 print('npu_count', torch.npu.device_count())
-"
 ```
 
 输出结果如下：
@@ -181,8 +185,11 @@ specforge, version xxx
 
 确认 specforge 能在 NPU 环境里正常 import：
 
-```shell #test id="specforge-import"
-python -c "import specforge, torch, torch_npu; print('specforge', getattr(specforge, '__version__', 'unknown')); print('torch', torch.__version__); print('torch.npu.is_available', torch.npu.is_available())"
+```python #test id="specforge-import"
+import specforge, torch, torch_npu
+print('specforge', getattr(specforge, '__version__', 'unknown'))
+print('torch', torch.__version__)
+print('torch.npu.is_available', torch.npu.is_available())
 ```
 
 输出结果如下：
@@ -275,6 +282,60 @@ PY
 ```shell #test-result id="smoke-download-model" load="model_path>>MODEL_PATH"
 <MODEL_PATH>
 ```
+
+### 打 specforge NPU 补丁
+
+> SpecForge 上游 commit [`50b6287`](https://github.com/sgl-project/SpecForge/commit/50b6287) (`feat(mooncake): pooled pinned or device receive buffers for feature reads`) 引入 `ReceiveBufferPool`，配合后续 8 个 CUDA-only 修复合入 main，截至 `ed64d275` 仍未处理 Ascend NPU 路径。`_new_slot` 里的 `pin = torch.cuda.is_available()` 在 NPU 上恒为 False，导致 `register_buffer` 把 pageable host 内存交给 Mooncake，触发 **-600 ("RDMA host reads require registered memory")** —— trainer 第一个 data fetch 就崩，监控脚本报 `smoke: FAILED - no step/loss output in train log`。
+>
+> 同一文件已经定义了 `_ascend_runtime_available()`（line 122–146，看 `ASCEND_RT_VISIBLE_DEVICES` 决定要不要 import `torch_npu`），上游忘了 OR 它进去。本节直接把这一行 patch 掉，让 `pinned` 在 NPU 上也请求 page-locked host memory。
+>
+> **幂等**：以 `# npu-pinned-pool-fix-2026-09-17` 哨兵字符串做 guard。不能用 `_ascend_runtime_available` 本身做 guard——同名函数已存在，`grep -qF` 永远 true、patch 静默 no-op。
+
+```python #test-setup id="smoke-patch-specforge-mooncake"
+import importlib.util, os
+
+# 装到 site-packages 的副本才是 specforge train 实际加载的；上游 NPU 支持
+# （curnane-lab/npu_disaggregated #722 等）是独立 PR，main 上没人修这个 bug。
+# 用 find_spec() 拿路径而不真正 import，避免触发 mooncake 传输引擎初始化。
+mooncake_file = os.path.abspath(
+    importlib.util.find_spec("specforge.runtime.data_plane.mooncake_store").origin
+)
+guard = "npu-pinned-pool-fix-2026-09-17"
+old = (
+    "        else:\n"
+    "            pin = torch.cuda.is_available()\n"
+    "            storage = torch.empty(nbytes, dtype=torch.uint8, pin_memory=pin)"
+)
+new = (
+    "        else:\n"
+    f"            pin = torch.cuda.is_available() or _ascend_runtime_available()  # {guard}\n"
+    "            storage = torch.empty(nbytes, dtype=torch.uint8, pin_memory=pin)"
+)
+with open(mooncake_file) as f:
+    src = f.read()
+if guard in src:
+    print("smoke: specforge ReceiveBufferPool already NPU-aware; skipping")
+elif old not in src:
+    raise SystemExit(f"patch anchor not found in {mooncake_file}")
+else:
+    with open(mooncake_file, "w") as f:
+        f.write(src.replace(old, new, 1))
+    print(f"smoke: patched {mooncake_file} for NPU")
+```
+
+跑完会看到一行（具体路径取决于 specforge 安装位置，fuzzy 匹配只校验 `smoke: patched` 与 `mooncake_store.py for NPU` 两段）：
+
+```
+smoke: patched xxx/site-packages/specforge/runtime/data_plane/mooncake_store.py for NPU
+```
+
+或 idempotent 重跑时：
+
+```
+smoke: specforge ReceiveBufferPool already NPU-aware; skipping
+```
+
+**何时需要重做**：上游修了 `pin = torch.cuda.is_available()` 那行、guard 找不到也 anchor 找不到时，patch 会失败并保留 stderr —— 按新 anchor 重写 patch 即可，guard 字符串不变。
 
 ### 打补丁 + apt 依赖
 
