@@ -243,6 +243,39 @@ setup_accelerate-nlp-ar() {
   validate_ar_assets
 }
 
+setup_accelerate-ds() {
+  # DeepSpeed config-support profile = NLP base + upstream deepspeed.
+  # 2026-09-18 coder npu-1 (2x910B4) verification: the plain PyPI
+  # deepspeed wheel (>=0.18.2) ships its own NPU accelerator —
+  # deepspeed.accelerator.get_accelerator() auto-detects torch_npu and
+  # resolves to npu/hccl, no Ascend fork needed. ZeRO-2 bf16 2-card
+  # full flow (train/eval/best-checkpoint/save_pretrained) passes.
+  # torch is re-pinned in the same command: deepspeed's resolver may
+  # otherwise pick a newer wheel that breaks the torch_npu 2.9.0 ABI
+  # (same reason as the -e install pin in setup_accelerate-nlp).
+  setup_accelerate-nlp
+  python -m pip install "deepspeed>=0.18.2" "torch==2.9.0"
+  python -c "
+import torch, torch_npu
+assert torch.__version__.startswith('2.9.0'), \
+    f'torch drifted to {torch.__version__}'
+import deepspeed
+from deepspeed.accelerator import get_accelerator
+acc = get_accelerator()
+assert acc.device_name() == 'npu', \
+    f'deepspeed did not detect NPU: {acc.device_name()}'
+from deepspeed.runtime.sequence_parallel.ulysses_sp import (
+    UlyssesSPAttentionHF,
+)
+print('deepspeed', deepspeed.__version__,
+      '/ accelerator:', acc.device_name(),
+      '/', acc.communication_backend_name(),
+      '/ ulysses_sp import OK')
+"
+  # The DS entry reuses the SmolLM-360M + wikitext plants (no new seeds).
+  validate_ar_assets
+}
+
 setup_accelerate-cv() {
   # CV profile = NLP profile + vision deps + Pets data.
   setup_accelerate-nlp

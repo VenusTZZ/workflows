@@ -6,26 +6,22 @@
 # parallelism. The guard loop (monitor / manifest-check / run-example
 # matrix / validate-results / save-monitor-state) lives in the engine.
 #
-# === Status (2026-09-17) ===
-# bring-up: schedule is DISABLED (per the peft / trl bring-up policy).
-# The engine's manifest-check will fail until either:
-#   (A) ``upstream_repo`` is repointed at a fork (e.g.
-#       cosdt-ci-test/opencv) that contains
-#       ``examples/quickstart_*.py|sh`` mirroring
-#       projects/opencv/examples/ here, OR
-#   (B) the engine gains a "pre-check sync" step that copies
-#       workflows/projects/opencv/examples/ into the target tree
-#       before the manifest-check.
-# Until then, only manual dispatch on a setup where the target tree
-# already has the example scripts (e.g. via setup_example.sh copying
-# them in) will work. The local-coder verification in this commit
-# (recorded in projects/opencv/examples_manifest.yaml comments) does
-# exactly that copy + run pattern and confirms all 3 supported
-# examples exit 0; the 5 doc-snippet CPU algorithms (imread /
-# cvtColor / resize / draw / video) now run as a setup-time sanity
-# check (setup_example.sh step 5) rather than as supported entries.
-#
-# Once (A) or (B) is in place, re-enable the cron:
+# === Status (2026-09-18) ===
+# The self-hosted quickstarts (projects/opencv/examples/
+# quickstart_py_version.py / quickstart_dnn_inference.py /
+# quickstart_cann_unit_tests.sh) and the fork-mirror (A) / engine
+# pre-check-sync (B) plan they required are RETIRED: the examples
+# directory is deleted and the manifest's supported section now points
+# at real upstream samples/ paths (the 5.0.0 LLM/VLM inference
+# samples: gpt2 / gemma3 / qwen / vlm _inference.py), so
+# manifest-check passes against plain opencv/opencv — no fork, no
+# engine tweak.
+# schedule stays DISABLED until the first manual dispatch is green:
+# the 4 supported legs are source-analysis picks (headless + ONNX +
+# zero non-cv2 deps) but have NOT been run in CI yet, and their ONNX
+# models + tokenizer configs must be seeded into
+# projects/opencv/fixtures/models/ first (see the manifest header's
+# model-seeding contract). Re-enable the cron after a green run:
 #   schedule:
 #     - cron: '0 */6 * * *'
 
@@ -40,8 +36,8 @@ concurrency:
     cancel-in-progress: false
 
 on:
-    # Bring-up phase: schedule disabled until the fork-or-engine-sync
-    # question is resolved (see file header).
+    # Bring-up phase: schedule disabled until the first manual dispatch
+    # is green (see file header — model seeding + first CI run).
     workflow_dispatch:
         inputs:
             target_ref:
@@ -61,18 +57,17 @@ jobs:
         uses: ./.github/workflows/examples-template.yml
         with:
             project: opencv
-            # TODO(bring-up): when the example scripts land in a fork,
-            # point this at the fork (e.g. cosdt-ci-test/opencv). For
-            # now, pointing at opencv/opencv triggers the
-            # "supported example missing from target tree" warning,
-            # which the engine surfaces as a manifest-check failure.
+            # Upstream-native: the manifest's supported entries are real
+            # samples/ paths in opencv/opencv (5.0.0 LLM/VLM inference
+            # samples), so manifest-check validates against the upstream
+            # tree directly.
             upstream_repo: opencv/opencv
             target_ref: ${{ inputs.target_ref }}
-            # 2 (not 4): the opencv DNN inference + CANN unit tests
-            # both want a single NPU; 2 parallel jobs x ~1 NPU each
-            # keeps the runner healthy. The 5 doc-snippet CPU
-            # algorithms used to run as 5 separate quickstart legs
-            # (9a-9e); they're now collapsed into setup_example.sh
-            # step 5 sanity check (~1s total, sequential, not
-            # parallel), so the matrix is down to 3 supported entries.
+            # 2 (not 4): keep matrix pressure low on the shared NPU
+            # runner. The matrix is 4 supported entries (gpt2 / gemma3 /
+            # qwen / vlm inference); they currently run the OPENCV CPU
+            # backend (see manifest header), but the setup leg still
+            # builds opencv-cann on this runner, so serialization
+            # matters. The 5 doc-snippet CPU algorithms run as a
+            # setup_example.sh step-5 sanity check, not matrix legs.
             max_parallel: 2

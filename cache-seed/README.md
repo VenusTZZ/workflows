@@ -127,7 +127,7 @@ TO_PLANT_DATASET），现统一迁入本 workflow；peft setup 只剩从 `refs/m
 解析 `${SFT_MODEL_PATH}` / `${ROBERTA_BASE_PATH}` / `${BERT_BASE_UNCASED_PATH}`
 三个 overlay 路径。
 
-**本目录装 ModelScope 没有 parquet 数据的 6 个**：
+**ModelScope 没有 parquet 数据的 6 个（均走 repo bundle，投递后已移除）**：
 - `stanfordnlp/imdb`（~80MB plain_text parquet ×3）— miss / mica 用 `train[:1%]`
 - `AI-Lab-Makerere/beans`（~137MB）— pvera 用
 - `gtfintechlab/financial_phrasebank_sentences_allagree` / 5768（~196KB）— beft 用
@@ -139,12 +139,12 @@ TO_PLANT_DATASET），现统一迁入本 workflow；peft setup 只剩从 `refs/m
   `uoft-cs/cifar10`！）；ModelScope 的 `huizyuan/cifar10` 是空 repo、`star07/cifar10`
   是原始 python tar 包，均不可用（run 35222723526 实测 302 cas-bridge 超时）
 
-前 3 个（imdb / beans / financial_phrasebank）已投递后从仓库移除以减轻 checkout
-（同 accelerate 的做法；新 runner 缺数据时 `git checkout b260ad8 -- cache-seed/peft`
-恢复重建）。**manifest.yaml 只保留源文件在仓库里的条目**：9cc8282 rebase 删除
-bundle 文件时曾留下 12 条 stale 条目（源已不存在），会让 cache-seed dispatch
-对 peft 必然 exit 1（cache_seed.py 逐条校验源文件），2026-09-18 随 cifar10
-bundle 一并清理。后 3 个（vit + CIFAR10 ×2）为现役 bundle，投递完成后同样移除。
+前 3 个（imdb / beans / financial_phrasebank）恢复入口 `git checkout b260ad8 --
+cache-seed/peft`；后 3 个（vit + CIFAR10 ×2，run 35298832674 投递、peft-examples
+35299048160 全绿佐证）恢复入口 `git checkout 6985592 -- cache-seed/peft`。删除
+bundle 时同步删 manifest.yaml（无 bundle 条目时整文件删除，同 accelerate 做法；
+**不要只删文件留 manifest 条目** —— 9cc8282 rebase 曾这样留下 12 条 stale 条目，
+让 cache-seed dispatch 对 peft 必然 exit 1，2026-09-18 才清理掉）。
 
 `modelscope/imdb` 有 imdb.py script 但**没 parquet 数据**，所以 imdb 不走 modelscope。
 

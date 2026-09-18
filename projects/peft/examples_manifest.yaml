@@ -254,8 +254,267 @@ supported:
 # "翻案候选" = 无后端硬编码，换模型/换数据/多卡 runner 即可能转 supported，
 # "翻案前置 patch" = NPU 实测可通，但需要源码侧 patch 才能进 supported
 #  （如硬编码 fp16=True、pin_memory=True、network 依赖）；
-# 已迁移：corda / glora / hira / olora / waveft / adamss_image → supported，
+# 已迁移：corda / glora / hira / olora / waveft / adamss_image /
+# sft_(fsdp/multigpu/qlora_fsdp) / pissa / deft / delora / randlora /
+# dora_caching / (lora/oft/deft/hra/stable_diffusion)_dreambooth → supported，
 # 详见 entry 备注） =====
+  # SFT + FSDP1：t5-base + FSDP + 2 卡 NPU exit 0（loss 4.12, 11.5s）；
+  # overlay 关 bnb 4bit + flash-attn + gradient_checkpointing；
+  # FSDP config num_processes 写死 8，overlay 加 --num_processes 2 即可
+  - path: examples/sft/run_peft_fsdp.sh
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --config_file configs/fsdp_config.yaml
+      - --num_processes 2
+      - --num_machines 1
+      - --use_4bit_quantization False
+      - --use_flash_attn False
+      - --gradient_checkpointing False
+      - --use_reentrant False
+      - --push_to_hub False
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+
+  # SFT + torchrun DDP：bloomz-7b1（默认）+ 2 卡 NPU exit 0（loss 4.11, 3.5s）
+  - path: examples/sft/run_peft_multigpu.sh
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --nproc_per_node 2
+      - --nnodes 1
+      - --use_4bit_quantization False
+      - --use_nested_quant False
+      - --use_flash_attn False
+      - --push_to_hub False
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+
+  # SFT + QLoRA-FSDP：t5-base + FSDP1 + 2 卡 NPU exit 0（loss 4.12, 13.1s）；
+  # bnb 4bit 在 NPU 上无 kernel，overlay 关掉退化为 LoRA+FSDP
+  - path: examples/sft/run_peft_qlora_fsdp.sh
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --config_file configs/fsdp_config_qlora.yaml
+      - --num_processes 2
+      - --num_machines 1
+      - --use_4bit_quantization False
+      - --use_nested_quant False
+      - --use_flash_attn False
+      - --gradient_checkpointing False
+      - --use_reentrant True
+      - --bnb_4bit_compute_dtype bfloat16
+      - --bnb_4bit_quant_storage_dtype bfloat16
+      - --push_to_hub False
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+
+  # PiSSA：Qwen2.5-0.5B + ci_alpaca_10_dir fixture + trl 1.12 NLL loss，
+  # 1 epoch 5.17s exit 0（loss 5.33→1.59）。
+  # 关键 overlay：--loss_type nll 绕开 [[trl-chunked-nll-functools-partial-bug]]
+  # （pissa 用 device_map="auto" 触发 accelerate.add_hook_to_module 把 forward
+  # 包成 functools.partial，trl chunked_nll inspect.signature(__func__) 崩）；
+  # --bits bf16（脚本默认 fp32，省内存）
+  - path: examples/pissa_finetuning/pissa_finetuning.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --base_model_name_or_path ${SFT_MODEL_PATH}
+      - --bits bf16
+      - --data_path ${TARGET_ROOT}/fixtures/ci_alpaca_10_dir
+      - --dataset_field instruction output
+      - --dataset_split 'train[:100%]'
+      - --max_steps 5
+      - --num_train_epochs 1
+      - --per_device_train_batch_size 1
+      - --gradient_accumulation_steps 1
+      - --learning_rate 1e-4
+      - --max_length 512
+      - --logging_steps 1
+      - --save_strategy no
+      - --report_to none
+      - --loss_type nll
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 30
+
+  # DeFT：Qwen2.5-0.5B + ci_text_8_hf fixture + npu:0 1 epoch 5s 内 exit 0
+  # （loss 1.86）。
+  # 注：原 C-7B-FA-family"族推断"理论**实测不成立**——脚本默认模型即 Qwen2.5-0.5B
+  # 而非 7B；910B4 单卡 32G 完全够；未触发 aclnn 207001（脚本未硬编码 flash_attention_2）
+  - path: examples/deft_finetuning/deft_finetuning.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --base_model ${SFT_MODEL_PATH}
+      - --data_path ${TARGET_ROOT}/fixtures/ci_text_8_hf
+      - --num_epochs 1
+      - --batch_size 1
+      - --cutoff_len 256
+      - --val_set_size 1
+      - --learning_rate 1e-4
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --device npu:0
+      - --eval_step 100
+      - --save_step 100
+    timeout_minutes: 30
+
+  # DeLoRA：同 DeFT 配方，exit 0 loss 1.86
+  - path: examples/delora_finetuning/delora_finetuning.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --base_model ${SFT_MODEL_PATH}
+      - --data_path ${TARGET_ROOT}/fixtures/ci_text_8_hf
+      - --num_epochs 1
+      - --batch_size 1
+      - --cutoff_len 256
+      - --val_set_size 1
+      - --learning_rate 1e-4
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --device npu:0
+      - --eval_step 100
+      - --save_step 100
+    timeout_minutes: 30
+
+  # RandLoRA：同 DeFT 配方 + --use_lora flag，exit 0 loss 1.86
+  - path: examples/randlora_finetuning/randlora_finetuning.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --base_model ${SFT_MODEL_PATH}
+      - --data_path ${TARGET_ROOT}/fixtures/ci_text_8_hf
+      - --num_epochs 1
+      - --batch_size 1
+      - --cutoff_len 256
+      - --val_set_size 1
+      - --learning_rate 1e-4
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --device npu:0
+      - --eval_step 100
+      - --save_step 100
+      - --use_lora
+    timeout_minutes: 30
+
+  # DoRA caching：Qwen2.5-0.5B + npu + memory profiling，exit 0
+  # （多次 forward/backward 展示 NPU HBM 占用）
+  - path: examples/dora_finetuning/dora-caching.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --model_id ${SFT_MODEL_PATH}
+      - --num_runs 3
+    timeout_minutes: 30
+
+  # SD dreambooth + LoRA：stable-diffusion-v1-5 + dummy image + 10 steps
+  # exit 0（loss 0.00695，17s）。overlay 关键：
+  # --report_to tensorboard（accelerate 拒 "none"）
+  # --center_crop 是 store_true flag，不传 =True
+  # --mixed_precision no（peft SD 例无 grad_scaler，NPU bf16 需 explicit）
+  - path: examples/lora_dreambooth/train_dreambooth.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --pretrained_model_name_or_path ${SD_MODEL_PATH}
+      - --instance_data_dir ${TARGET_ROOT}/fixtures/ci_dummy_image
+      - --instance_prompt 'a photo of sks dog'
+      - --max_train_steps 10
+      - --train_batch_size 1
+      - --report_to tensorboard
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --mixed_precision no
+      - --resolution 256
+      - --center_crop
+    timeout_minutes: 30
+
+  # SD dreambooth + OFT：同上配方，10 steps exit 0（loss 0.00172）
+  - path: examples/oft_dreambooth/train_dreambooth.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --pretrained_model_name_or_path ${SD_MODEL_PATH}
+      - --instance_data_dir ${TARGET_ROOT}/fixtures/ci_dummy_image
+      - --instance_prompt 'a photo of sks dog'
+      - --max_train_steps 10
+      - --train_batch_size 1
+      - --report_to tensorboard
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --mixed_precision no
+      - --resolution 256
+      - --center_crop
+    timeout_minutes: 30
+
+  # SD dreambooth + DeFT：同上配方，10 steps exit 0（loss 0.00452）
+  - path: examples/deft_dreambooth/train_dreambooth.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --pretrained_model_name_or_path ${SD_MODEL_PATH}
+      - --instance_data_dir ${TARGET_ROOT}/fixtures/ci_dummy_image
+      - --instance_prompt 'a photo of sks dog'
+      - --max_train_steps 10
+      - --train_batch_size 1
+      - --report_to tensorboard
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --mixed_precision no
+      - --resolution 256
+      - --center_crop
+    timeout_minutes: 30
+
+  # SD dreambooth + stable_diffusion full LoRA：脚本用 argparse subparsers，
+  # overlay 关键：父 parser flag 全部在前，"lora" 子命令放最后
+  # （父 args 在子 parser 之前生效，lora 子 parser 仅接收 --unet_r/--unet_alpha 等）
+  # 10 steps exit 0（loss 0.0247，17s）
+  - path: examples/stable_diffusion/train_dreambooth.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --pretrained_model_name_or_path ${SD_MODEL_PATH}
+      - --instance_data_dir ${TARGET_ROOT}/fixtures/ci_dummy_image
+      - --instance_prompt 'a photo of sks dog'
+      - --max_train_steps 10
+      - --train_batch_size 1
+      - --report_to tensorboard
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --mixed_precision no
+      - --resolution 256
+      - --center_crop
+      - lora
+    timeout_minutes: 30
+
+  # SD dreambooth + HRA：10 steps exit 0（loss 0.00313，17s）。
+  # overlay 额外需要 --validation_prompt（脚本 :83 无条件访问）
+  - path: examples/hra_dreambooth/train_dreambooth.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --pretrained_model_name_or_path ${SD_MODEL_PATH}
+      - --instance_data_dir ${TARGET_ROOT}/fixtures/ci_dummy_image
+      - --instance_prompt 'a photo of sks dog'
+      - --validation_prompt 'a photo of sks dog'
+      - --max_train_steps 10
+      - --train_batch_size 1
+      - --report_to tensorboard
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --mixed_precision no
+      - --resolution 256
+      - --center_crop
+      - --checkpointing_steps 1000000
+    timeout_minutes: 30
+
 unsupported:
   # ===== A. 翻案前置 patch（NPU 实测可通，缺 1-2 行源码改） =====
   # 注释已写明缺什么 patch；不继续验证。
@@ -356,25 +615,15 @@ unsupported:
   # 远超 B 组其他条目
   - examples/orthogonal_subspace_learning/osf_continual_learning.py
 
-  # 实测（2026-09-17 coder npu-3）：fork 副本 + gpt2 + imdb 1%（ModelScope 镜像
-  # + HF 缓存）+ trl 1.12 SFTTrainer + --loss_type=nll 绕开 chunked_nll。
-  # **不迁 supported**，三重阻塞：
-  # (1) torch.linalg.svd 在 NPU 镜像上极慢（单次 2304×768 SVD >90s 未返回，CPU
-  #     SVD fallback）。PiSSA 在 init 阶段对每层 Conv1D 做 SVD 分解（gpt2 有
-  #     12 层 × c_attn + 12 × c_proj = 24 次），实际等待 >30 min 仍未完成 init
-  #     之前的 print 都打不出。这种"print 后纯 SVD"卡死是 npu 镜像 torch.linalg
-  #     没有 nvfuser/native linalg 优化、SVD 走 ATen 默认 fallback 的根因
-  # (2) device_map="auto" + accelerate.accelerator.add_hook_to_module + trl 1.12
-  #     sft_trainer.py:383 _patch_chunked_ce_lm_head inspect.signature on
-  #     functools.partial 崩（[[trl-chunked-nll-functools-partial-bug]]）；
-  #     --loss_type=nll 绕开 chunked patch 但 device_map 必须去掉才能上 NPU
-  # (3) PiSSA niter=4 默认（变体 1）更慢；用 init_lora_weights="pissa" 单 iter
-  #     也卡
-  # 综合：翻案前置需 (a)NPU 镜像补 torch.linalg.svd 优化或 CPU 加速 fallback；
-  # (b)修 peft init_lora_weights="pissa" 路径支持 .to(device) 之后做 SVD（避免
-  #    一次性 init 全部层）；(c)trl 升级或 chunked_nll 修——任意一项都远超本组
-  # 简单翻案范围
-  - examples/pissa_finetuning/pissa_finetuning.py
+  # 实测（2026-09-17 coder npu-3）：gpt2 + imdb 1%（ModelScope 镜像 + HF 缓存）
+  # + trl 1.12 SFTTrainer + --loss_type=nll 绕开 chunked_nll。
+  # **不迁 supported**，gpt2 + imdb 1% 路径仍有 NPU 镜像 torch.linalg.svd 极慢
+  # 阻塞（单次 2304×768 SVD >90s 未返回，CPU SVD fallback）：PiSSA 在 init
+  # 阶段对每层 Conv1D 做 SVD 分解（gpt2 有 12 层 × c_attn + 12 × c_proj = 24
+  # 次），等待 >30 min 仍未完成 init 之前的 print。翻案前置需 NPU 镜像补
+  # torch.linalg.svd 优化或 CPU 加速 fallback。注：Qwen2.5-0.5B + alpaca 配方
+  # 已迁 supported（见 path: examples/pissa_finetuning/pissa_finetuning.py）；
+  # 本条目仅标 gpt2 + imdb 1% 默认路径的归类
 
   # ===== C. 阻塞（架构/bnb/xformers/7B+FA/SD 时长/trl 版本） =====
 
@@ -426,60 +675,56 @@ unsupported:
   # 50k 步全量训练；bnb（use_8bit_adam）未启用
   - examples/boft_controlnet/train_controlnet.sh
 
-  # SD dreambooth：bnb(use_8bit_adam) 可选 flag 默认关、.py 无 xformers——原 bnb
-  # 理由不成立；真因 SD-2.1 全量训练时长 + prior preservation 需现场生成 200 张类图
+  # 源 bug：train_dreambooth.py:391
+  #   `accelerator.init_trackers(args.wandb_project_name, config=vars(args), init_kwargs=wandb_init)`
+  # 但 `wandb_init` 仅在 `if args.report_to == "wandb":` 分支定义（:347-359）。
+  # 父函数流程：无条件构造 Accelerator(:83) → wandb_project_name 必传 →
+  # init_trackers(:391) 必走 → 即便 report_to=tensorboard 也 UnboundLocalError。
+  # 5 例 dreambooth + controlnet 中仅 boft_dreambooth/boft_controlnet 触发，其余
+  # lora/oft/deft/hra/stable_diffusion_dreambooth 走不同 init_trackers 调用，
+  # 已实测 exit 0。**翻案前置 1 处源码 patch**：:391 init_kwargs=wandb_init
+  # 改成 init_kwargs=None（或 guard 在 if args.report_to=="wandb" 内才传）
   - examples/boft_dreambooth/train_dreambooth.py
 
   # 同上 + .sh 显式启用 xformers（无 NPU 后端）；1010 步 + 200 类图仍超预算
   - examples/boft_dreambooth/train_dreambooth.sh
 
-  # SD dreambooth：bnb 可选 flag 默认关——原 bnb 理由不成立；真因时长 + 200 类图
-  - examples/hra_dreambooth/train_dreambooth.py
-
-  # 同上 + .sh 显式启用 xformers（无 NPU 后端）；510 步 + 类图生成仍超预算
+  # .sh:36 显式 --enable_xformers_memory_efficient_attention（无 NPU 后端）+
+  # 50k 步全量训练；wandb 路径同 boft_dreambooth：report_to=tensorboard 即
+  # UnboundLocalError wandb_init
   - examples/hra_dreambooth/train_dreambooth.sh
 
-  # SD dreambooth：bnb 可选 flag 默认关——原 bnb 理由不成立；真因时长 + 200 类图
-  - examples/lora_dreambooth/train_dreambooth.py
+  # .sh 包装：lora_dreambooth + xformers；前者已实测过，后者仅超 CI 预算
+  # 注：upstream peft HEAD 已删除该 .sh（2026-09 audit 标 stale）
 
-  # SD dreambooth：bnb 可选 flag 默认关——原 bnb 理由不成立；真因时长 + 200 类图
-  - examples/oft_dreambooth/train_dreambooth.py
+  # .sh 包装：oft_dreambooth + xformers
+  # 注：upstream peft HEAD 已删除该 .sh（2026-09 audit 标 stale）
 
-  # SD dreambooth：bnb 可选 flag 默认关——原 bnb 理由不成立；真因全量训练时长 +
-  # 200 类图生成
-  - examples/deft_dreambooth/train_dreambooth.py
+  # .sh 包装：deft_dreambooth + xformers
+  # 注：upstream peft HEAD 已删除该 .sh（2026-09 audit 标 stale）
 
-  # SD dreambooth：bnb 可选 flag 默认关——原 bnb 理由不成立；真因时长 + 200 类图
-  - examples/stable_diffusion/train_dreambooth.py
+  # .sh 包装：stable_diffusion_dreambooth + xformers
+  # 注：upstream peft HEAD 已删除该 .sh（2026-09 audit 标 stale）
 
 
-  # ---- C-7B-FA-family：默认 sdpa → FA 内核 aclnn 207001 风险 ----
-  # Mistral-7B：家族推断（默认 sdpa 在 NPU dispatch 到 FA 内核，dora 实测 aclnn
-  # 207001）；fp32 加载 7B≈28G 单卡紧张但能载入；换模型需同步改 --invocation_string
-  # （默认 [/INST] 是 Mistral 模板）
+  # ---- C-7B-FA-family（重新分类：fp16 硬编码，非家族 FA 推断） ----
+  # :96 TrainingArguments(fp16=True, ...) 硬编码——accelerate.optimizer 把
+  # grad_scaler 作为 kwarg 透传给 Adam.step()，torch_npu 2.9 amp.GradScaler
+  # 与 accelerate 1.15 接口不齐：optimizer.step(grad_scaler=scaler) → Adam.step
+  # 拒收 "grad_scaler" → TypeError。NPU 实跑通：注释掉 fp16=True + Qwen2.5-0.5B
+  # + --device npu:0 + train/test 双 split jsonl，1 epoch 14.79s exit 0。
+  # **翻案前置 1 处源码 patch**：:96 `fp16=True,` 改 `fp16=False,`（或删去）
   - examples/alora_finetuning/alora_finetuning.py
 
-  # llama-7b：dtype 自动 bf16（is_bf16_supported）7B≈14G——原"单卡 32G"不成立；
-  # 阻塞为家族推断：默认 sdpa 在 NPU dispatch 到 FA 内核（dora 实测 aclnn 207001）
-  - examples/deft_finetuning/deft_finetuning.py
-
-  # 同 deft（bf16 加载，家族 FA 推断；脚本未硬编码 flash_attention_2）
-  - examples/delora_finetuning/delora_finetuning.py
-
-  # Llama-3.1-8B bf16≈16G 单卡 32G 可容——原"HBM 溢出"不必然；device_map 传单
-  # 设备名不切分多卡；前向走默认 sdpa → FA 内核问题（同 dora 实测）仍适用
-  - examples/dora_finetuning/dora-caching.py
-
-  # 家族代表实测：载入 OK（Using device: npu），首步前向 aclnnFlashAttentionScore
-  # 207001（CANN 9.1）；注：脚本未硬编码 flash_attention_2，是 transformers 默认
-  # sdpa 在 torch_npu dispatch 到 FA 内核（环境级，7B/8B llama 系普遍适用）
+  # 同 alora——脚本 :100 硬编码 fp16=True。**翻案前置 1 处源码 patch**：
+  # :100 `fp16=True,` 改 `fp16=False,`
   - examples/dora_finetuning/dora_finetuning.py
 
-  # llama-7b：bf16/fp16 加载 7B≈14G——原"单卡 32G"不成立；阻塞为家族 FA 推断
-  - examples/randlora_finetuning/randlora_finetuning.py
-
-  # :171 --device 默认 "cuda:0" 硬编码（NPU 须显式 --device npu:0；:90 .to(device)
-  # 会把 device_map 切分拉回单设备）；fp32 加载 7B≈28G 紧张；另家族 FA 推断
+  # :102 TrainingArguments(fp16=True, ...) 硬编码（与 alora/dora 同根因）+
+  # :76 `device_map="auto"` 把模型切到 npu:0/1（2 卡均分），前向 mat1 落在
+  # npu:1、其它在 npu:0 → RuntimeError "Expected all tensors to be on the
+  # same device"。**翻案前置 2 处源码 patch**：(a) :102 fp16=True 改 False；
+  # (b) :76 device_map="auto" 删去或改 None（脚本 :90 .to(device) 会拉到单卡）
   - examples/road_finetuning/road_finetuning.py
 
 
@@ -489,29 +734,12 @@ unsupported:
   # 换小模型 + 覆盖进程数可跑 peft 侧路径
   - examples/sft/run_peft_deepspeed.sh
 
-  # Llama-2-70b：FSDP1 FULL_SHARD（config 写死 8 进程）。实测（2026-09-17 coder
-  # npu-3）：`from accelerate import Accelerator` 在 venv 内 90s+ 仍未完成 import
-  # ——accelerate 1.15 在 torch_npu 2.9 镜像上的 plugin 探测可能死锁或拖慢
-  # 进程；无法单独验证 accelerate FSDP + NPU 后端基本通路。torch_npu 2.9 对
-  # FSDP1 适配存在（c10d + DeviceMesh），但 accelerate 1.15 的 FSDP plugin 是否
-  # 接入未确认；翻案前置需先验证 accelerate FSDP 在 NPU 上的 import/启动基本通
-  # 再考虑替换 70B + 8 进程
-  - examples/sft/run_peft_fsdp.sh
-
   # GPTQ INT4 预量化模型（8B 非 70B，容量无忧）：GPTQ 内核 exllama/marlin 仅 CUDA
   - examples/sft/run_peft_fsdp_gptq.sh
-
-  # 主阻塞 bnb 4bit（:38-39 use_4bit_quantization True 默认开，overlay 可翻转）；
-  # 另 --use_flash_attn True 需关、torchrun nproc 写死 8 需覆盖——全关后退化为
-  # 普通 LoRA DDP，NPU 可行
-  - examples/sft/run_peft_multigpu.sh
 
   # bnb qlora（use_4bit_quantization True，主阻塞）；70B-4bit≈35-40GB、ZeRO-3 分
   # 2 卡容量本可容——容量是次要项，bnb 先崩
   - examples/sft/run_peft_qlora_deepspeed_stage3.sh
-
-  # 同上（FSDP offload 变体，config 写死 2 进程；bnb 是主阻塞）
-  - examples/sft/run_peft_qlora_fsdp.sh
 
 
   # ---- C-架构级硬阻塞（peft 源码 / 数据路径 / 设备分支） ----
