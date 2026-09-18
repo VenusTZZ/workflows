@@ -8,7 +8,13 @@
 # (cwd = target root, so `--config recipes/configs/<x>.yaml` resolves
 # relative to the recipe's repo root, matching the engine contract).
 # Never git add/commit/push.
-set -euo pipefail
+set -o pipefail
+# NOTE: do NOT use `set -u` here; /usr/local/Ascend/nnal/atb/set_env.sh
+# references `$ZSH_VERSION` unquoted, which fails under bash's nounset
+# (empirically reproduced on hdc-stable-npu-3 with CANN 9.1.0 —
+# `ZSH_VERSION: unbound variable` aborts env.sh source). Ascend env
+# handling stays unconditional but errors get piped to /dev/null.
+set -e
 
 if [[ $# -ne 1 ]]; then
   echo "usage: $0 <example-relpath>" >&2

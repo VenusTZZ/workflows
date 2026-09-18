@@ -260,6 +260,19 @@ GITHUB_ENV="${GITHUB_ENV:?GITHUB_ENV is required}"
 HERE=$(cd "$(dirname "$0")" && pwd)
 export PIP_CONSTRAINT="$(cd "$HERE/.." && pwd)/constraints-npu.txt"
 
+# recipes/eleuther_eval.py:311 hard-codes `super().__init__(pretrained="gpt2", ...)`
+# which triggers transformers.AutoConfig.from_pretrained("gpt2"). On coder pods
+# huggingface.co is unreachable (curl hang); on CI runner it's fine. Setting
+# HF_ENDPOINT=https://hf-mirror.com routes both cases through the China mirror
+# for the gpt2 config only (the torchtune model itself comes from ModelScope
+# via TT_MODEL_PATH, so this doesn't affect Qwen2.5-0.5B-Instruct downloads).
+# CI cluster has direct HF egress; on direct egress the env is harmless (just
+# changes the endpoint). Idempotent: if the runner already exports HF_ENDPOINT
+# the keep-existing behavior lets operators override the mirror.
+if [[ -z "${HF_ENDPOINT:-}" ]]; then
+  export HF_ENDPOINT=https://hf-mirror.com
+fi
+
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
 select_pip_index
