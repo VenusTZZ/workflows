@@ -241,14 +241,113 @@ supported:
       - --checkpointing_steps 1
     timeout_minutes: 120
 
+  # LLaDA2 block-refinement 训练 smoke。无硬编码 cuda、用 accelerator；
+  # Qwen2.5-0.5B（0.92GB）+ --use_dummy_data（零数据集下载）。
+  # 2026-09-18 昇腾机验证可跑。
+  - path: examples/discrete_diffusion/train_llada2.py
+    profile: diffusers-llada2
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path Qwen/Qwen2.5-0.5B
+      - --use_dummy_data
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --max_train_steps 1
+      - --gradient_accumulation_steps 1
+    timeout_minutes: 60
+
+  # SD1.4 dreambooth（全量）。上游命令见 examples/dreambooth/README.md；
+  # 数据集用仓库自带 docs/source/en/imgs（无下载）。2026-09-18 昇腾机验证可跑。
+  - path: examples/dreambooth/train_dreambooth.py
+    profile: diffusers-dreambooth
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path ${SD14_MODEL_PATH}   # ModelScope: AI-ModelScope/stable-diffusion-v1-4
+      - --instance_data_dir docs/source/en/imgs
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --instance_prompt "a photo of sks dog"
+      - --resolution 512
+      - --train_batch_size 1
+      - --max_train_steps 1
+      - --gradient_checkpointing
+    timeout_minutes: 90
+
+  # SD1.4 dreambooth LoRA。同上游 README；数据集同上。
+  - path: examples/dreambooth/train_dreambooth_lora.py
+    profile: diffusers-dreambooth
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path ${SD14_MODEL_PATH}   # ModelScope: AI-ModelScope/stable-diffusion-v1-4
+      - --instance_data_dir docs/source/en/imgs
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --instance_prompt "a photo of sks dog"
+      - --resolution 512
+      - --train_batch_size 1
+      - --max_train_steps 1
+      - --gradient_checkpointing
+    timeout_minutes: 90
+
+  # InstructPix2Pix（SD1.5）。上游命令见 examples/instruct_pix2pix/README.md；
+  # 去掉 --enable_xformers（CUDA-only）和 --push_to_hub。数据集
+  # fusing/instructpix2pix-1000-samples 运行时经 hf-mirror 取（Xet，CI 需 vendor/ModelScope）。
+  # 2026-09-18 昇腾机验证可跑。
+  - path: examples/instruct_pix2pix/train_instruct_pix2pix.py
+    profile: diffusers-instruct-pix2pix
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path ${SD15_MODEL_PATH}   # ModelScope: AI-ModelScope/stable-diffusion-v1-5
+      - --dataset_name fusing/instructpix2pix-1000-samples
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --resolution 256 --random_flip
+      - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
+      - --max_train_steps 1
+      - --checkpointing_steps 9999
+      - --learning_rate 5e-05 --max_grad_norm 1 --lr_warmup_steps 0
+      - --conditioning_dropout_prob 0.05
+      - --mixed_precision fp16
+      - --seed 42
+    timeout_minutes: 90
+
+  # Kandinsky 2.2 decoder（全量）。上游命令见
+  # examples/kandinsky2_2/text_to_image/README.md；默认模型
+  # kandinsky-community/kandinsky-2-2-decoder（9.84GB，ModelScope 无镜像）。
+  # 不传 --validation_prompts（否则会加载 26.57GB 的 prior）。数据集
+  # lambdalabs/naruto-blip-captions 运行时经 hf-mirror 取。2026-09-18 验证可跑。
+  - path: examples/kandinsky2_2/text_to_image/train_text_to_image_decoder.py
+    profile: diffusers-kandinsky
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --dataset_name lambdalabs/naruto-blip-captions
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --resolution 256
+      - --train_batch_size 1
+      - --gradient_accumulation_steps 1
+      - --gradient_checkpointing
+      - --max_train_steps 1
+      - --learning_rate 1e-05
+      - --max_grad_norm 1
+      - --lr_scheduler constant --lr_warmup_steps 0
+    timeout_minutes: 90
+
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
 unsupported:
   # 模型下载需要令牌
   - examples/advanced_diffusion_training/train_dreambooth_lora_flux_advanced.py
   - examples/cogvideo/train_cogvideox_image_to_video_lora.py
-  # 数据集open_pose_controlnet 31GB，之后选一张图片验证
+  # 数据集open_pose_controlnet 31GB
   - examples/cogview4-control/train_control_cogview4.py
-  # 看护价值很低，且有些依赖cuda
+  # community/ 全部不适合看护：
+  #  - 105/110 无 if __name__ == "__main__"：是 custom_pipeline 模块（上游用
+  #    DiffusionPipeline.from_pretrained(..., custom_pipeline=...) 加载），
+  #    `python file.py` 只定义类然后退出 0 —— 空跑判绿、零看护价值；
+  #  - 其余 5 个有 main 的也都不能 CLI 跑：tiled_upscaling / dps_pipeline 硬编码
+  #    .to("cuda")；run_onnx_controlnet / run_tensorrt_controlnet 用 ONNX/TensorRT；
+  #    cogvideox_ddim_inversion 要 CogVideoX-5B + 本地视频。
+  # 要看护必须为每条 pipeline 单独写 driver（加载+跑 1 次推理），上游没提供，ROI 低。
   - examples/community/adaptive_mask_inpainting.py
   - examples/community/bit_diffusion.py
   - examples/community/checkpoint_merger.py
@@ -372,23 +471,35 @@ unsupported:
   - examples/controlnet/train_controlnet_flux.py
   # SD3 gated + 爆显存（README 要求 ≥80GB）
   - examples/controlnet/train_controlnet_sd3.py
+  # 数据预处理脚本，非 example（无独立看护价值）
   - examples/cosmos/create_prompts_for_gr1_dataset.py
+  # 数据下载+预处理脚本，非 example
   - examples/cosmos/download_and_preprocess_datasets.sh
+  # Cosmos-Predict2.5-2B 模型仓 101.5GB 且 gated=auto（需 token + 接受 license），
+  # 单卡 CI 下不了也放不下；train_lora.sh / eval_lora.sh 是它的包装脚本
   - examples/cosmos/eval_cosmos_predict25_lora.py
   - examples/cosmos/eval_lora.sh
   - examples/cosmos/train_cosmos_predict25_lora.py
   - examples/cosmos/train_lora.sh
+  # 纯 helper 模块（无 main），被 inference_cosmos3.py import
   - examples/cosmos3/cosmos_parallel.py
+  # Cosmos3-Nano 165.6GB / Cosmos3-Super 188GB（64.6B bf16），需多卡 TP/CP 分片，
+  # 单卡 CI 不可行；且硬编码 torch.device("cuda")/torch.cuda.set_device/
+  # init_device_mesh("cuda")/backend="nccl"，NPU 上不改源码跑不了
   - examples/cosmos3/inference_cosmos3.py
+  # retrieve.py：clip_retrieval 查外部 knn.laion.ai 服务
   - examples/custom_diffusion/retrieve.py
+  # 上游 test_custom_diffusion.py 对 transformers>=4.57.5 直接 skip（"Size mismatch"）：
+  # line 874 token_embeds[x]=token_embeds[y]，新 transformers 把 modifier token
+  # <new1> 切成多个 token（[3,32]），与 initializer_token 的 [32] 维度不一致 →
+  # RuntimeError: expand。纯 transformers 版本不兼容，与 NPU 无关。
   - examples/custom_diffusion/train_custom_diffusion.py
+  # sample_llada2：默认模型 inclusionAI/LLaDA2.0-mini 30.28GB（flash-CAP 191.65GB），
+  # 超单卡；且走 device_map="auto" + trust_remote_code，NPU 上未验证
   - examples/discrete_diffusion/sample_llada2.py
-  - examples/discrete_diffusion/train_llada2.py
   - examples/dreambooth/convert_to_imagefolder.py
-  - examples/dreambooth/train_dreambooth.py
   - examples/dreambooth/train_dreambooth_flax.py
   - examples/dreambooth/train_dreambooth_flux.py
-  - examples/dreambooth/train_dreambooth_lora.py
   - examples/dreambooth/train_dreambooth_lora_flux.py
   - examples/dreambooth/train_dreambooth_lora_flux_kontext.py
   - examples/dreambooth/train_dreambooth_lora_flux2.py
@@ -405,14 +516,20 @@ unsupported:
   - examples/dreambooth/train_dreambooth_lora_sdxl.py
   - examples/dreambooth/train_dreambooth_lora_z_image.py
   - examples/dreambooth/train_dreambooth_sd3.py
+  # flux-control 两条（全量 + LoRA）：代码 device-agnostic（无硬编码 cuda），
+  # 但 FLUX.1-dev gated=auto（需 token）+ 仓 64.7GB（transformer bf16 ~24GB），
+  # 数据集 raulc0399/open_pose_controlnet 63.8GB —— 模型/数据集均远超单卡
   - examples/flux-control/train_control_flux.py
   - examples/flux-control/train_control_lora_flux.py
+  # 废弃 shim：只 import pipeline + 发一条 outdated 警告，无 __main__、无实际推理
   - examples/inference/image_to_image.py
   - examples/inference/inpainting.py
-  - examples/instruct_pix2pix/train_instruct_pix2pix.py
+  # train_instruct_pix2pix_sdxl.py：SDXL 组件 fp32 ~14GB（>10GB）
   - examples/instruct_pix2pix/train_instruct_pix2pix_sdxl.py
-  - examples/kandinsky2_2/text_to_image/train_text_to_image_decoder.py
+  # lora_decoder：上游 bug——line 428 给 LoRAAttnAddedKVProcessor 传 hidden_size，
+  # 当前 diffusers 的 __init__ 不收该参数 → TypeError
   - examples/kandinsky2_2/text_to_image/train_text_to_image_lora_decoder.py
+  # prior 两条：模型 kandinsky-community/kandinsky-2-2-prior 26.57GB（>10GB）
   - examples/kandinsky2_2/text_to_image/train_text_to_image_lora_prior.py
   - examples/kandinsky2_2/text_to_image/train_text_to_image_prior.py
   - examples/model_search/pipeline_easy.py
