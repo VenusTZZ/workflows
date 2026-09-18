@@ -52,81 +52,65 @@ scan:
     - '**/__init__.py'
     - '**/test_*'
     - 'README.md'
+    # ===== "非 example"配套物（不归 unsupported，归 scan.exclude）=====
+    # helper / 构建配置 / 文档 / 资源——它们不是 example,放 unsupported
+    # 会让"全量 review"信号混入噪声；放 scan.exclude 让 unsupported 段
+    # 只剩"是 example 但跑不动"。窗口专属 .cmd 与 Windows 安装包单独
+    # 留在 unsupported.windows 段，因为它们"是 example"但跑不到 Linux。
+    - samples/python/_coverage.py        # 上游测试覆盖率 helper
+    - samples/python/_doc.py             # doc 生成 helper
+    - samples/python/common.py           # samples/python 共享 helper
+    - samples/python/CMakeLists.txt      # 构建配置
+    - samples/python/tutorial_code/**    # C++ 教程的 Python 翻译，多数需 GUI/相机
+    - samples/python/snippets/*.py       # 同上
+    - samples/dnn/common.py              # helper
+    - samples/dnn/common.hpp             # C++ helper
+    - samples/dnn/custom_layers.hpp      # C++ helper
+    - samples/dnn/custom_layer_onnx.cpp  # C++ helper
+    - samples/dnn/download_models.py     # 模型下载 helper（被 .py demo 引用拉 ONNX）
+    - samples/dnn/shrink_tf_graph_weights.py  # TF graph 工具 helper
+    - samples/dnn/tf_text_graph_*.py     # TF→OpenCV text graph 转换 helper（4 个文件：common/efficientdet/faster_rcnn/ssd）
+    - samples/dnn/.gitignore             # 仓库元数据
+    - samples/dnn/CMakeLists.txt         # 构建配置
+    - samples/dnn/README.md              # 文档
+    - samples/CMakeLists.txt             # 构建配置
+    - samples/data/                      # 资源（图/视频/模型二进制）
 
 supported:
   # ===== 已在 coder hdc-stable-npu-2（910B4×2, torch 2.9.0+cpu,
   # torch_npu 2.9.0.post2, CANN 9.1.0）逐例验证通过（exit 0）=====
-  # 全部 8 个 example 走 examples/quickstart_*.py（.sh）。依赖安装 + 源码
-  # 编译见 scripts/setup_example.sh；脚本运行参数展开见
-  # scripts/run_example.sh（沿用 peft 通用契约，只多了 nnal/atb 顺序
-  # 与 PYTHONPATH 校验两处 opencv-specific 处理）。
+  # 3 个 example 都是 NPU / CANN 相关的真正看护点：
+  #   py_version       探针（import cv2 + assert DNN_BACKEND_CANN != 0）
+  #   dnn_inference    NPU 推理（MobileNetV2 ONNX → CANN backend → NPU）
+  #   cann_unit_tests  CANN 算子 binary 套件（53/53 gtest green）
   #
-  # `profile: opencv` 单一 profile，setup 干 4 件事：
+  # 早期版本有 8 个 supported（imread / cvtColor / resize / draw / video
+  # / py_version / dnn_inference / cann_unit_tests），其中前 5 个是
+  # Quick-start-Ascend.md §9a-9e 的 CPU 算法 demo。这些 doc-snippet
+  # 不直接验证 CANN 路径——只验"源码 cv2 能 import + 基础算子能跑",
+  # 而 `py_version` 的 assert DNN_BACKEND_CANN != 0 已经隐含覆盖了
+  # 这一点（pip wheel 的 DNN_BACKEND_CANN == 0,import 进 wheel 的话
+  # 后续 DNN 推理偷偷跑 CPU）。所以 5 个 doc-snippet 不进 supported,
+  # 改放到 `setup_example.sh` 的 step 5 sanity check：setup 完跑一次
+  # 5 个算子,失败 setup 退出非零,fail-fast 而不是等 example 阶段
+  # 才发现 cv2 没编译对。
+  #
+  # 依赖安装 + 源码编译见 scripts/setup_example.sh；脚本运行参数展开
+  # 见 scripts/run_example.sh（沿用 peft 通用契约,只多了 nnal/atb
+  # 顺序与 PYTHONPATH 校验两处 opencv-specific 处理）。
+  #
+  # `profile: opencv` 单一 profile,setup 干 5 件事：
   #   (1) source CANN env（含 nnal/atb——cannops gtest 要用）；
   #   (2) 源码编译 opencv + opencv_contrib（idempotent，跳过已装的）；
   #   (3) PYTHONPATH 头插 /usr/local/opencv-cann/lib/.../cv2（保留
   #       镜像的 CANN Python bits；setdefault 会偷偷留镜像值→pip
   #       wheel 抢回，CI 33286049447 实测翻车）；
-  #   (4) 拷 baboon.jpg + mobilenetv2-12.onnx 到 $TARGET_ROOT/fixtures/。
+  #   (4) 拷 baboon.jpg + mobilenetv2-12.onnx 到 $TARGET_ROOT/fixtures/；
+  #   (5) 5 个 doc-snippet 算子 sanity（imread/cvtColor/resize/draw/
+  #       video），fail-fast；任一非零即 setup 失败。
   # 编译一次性（首次 50–70 min at -j2），同 runner 后续 example 复用
   # /usr/local/opencv-cann（image overlay 持久，不受 stop 影响；rebuild
   # 才会清空）。
-
-  # 9a. imread / imwrite：基础 I/O，BGR->PNG。CPU only，源码编译
-  # 唯一目的是让 cv2 与 CANN 编译后二进制一致（避免 wheel/源码两边
-  # import 路径分裂）。
-  - path: examples/quickstart_imread_imwrite.py
-    profile: opencv
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args: []   # 无：脚本默认值（baboon.jpg 来自 opencv/samples/data/，输出到 /tmp）
-    timeout_minutes: 10   # 编译后只跑这步 1-2 秒；timeout 给 10 分钟是为矩阵编排预留
-    # 不加 overlay 的原因：脚本接受 --image / --output，但 CI 想要
-    # 的就是默认行为（固定输入、固定输出、固定 shape (512,512,3)）。
-    # 任何 overlay 都是"为了不同 CI 复用同一脚本"，目前没有该需求。
-
-  # 9b. cvtColor：BGR -> 灰度。CPU only。脚本固定输出 mean；baboon 实测
-  # 约 129.7（不同 libjpeg 版本抖动 < 0.5），脚本容忍这点。
-  - path: examples/quickstart_cvtcolor.py
-    profile: opencv
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args: []
-    timeout_minutes: 10
-    # 不加 overlay 的原因：同 9a——保持 doc 行为可复现。
-
-  # 9c. resize：BGR 50x200 INTER_AREA。CPU only。
-  - path: examples/quickstart_resize.py
-    profile: opencv
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args: []
-    timeout_minutes: 10
-    # 不加 --width/--height overlay：50x200 是 doc 给的"窄而高"
-    # 演示值，刻意让输出 shape 与 doc test-result 对齐 (200,50,3)。
-    # 上游 opencv resize 的 (W, H) 参数顺序反直觉，固化在脚本里
-    # 反而比 overlay 更稳。
-
-  # 9d. rectangle + putText：CPU only，immutable 复盖原图。
-  - path: examples/quickstart_draw.py
-    profile: opencv
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args: []
-    timeout_minutes: 10
-    # 不加 --text overlay：默认 'Hello OpenCV' 与 doc 图片
-    # (images/quickstart-draw.png) 一致。改文字会破坏 doc 视觉对账。
-
-  # 9e. VideoWriter：3 帧 MJPG AVI。CPU only。
-  - path: examples/quickstart_video.py
-    profile: opencv
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args: []
-    timeout_minutes: 10
-    # 不加 overlay：默认 320x320 + 10 fps + 3 帧 = doc 演示规模；
-    # 镜像不带 FFmpeg/GStreamer（only MJPG fourcc 走得通），改编码
-    # 或分辨率会让 VideoWriter.isOpened() 返 false。over-spec 不划算。
 
   # 版本探针：cv2 + DNN_BACKEND_CANN + DNN_TARGET_NPU 三个枚举
   # 都要非零。CPU only，但唯一能验证"PYTHONPATH 真的指到源码编译
@@ -183,113 +167,99 @@ supported:
                       # 偷偷覆盖。
     timeout_minutes: 60
     # 60 min 而非默认：78 个 gtest 实际 ~5 min（含 graph 编译 + 内存
-    # fixture 准备），余量给 driver 抖动；31 min 与 9a-9e 矩阵并行
-    # 收敛到 60 min 大关（CI 240 min job budget 配 4 并行 leg）。
+    # fixture 准备），余量给 driver 抖动；3 个 supported entry 的
+    # 总 wall-clock 在 30 min 内（py_version ~1s, dnn_inference ~2min,
+    # cann_unit_tests ~5min），矩阵并行收敛到 30 min 大关。
 
 # ===== unsupported =====
-# 三大类：(1) 上游 samples/python/ 全量非 headless demo（需
-# namedWindow+waitKey+相机/视频输入，CI 跑不动）；(2) samples/dnn/
-# 全量走 CPU DNN 后端，重复 NPU 看护价值低；(3) samples/cpp/ 是
-# C++（CI 矩阵只跑 .py/.sh，C++ 不在 run_example.sh 的解释器分发
-# 范围）。每条都附真实理由 + 静态/动态证据。
+# 四段（从前往后）：
+#   1. environment_blocked  需 hosting/gui/相机/管线依赖，CI 跑不动
+#   2. cpp_matrix_skip      C++ demo，矩阵只跑 .py / .sh
+#   3. cpu_only             纯 CPU 算法（erode/dilate/floodFill/pyrDown/pyrUp），
+#                           NPU 看护价值低；放 unsupported 段最后
+#   4. windows              Windows 专属（.cmd / winpack），放 cpu 后面
+#
+# 设备无关但默认 backend=DNN_BACKEND_OPENCV 的 12 个 samples/dnn/*.py
+# 不在本段，归末尾的 `device_independent_gpu_capable` 单独段——
+# 源码分析后可能升 supported。
 
 unsupported:
-  # ===== runtime-verified：与 NPU 看护正交 =====
-  # 上游 samples/python/drawing.py / samples/python/grabcut.py 等全
-  # 量 demo 在 import 阶段就 import cv2 并 cv2.namedWindow(...)，
-  # 镜像不带 libgtk/libqt，cv2.highgui 编译时 BUILD_opencv_highgui
-  # 没勾选；setup_example.sh 的 BUILD_LIST 明确不勾 highgui——是
-  # 故意取舍（headless CI 不需要 GUI 插件）。任何 GUI demo 都会
-  # 在 highgui 符号未定义上 AttributeError。
-  - samples/python/drawing.py            # namedWindow + waitKey，headless 不可用
-  - samples/python/grabcut.py            # 同上 + setMouseCallback
-  - samples/python/mouse_and_match.py    # 同上 + cv2.setMouseCallback
-  - samples/python/plane_tracker.py      # 同上
-  - samples/python/qrcode.py             # detectAndDecode 后 waitKey
-  - samples/python/asift.py              # 同样需要 namedWindow
-  - samples/python/calibrate.py          # 同上
-  - samples/python/lappyr.py             # Laplacian pyramid + waitKey
+  # ===== 1. environment_blocked =====
+  # 上游 samples/python/* 大多数 demo 在 import 阶段就 import cv2 并
+  # cv2.namedWindow(...)：镜像不带 libgtk/libqt，cv2.highgui 编译时
+  # BUILD_opencv_highgui 没勾选；setup_example.sh 的 BUILD_LIST 明确
+  # 不勾 highgui——是故意取舍（headless CI 不需要 GUI 插件）。任何
+  # GUI demo 都会在 highgui 符号未定义上 AttributeError。
+  - samples/python/drawing.py                  # namedWindow + waitKey，headless 不可用
+  - samples/python/grabcut.py                  # 同上 + setMouseCallback
+  - samples/python/mouse_and_match.py          # 同上 + cv2.setMouseCallback
+  - samples/python/plane_tracker.py            # 同上
+  - samples/python/qrcode.py                   # detectAndDecode 后 waitKey
+  - samples/python/asift.py                    # 同样需要 namedWindow
+  - samples/python/calibrate.py                # 同上
   - samples/python/macbeth_chart_detection.py  # 同上
-  - samples/python/morphology.py         # 同上
   - samples/python/aruco_detect_board_charuco.py  # 同上
-  - samples/python/essential_mat_reconstr.py  # 同上
-  - samples/python/color_correction_model.py  # 同上
+  - samples/python/essential_mat_reconstr.py   # 同上
+  - samples/python/color_correction_model.py   # 同上
   - samples/python/visualize_mono_calibration.py  # 同上
-  - samples/python/point_cloud.py        # 同上
-  - samples/python/stereo_match.py       # 同上
-  - samples/python/stitching_detailed.py # 同上
-  - samples/python/audio_spectrogram.py  # 同上
-  - samples/python/tst_scene_render.py   # 3D 场景渲染 + waitKey
-  - samples/python/opencv_version.py     # 已被 examples/quickstart_py_version.py 覆盖（带 CANN enum 断言）
-  - samples/python/odometry.py           # 同上（GUI demo）
-  - samples/python/_coverage.py          # 测试 helper（不在 example 范畴，scan.exclude 候选）
-  - samples/python/_doc.py               # doc 生成 helper，同上
-  - samples/python/common.py             # 共享 helper，scan.exclude 候选
-  - samples/python/demo.py               # 综合 demo（GUI）
-  - samples/python/_run_winpack_demo.cmd # Windows 启动脚本（CI runner Linux）
-  - samples/python/CMakeLists.txt        # 构建配置，scan.exclude 候选
+  - samples/python/point_cloud.py              # 同上
+  - samples/python/stereo_match.py             # 同上
+  - samples/python/stitching_detailed.py       # 同上
+  - samples/python/audio_spectrogram.py        # 同上
+  - samples/python/tst_scene_render.py         # 3D 场景渲染 + waitKey
+  - samples/python/opencv_version.py           # 已被 examples/quickstart_py_version.py 覆盖（带 CANN enum 断言）
+  - samples/python/odometry.py                 # 同上（GUI demo）
+  - samples/python/demo.py                     # 综合 demo（GUI）
   - samples/python/background_subtractor_mask.py  # waitKey
   - samples/python/camera_calibration_show_extrinsics.py  # waitKey
-  - samples/python/floodfill.py          # waitKey
-  - samples/python/tutorial_code/**      # 子目录里的 .py 全是 C++ 教程的 Python 翻译，多数需要相机/GUI
-  - samples/python/snippets/*.py         # 同上
+  - samples/dnn/dnn_model_runner/**            # 转换 + 评估管线，CI 矩阵跑不动整链
 
-  # ===== NPU 看护价值低：纯 CPU DNN 路径 =====
-  # 上游 samples/dnn/*.py 都是 OpenCV CPU DNN 后端的 demo（默认
-  # cv2.dnn.DNN_BACKEND_OPENCV），与 NPU CANN 路径无交集；NPU
-  # 价值是要跑"GPU 风格的算子图编译 + 异构执行"，CPU 后端在
-  # x86/aarch64 host 上就是普通 SIMD。看这些不能验证 CANN 后端。
-  - samples/dnn/classification.py        # CPU OpenCV DNN，无 NPU 价值
-  - samples/dnn/alpha_matting.py         # 同上
-  - samples/dnn/auto_white_balance.py    # 同上
-  - samples/dnn/colorization.py          # 同上
-  - samples/dnn/object_detection.py      # 同上
-  - samples/dnn/segmentation.py          # 同上
-  - samples/dnn/text_detection.py        # 同上
-  - samples/dnn/action_recognition.py    # 同上
-  - samples/dnn/pose_estimation.py       # 同上
-  - samples/dnn/face_detection.py        # 同上
-  - samples/dnn/style_transfer.py        # 同上
-  - samples/dnn/super_resolution.py      # 同上
-  - samples/dnn/deblurring.py            # 同上
-  - samples/dnn/custom_layer.py          # 同上（自定义层 demo，走 CPU）
-  - samples/dnn/dnn_model_runner/**      # 转换 + 评估管线，CI 矩阵跑不动整链
-  - samples/dnn/common.py                # helper，scan.exclude 候选
-  - samples/dnn/common.hpp               # C++ helper，同上
-  - samples/dnn/custom_layers.hpp        # 同上
-  - samples/dnn/custom_layer_onnx.cpp    # 同上
-  - samples/dnn/alpha_matting.cpp        # C++（看护矩阵不跑 .cpp）
-  - samples/dnn/auto_white_balance.cpp   # 同上
-  - samples/dnn/classification.cpp       # 同上
-  - samples/dnn/colorization.cpp         # 同上
-  - samples/dnn/deblurring.cpp           # 同上
-  - samples/dnn/pose_estimation.cpp      # 同上（5.0.0 改名）
-  - samples/dnn/object_detection.cpp     # 同上
-  - samples/dnn/segmentation.cpp         # 同上
-  - samples/dnn/text_detection.cpp       # 同上
-  - samples/dnn/face_detection.cpp       # 同上
-  - samples/dnn/style_transfer.cpp       # 同上
-  - samples/dnn/super_resolution.cpp     # 同上
-  - samples/dnn/action_recognition.cpp   # 同上
-  - samples/dnn/.gitignore               # 仓库元数据
-  - samples/dnn/CMakeLists.txt           # 构建配置
-  - samples/dnn/README.md                # 文档
+  # ===== 2. cpp_matrix_skip =====
+  # run_example.sh 的解释器分发（"path 以 .sh → bash，.py → python"）
+  # 不覆盖 .cpp。C++ 走 BUILD_EXAMPLES=ON + cmake add_executable，需
+  # 单独 compile 链，本期不接入。归 unsupported 而非 scan.exclude：
+  # 保留"未来可加"的语义（peft 也是这么归 cpp）。
+  - samples/cpp/**                             # 198 .cpp + 124 tutorial .cpp + 资源；C++ demo 走 GUI / 相机，CI runner 不装 GTK/Qt
+  # samples/dnn/*.cpp 是对应 .py 的 C++ 版，命名以 5.0.0 实际为准：
+  # 原 manifest 沿用的"理想化"文件名有 3 处错位，已修
+  # (pose_estimation → openpose / face_detection → face_detect /
+  #  style_transfer 不存在 .cpp 版本)。
+  - samples/dnn/alpha_matting.cpp              # C++ DNN demo，与 .py 版对应；矩阵不跑 .cpp
+  - samples/dnn/auto_white_balance.cpp         # 同上
+  - samples/dnn/classification.cpp             # 同上
+  - samples/dnn/colorization.cpp               # 同上
+  - samples/dnn/deblurring.cpp                 # 同上
+  - samples/dnn/object_detection.cpp           # 同上
+  - samples/dnn/openpose.cpp                   # 5.0.0 实际文件名（原 manifest 写作 pose_estimation.cpp）
+  - samples/dnn/segmentation.cpp               # 同上
+  - samples/dnn/text_detection.cpp             # 同上
+  - samples/dnn/face_detect.cpp                # 5.0.0 实际文件名（原 manifest 写作 face_detection.cpp）
+  - samples/dnn/super_resolution.cpp           # 同上
+  - samples/dnn/edge_detection.cpp             # 5.0.0 新增，矩阵不跑 .cpp
+  - samples/dnn/human_parsing.cpp              # 5.0.0 新增
+  - samples/dnn/object_tracker.cpp             # 5.0.0 新增
+  - samples/dnn/person_reid.cpp                # 5.0.0 新增
+  - samples/dnn/speech_recognition.cpp         # 5.0.0 新增
+  - samples/dnn/custom_layer.py                # 自定义层 demo：CPU DNN，无 NPU 价值（cannops 还没实现 custom layer 注册路径）
 
-  # ===== C++ examples：CI 矩阵不跑 =====
-  # peft 矩阵全 .py / .sh；run_example.sh 的解释器分发
-  # （"path 以 .sh → bash，.py → python"）不覆盖 .cpp。C++ 走
-  # BUILD_EXAMPLES=ON + cmake add_executable，需要单独 compile 链，
-  # 本期不接入。归 unsupported 而非 exclude：保留"未来可加"的语义。
-  - samples/cpp/**  # 198 .cpp + 124 tutorial .cpp + 资源；C++ demo 走 GUI / 相机，CI runner 不装 GTK/Qt
-  - samples/winpack_packaging/**         # Windows 安装包，Linux runner 不适用
-  - samples/CMakeLists.txt               # 构建配置
+  # ===== 3. cpu_only (放在 unsupported 段最后) =====
+  # 明确"算法型" demo：只用 cv2 基础算子（erode/dilate/floodFill/
+  # pyrDown/pyrUp）。CANN backend 在 opencv_test_cannops 里**只覆盖**
+  # 这些算子的一部分（CVT_COLOR / ELEMENTWISE / CORE.RESIZE 的 53 个），
+  # 且不在 quickstart demo 范畴；NPU 看护价值低，留给 gtest 套件
+  # (examples/quickstart_cann_unit_tests.sh) 即可。
+  - samples/python/morphology.py               # erode / dilate / morphologyEx，纯 CPU 算法
+  - samples/python/floodfill.py                # cv2.floodFill，纯 CPU 算法
+  - samples/python/lappyr.py                   # pyrDown / pyrUp Laplacian 金字塔，纯 CPU 算法
 
-  # ===== 数据 / 资源 =====
-  # 非代码 example；放 unsupported 让"全量 review"信号完整。
-  - samples/data/                       # 测试图/视频/模型二进制
-  - samples/dnn/README.md                # 文档（重复声明保险）
+  # ===== 4. windows (放在 cpu_only 后面) =====
+  # Windows 专属，CI runner 是 Linux（cann:9.1.0-910b-ubuntu22.04-py3.12）。
+  # _run_winpack_demo.cmd 是 .cmd 启动脚本；winpack_packaging/** 是
+  # OpenCV Windows 安装包（.exe / .iss），与 Linux runner 无关。
+  - samples/python/_run_winpack_demo.cmd       # Windows 启动脚本（CI runner Linux）
+  - samples/winpack_packaging/**               # Windows 安装包，Linux runner 不适用
 
-  # ===== CANN gtest：25 个 known-broken 排除项 =====
+  # ===== 5. CANN gtest：25 个 known-broken 排除项 =====
   # opencv_test_cannops 共 78 个 gtest；本节 25 个被 examples/
   # quickstart_cann_unit_tests.sh 的 EXCLUDE_FILTER 数组显式
   # 排除。每条附理由（来自 docs/Quick-start-Ascend.md §"跑 CANN
@@ -325,3 +295,60 @@ unsupported:
   - test_cannops/ELEMENTWISE_OP.MAT_THRESHOLD
   - test_cannops/ELEMENTWISE_OP.MAT_THRESHOLD_ASCENDC
   - test_cannops/ASCENDC_KERNEL.THRESHOLD
+
+  # ===== 6. device_independent_gpu_capable =====
+  # samples/dnn/*.py 都是 readNet* + setInput + forward() 模式：
+  # 默认 backend=DNN_BACKEND_OPENCV（CPU），切到 CANN+ NPU 是 2 行
+  # 改。但**前 12 个都用 namedWindow + imshow + waitKey**(部分还
+  # cv2.VideoCapture(0) 摄像头兜底)，源码分析 2026-05-17 (coder
+  # npu-2 Explore agent) 逐条确认未升。命名以下游 5.0.0 实际文件为准
+  # (原 manifest 沿用的"理想化"文件名与上游实际文件名有 3 处错位，
+  # 已修)。
+  #
+  # "strip GUI + 切 CANN"改写成本 3-5 行的候选（Explore agent 列出的
+  # closest pure-inference；写新 examples/quickstart_<task>.py + 在
+  # 这里把对应路径下移到 supported 即可）：
+  #   - samples/dnn/auto_white_balance.py    FC4 ~几 MB,纯 readNet 推理
+  #   - samples/dnn/colorization.py          Siggraph colorizer ~130 MB
+  #   - samples/dnn/alpha_matting.py         MODNet ~25 MB
+  #   - samples/dnn/deblurring.py            NAFNet ~170 MB,32GB HBM 装得下
+  #   - samples/dnn/super_resolution.py      SeeMoreDetails ~10 MB
+  # 模型都不在 samples/dnn/ 仓里（要走 download_models.py 拉），需要
+  # 把模型移到 projects/opencv/fixtures/。
+  - samples/dnn/classification.py           # squeezenet/googlenet/resnet50-v2，imshow+waitKey + cv.VideoCapture(0) 摄像头兜底
+  - samples/dnn/object_detection.py         # yolov8/yolov4/ssd_mobilenet/faster_rcnn，imshow+waitKey + 摄像头兜底
+  - samples/dnn/segmentation.py             # fcn-resnet50/101/u2netp，imshow+waitKey + 摄像头兜底
+  - samples/dnn/text_detection.py           # DB/EAST + VGG_CTC，imshow+waitKey
+  - samples/dnn/action_recognition.py       # 3D ResNet-34 Kinetics，硬编码 DNN_BACKEND_INFERENCE_ENGINE → cpu，需切 OpenCV/CANN
+  - samples/dnn/openpose.py                 # 原 manifest 写作 pose_estimation.py；Caffe .prototxt + .caffemodel，CANN 不支持 Caffe 格式
+  - samples/dnn/face_detect.py              # 原 manifest 写作 face_detection.py；用 cv.FaceDetectorYN 高层 API（非 readNet），CANN 后端不直接适用
+  - samples/dnn/fast_neural_style.py        # 原 manifest 写作 style_transfer.py；instance-norm ONNX，imshow+waitKey
+  - samples/dnn/auto_white_balance.py       # FC4，imshow+waitKey（最易 strip）
+  - samples/dnn/colorization.py             # Siggraph colorizer，imshow+waitKey；硬编码 --onnx_model_path，models.yml 无条目
+  - samples/dnn/alpha_matting.py            # MODNet，namedWindow x3 + imshow + waitKey(0)
+  - samples/dnn/deblurring.py               # NAFNet，imshow x2 + waitKey(0)
+  - samples/dnn/super_resolution.py         # SeeMoreDetails，namedWindow x2 + waitKey(0) 键盘循环
+  # ===== 7. 5.0.0 新增 samples/dnn/*.py（未源码分析，单独标出）=====
+  # 5.0.0 比早期 tag 新增了一批 .py：LLM 推理（gemma3/gpt2/qwen_inference/
+  # vlm_inference）、human parsing、inpainting、ldm_inpainting、mask_rcnn、
+  # object_tracker、optical_flow、person_reid、siamrpnpp、speech_recognition、
+  # virtual_try_on、edge_detection。Explore agent 未对它们逐条审；推测
+  # 大多数仍走 readNet + imshow + waitKey 模板（CANN strip 候选），少数
+  # 走 cv.FaceDetectorYN/SpeechRecognizer 等高层 API（不适用 readNet
+  # backend 切换）或 LLM onnx（模型太大 32GB HBM 容不下）。
+  # 等下一轮审查决定哪些能升 supported。
+  - samples/dnn/edge_detection.py             # 5.0.0 新增，未分析
+  - samples/dnn/gemma3_inference.py           # 5.0.0 新增；LLM onnx，未分析
+  - samples/dnn/gpt2_inference.py             # 5.0.0 新增；LLM onnx，未分析
+  - samples/dnn/human_parsing.py              # 5.0.0 新增，未分析
+  - samples/dnn/inpainting.py                 # 5.0.0 新增，未分析
+  - samples/dnn/ldm_inpainting.py             # 5.0.0 新增，未分析
+  - samples/dnn/mask_rcnn.py                  # 5.0.0 新增，未分析
+  - samples/dnn/object_tracker.py             # 5.0.0 新增，未分析
+  - samples/dnn/optical_flow.py               # 5.0.0 新增，未分析
+  - samples/dnn/person_reid.py                # 5.0.0 新增，未分析
+  - samples/dnn/qwen_inference.py             # 5.0.0 新增；LLM onnx，未分析
+  - samples/dnn/siamrpnpp.py                  # 5.0.0 新增，未分析
+  - samples/dnn/speech_recognition.py         # 5.0.0 新增，未分析
+  - samples/dnn/virtual_try_on.py             # 5.0.0 新增，未分析
+  - samples/dnn/vlm_inference.py              # 5.0.0 新增；LLM onnx，未分析

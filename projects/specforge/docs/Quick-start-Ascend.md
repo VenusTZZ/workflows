@@ -52,8 +52,14 @@ version=9.0.0
 
 确认 torch / torch_npu / sglang 都能 import 且能看到 4 张卡：
 
-```shell #test id="check-torch"
-python -c "import torch, torch_npu; from importlib.metadata import version; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('sglang', version('sglang')); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+```python #test id="check-torch"
+import torch, torch_npu
+from importlib.metadata import version
+print('torch=', torch.__version__)
+print('torch_npu=', torch_npu.__version__)
+print('sglang', version('sglang'))
+print('is_available:', torch.npu.is_available())
+print('count:', torch.npu.device_count())
 ```
 
 输出结果如下：
@@ -68,8 +74,7 @@ count: 4
 
 汇总镜像信息：
 
-```shell #test id="image-probe"
-python -c "
+```python #test id="image-probe"
 import sys, torch, torch_npu
 from importlib.metadata import version
 print('python', sys.version.split()[0])
@@ -78,7 +83,6 @@ print('torch_npu', torch_npu.__version__)
 print('sglang', version('sglang'))
 print('npu_available', torch.npu.is_available())
 print('npu_count', torch.npu.device_count())
-"
 ```
 
 输出结果如下：
@@ -181,8 +185,11 @@ specforge, version xxx
 
 确认 specforge 能在 NPU 环境里正常 import：
 
-```shell #test id="specforge-import"
-python -c "import specforge, torch, torch_npu; print('specforge', getattr(specforge, '__version__', 'unknown')); print('torch', torch.__version__); print('torch.npu.is_available', torch.npu.is_available())"
+```python #test id="specforge-import"
+import specforge, torch, torch_npu
+print('specforge', getattr(specforge, '__version__', 'unknown'))
+print('torch', torch.__version__)
+print('torch.npu.is_available', torch.npu.is_available())
 ```
 
 输出结果如下：
@@ -658,7 +665,7 @@ CI 框架逐段执行本文命令块，单段 stdout/stderr 整段缓冲，只�
 
 #### 启动 specforge train（后台）
 
-在卡 1 上后台启动 1 步训练（batch/步数压到最小的 smoke 配置），30 秒后确认进程还活着——典型失败（mooncake 没起或补丁没生效）会在 30s 内直接退出：
+在卡 1 上后台启动 1 步训练（batch/步数压到最小的 smoke 配置），30 秒后确认进程还活着——典型失败（mooncake 没起或 sglang spec-capture 补丁没生效）会在 30s 内直接退出：
 
 ```shell #test id="smoke-train-launch" load="model_path>>MODEL_PATH" load="sharegpt_path>>SHAREGPT_PATH"
 set -euo pipefail
@@ -668,6 +675,13 @@ RECIPE="${SPECFORGE_RECIPE:-examples/configs/online/disaggregated/external/qwen3
 pushd "$SPECFORGE_ROOT" >/dev/null
 # 配方 output_dir 残留的 producer_claim / failed 标记会让 _claim_fresh_control_path 拒绝继续。
 rm -rf outputs/qwen3.5-4b-dflash-npu-online
+# 上游 38970f6d（2026-09-15 合入）把 deployment.disaggregated.receive_buffers 默认值从
+# pageable 改成 pinned：NPU 上 ReceiveBufferPool._new_slot 的 pin = torch.cuda.is_available()
+# 恒为 False，pageable host buffer register_buffer 返回 -600，且 f22bd36c 把该返回码变成硬
+# RuntimeError——trainer 第一个 feature fetch 就崩（run 35225016001）。显式回退 pageable：
+# pool=None 走 _store_get_tensor 老路径，register 失败被忽略、TCP get_into 正常工作（9/4
+# 成功 run 33872042104 即此语义）。上游给 pinned 补上 NPU 适配（同文件已有
+# _ascend_runtime_available()，一行 OR 的事）后可去掉此 override。
 # PYTHONUNBUFFERED=1 让 specforge train 的 stdout 无缓冲写 /tmp/smoke-train.log；
 # 即使外层框架缓冲整段命令输出，日志文件里也是行粒度（出问题后能 tail 看到断点位置）。
 PYTHONUNBUFFERED=1 \
@@ -685,6 +699,7 @@ nohup specforge train -c "$RECIPE" \
     training.log_interval=1 \
     tracking.report_to=none \
     deployment.trainer.nproc_per_node=1 \
+    deployment.disaggregated.receive_buffers=pageable \
     model.target_model_path="<MODEL_PATH>" \
     model.embedding_key="model.language_model.embed_tokens.weight" \
     >/tmp/smoke-train.log 2>&1 &
