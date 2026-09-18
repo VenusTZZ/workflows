@@ -295,14 +295,18 @@ python examples/start_agentic_pipeline.py --config_path agentic_frozen_lake_npu 
 ...pipeline complete!...
 ```
 
-**校验训练产物。** 训练指标写入 output/tensorboard，校验事件文件存在。
+**校验训练产物。** 训练指标写入 output/tensorboard，校验当前实验的事件文件已生成且非空。
 
-```shell #test id="verify-output"
-ls ROLL/output/tensorboard/events*
+```python #test id="verify-output"
+from pathlib import Path
+
+events = list(Path("ROLL/output/tensorboard/roll-quick-start-npu").glob("*/events.out.tfevents.*"))
+assert events and events[0].stat().st_size > 0
+print("tensorboard event ok")
 ```
 
-```shell #test-result id="verify-output" fuzzy='xxx'
-ROLL/output/tensorboard/events.out.tfevents.xxx
+```shell #test-result id="verify-output"
+tensorboard event ok
 ```
 
 ## 更多用法
