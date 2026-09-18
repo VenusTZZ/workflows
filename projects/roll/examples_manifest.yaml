@@ -17,7 +17,7 @@ scan:
 supported:
   # Agentic-Rollout：仅推理的 Sokoban 多轮环境交互与轨迹组装。与上游 agentic_rollout_sokoban.yaml 同 pipeline，
   # CI 重写为 ci_agentic_rollout：单卡 vLLM-Ascend、单环境、序列 256。国内 CANN 基础镜像启动后
-  # 由 setup 安装 quick-start 已验证的 torch_npu / vLLM-Ascend 固定版本组合。
+  # 由 setup 据 v0.3.0 的官方升腾环境文档安装固定版本的 torch_npu / vLLM-Ascend。
   - path: examples/qwen2.5-0.5B-agentic/agentic_rollout_sokoban.yaml
     profile: agentic_rollout_npu
     runner: linux-aarch64-a2-1

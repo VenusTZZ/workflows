@@ -22,7 +22,7 @@ release-only 监控、matrix 调度、结果校验与状态写回，本仓不修
 | `examples/qwen2.5-0.5B-agentic/agentic_rollout_sokoban.yaml` | `configs/ci_agentic_rollout.yaml` | `linux-aarch64-a2-1` | 单环境多轮交互、vLLM-Ascend 生成、轨迹组装，无训练 |
 
 阶段一先建立不依赖 `quay.io/ascend/roll` 的环境基线：用国内 CANN
-基础镜像启动 job，再按 quick-start 已实测的固定版本组合安装
+基础镜像启动 job，再据 v0.3.0 的官方升腾环境文档安装固定版本组合
 torch_npu / vLLM-Ascend / ROLL。两卡 Agentic train 和四卡 RLVR 暂放
 unsupported，待单卡 rollout 手动验收全绿后逐项恢复。
 

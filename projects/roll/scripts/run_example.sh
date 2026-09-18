@@ -72,13 +72,19 @@ source_vendor_env /usr/local/Ascend/ascend-toolkit/set_env.sh
 source_vendor_env /usr/local/Ascend/nnal/atb/set_env.sh
 
 # Single-node Ray contract for the thin engine. ROLL starts Ray itself and
-# derives HCCL ranks from the per-worker ASCEND_RT_VISIBLE_DEVICES.
+# derives HCCL ranks from the per-worker ASCEND_RT_VISIBLE_DEVICES.  The
+# domestic CANN base image does not pre-set that variable the way the
+# upstream quay image does, so pin device 0 before Ray starts; its workers
+# inherit the value.
+# RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=1 follows the v0.3.0
+# Ascend env guide to keep Ray from rewriting the visibility list.
+export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
 export RANK=0
 export WORLD_SIZE=1
 export MASTER_ADDR=127.0.0.1
 export MASTER_PORT=6379
 export DASHBOARD_PORT=8265
-export RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=0
+export RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=1
 export RAY_DEDUP_LOGS=0
 export PYTHONPATH="$TARGET_ROOT:${PYTHONPATH:-}"
 export MODEL_DOWNLOAD_TYPE="${MODEL_DOWNLOAD_TYPE:-MODELSCOPE}"

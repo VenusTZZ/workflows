@@ -2,7 +2,8 @@
 # Prepare the CI environment for one supported ROLL example.
 # $1 is the manifest profile. Unknown profiles fail before any install.
 # The manifest uses a domestic CANN base image.  This script installs the
-# version-matched torch_npu / vLLM-Ascend stack proven by roll-quick-start,
+# version-matched torch_npu / vLLM-Ascend stack following the v0.3.0
+# Ascend environment guide,
 # then installs ROLL itself from TARGET_ROOT (the upstream checkout under
 # test).  ModelScope keeps using the runner's existing persistent cache.
 set -euo pipefail
@@ -134,7 +135,8 @@ install_rollout_stack() {
     "vllm-ascend==0.23.0rc1"
 
   # Generic vLLM metadata can select a CUDA torch build.  Restore the exact
-  # NPU pair after installing vLLM, matching the exercised quick-start path.
+  # NPU pair after installing vLLM, exactly as the v0.3.0 Ascend guide
+  # requires.
   python -m pip install -q \
     "torch==2.10.0" "torchvision==0.25.0" "torchaudio==2.10.0"
   pip_ascend -q --no-deps "torch-npu==2.10.0.post4"
@@ -152,7 +154,8 @@ install_rollout_stack() {
     > "$requirements_file"
   (cd "$target_root" && python -m pip install -q -r "$requirements_file")
   # gem-llm metadata pulls an antlr runtime incompatible with Hydra's pin;
-  # quick-start proved the package itself works with ROLL's 4.9.3 runtime.
+  # v0.3.0 requirements pin antlr4-python3-runtime 4.9.x, which gem works
+  # with.
   (cd "$target_root" && python -m pip install -q \
     --ignore-requires-python --no-deps "gem-llm==0.0.4")
   python -m pip install -q \
