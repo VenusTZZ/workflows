@@ -141,13 +141,15 @@ install_rollout_stack() {
   pip_ascend -q --no-deps "torch-npu==2.10.0.post4"
 
   echo "=> installing ROLL common + Sokoban dependencies"
+  # Run from the target checkout: the requirements file uses ROLL-root-
+  # relative paths (./mcore_adapter, -r requirements_vision.txt).
   grep -vE '^[[:space:]]*gem-llm' \
     "$target_root/requirements_common.txt" > "$requirements_file"
-  python -m pip install -q -r "$requirements_file"
+  (cd "$target_root" && python -m pip install -q -r "$requirements_file")
   # gem-llm metadata pulls an antlr runtime incompatible with Hydra's pin;
   # quick-start proved the package itself works with ROLL's 4.9.3 runtime.
-  python -m pip install -q --ignore-requires-python --no-deps \
-    "gem-llm==0.0.4"
+  (cd "$target_root" && python -m pip install -q \
+    --ignore-requires-python --no-deps "gem-llm==0.0.4")
   python -m pip install -q \
     "numpy==1.26.4" "transformers==4.57.6" "tensorboard==2.20.0" \
     "antlr4-python3-runtime==4.9.3" "modelscope==1.37.0" \
