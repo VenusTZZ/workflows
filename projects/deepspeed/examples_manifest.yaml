@@ -8,8 +8,9 @@ version: 1
 # is the entry file (.sh/.py).
 # scan.exclude declares non-example companions (imported libs, model defs, tests),
 # pruned recursively, and kept out of supported/unsupported.
-# "unsupported" means "this guard does not run it now", NOT "Ascend cannot run it";
-# comments separate CUDA/multi-node/big-data hard-blocks from promotable items.
+# unsupported means this guard does not run it now, NOT that Ascend cannot run it.
+# Each unsupported entry carries an inline one-line reason; .sh launchers that only
+# wrap a sibling .py are merged into that .py entry.
 scan:
   root: ''
   include_extensions: ['.sh', '.py']
@@ -30,8 +31,7 @@ scan:
     - training/data_efficiency/vit_finetuning/models
     - training/data_efficiency/vit_finetuning/utils
     - training/HelloDeepSpeed/tests
-    - training/pipeline_parallelism/alexnet.py
-    - training/offload_states/output_table.py
+
 supported:
   # HelloDeepSpeed: Roberta MLM from scratch (ZeRO-1 + CPU offload + BF16). wikitext patched to Salesforce/wikitext (ModelScope) in setup; script passes through $@.
   - path: training/HelloDeepSpeed/run_ds.sh
@@ -48,13 +48,16 @@ supported:
       - '--log_every 5'
       - '--dtype bf16'
     timeout_minutes: 60
-  # DS-Chat step1 SFT: NPU-aware (get_accelerator); opt-125m via ModelScope; data is an 8-line local/jsonfile fixture written by setup.
-  - path: applications/DeepSpeed-Chat/training/step1_supervised_finetuning/main.py
+  # DS-Chat step1 SFT: NPU-aware (get_accelerator); opt-125m via ModelScope (${OPT_125M_PATH} from setup);
+  # data is an 8-line local/jsonfile fixture written by setup. path is the step directory so the
+  # job name (basename of path) stays unique - all four DS-Chat entrypoints are named main.py.
+  - path: applications/DeepSpeed-Chat/training/step1_supervised_finetuning
+    exec: applications/DeepSpeed-Chat/training/step1_supervised_finetuning/main.py
     profile: ds_chat_sft
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - '--model_name_or_path facebook/opt-125m'
+      - '--model_name_or_path ${OPT_125M_PATH}'
       - '--data_path local/jsonfile'
       - '--num_train_epochs 1'
       - '--per_device_train_batch_size 4'
@@ -63,15 +66,17 @@ supported:
       - '--zero_stage 2'
       - '--dtype bf16'
       - '--print_loss'
+      - '--deepspeed'
       - '--output_dir ${CI_OUTPUT_DIR}'
     timeout_minutes: 120
   # DS-Chat step2 reward model: same data source as step1; trains a chosen>rejected preference scorer.
-  - path: applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/main.py
+  - path: applications/DeepSpeed-Chat/training/step2_reward_model_finetuning
+    exec: applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/main.py
     profile: ds_chat_rw
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - '--model_name_or_path facebook/opt-125m'
+      - '--model_name_or_path ${OPT_125M_PATH}'
       - '--data_path local/jsonfile'
       - '--num_train_epochs 1'
       - '--per_device_train_batch_size 4'
@@ -79,15 +84,17 @@ supported:
       - '--max_seq_len 128'
       - '--zero_stage 2'
       - '--dtype bf16'
+      - '--deepspeed'
       - '--output_dir ${CI_OUTPUT_DIR}'
     timeout_minutes: 120
   # DS-Chat step2 DPO: ref model doubles memory; own profile.
-  - path: applications/DeepSpeed-Chat/training/step2_dpo_finetuning/main.py
+  - path: applications/DeepSpeed-Chat/training/step2_dpo_finetuning
+    exec: applications/DeepSpeed-Chat/training/step2_dpo_finetuning/main.py
     profile: ds_chat_dpo
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - '--model_name_or_path facebook/opt-125m'
+      - '--model_name_or_path ${OPT_125M_PATH}'
       - '--data_path local/jsonfile'
       - '--num_train_epochs 1'
       - '--per_device_train_batch_size 2'
@@ -96,22 +103,25 @@ supported:
       - '--zero_stage 2'
       - '--dtype bf16'
       - '--beta 0.1'
+      - '--deepspeed'
       - '--output_dir ${CI_OUTPUT_DIR}'
     timeout_minutes: 150
   # DS-Chat step3 RLHF: official --enable_test_mode + --test_stop_step 5 CI mode; actor/critic both opt-125m.
-  - path: applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/main.py
+  - path: applications/DeepSpeed-Chat/training/step3_rlhf_finetuning
+    exec: applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/main.py
     profile: ds_chat_rlhf
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - '--actor_model_name_or_path facebook/opt-125m'
-      - '--critic_model_name_or_path facebook/opt-125m'
+      - '--actor_model_name_or_path ${OPT_125M_PATH}'
+      - '--critic_model_name_or_path ${OPT_125M_PATH}'
       - '--data_path local/jsonfile'
       - '--enable_test_mode'
       - '--test_stop_step 5'
       - '--actor_zero_stage 2'
       - '--critic_zero_stage 2'
       - '--dtype bf16'
+      - '--deepspeed'
     timeout_minutes: 180
   # HF text-generation inference: --hf_baseline skips the DS-inference kernel, pure HF pipeline for the basic inference path.
   - path: inference/huggingface/text-generation/inference-test.py
@@ -119,28 +129,20 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - '--model facebook/opt-125m'
+      - '--model ${OPT_125M_PATH}'
       - '--hf_baseline'
       - '--dtype float32'
       - '--max_new_tokens 8'
     timeout_minutes: 60
-  # bf16 master-weight comparison: built-in SimpleTransformer + synthetic data, no external model/data.
-  - path: training/bf16_master_weight/train.py
-    profile: deepspeed
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - '--num_layers 2'
-      - '--hidden_dim 256'
-      - '--num_steps 5'
-      - '--warmup_steps 1'
-      - '--batch_size 2'
-      - '--seq_length 128'
-      - '--deepspeed_config configs/baseline.json'
-    timeout_minutes: 60
-  # CIFAR10 image classification (ZeRO stage 0 + BF16): torchvision auto-downloads CIFAR-10 (~170MB, cluster-reachable).
-  - path: training/cifar/cifar10_deepspeed.py
-    profile: deepspeed
+  # CIFAR10 image classification (ZeRO stage 0 + BF16): setup pre-stages a
+  # verified ModelScope mirror because torchvision's Toronto source is unreachable.
+  # Launched via run_ds.sh because main()
+  # reads LOCAL_RANK injected by the deepspeed launcher (bare python would crash);
+  # the wrapper passes overlay args through with $@. path is the directory so the
+  # job name is "cifar" instead of colliding with HelloDeepSpeed's run_ds.sh.
+  - path: training/cifar
+    exec: training/cifar/run_ds.sh
+    profile: ds_cifar
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
@@ -148,16 +150,6 @@ supported:
       - '--log-interval 50'
       - '--dtype bf16'
       - '--stage 0'
-    timeout_minutes: 90
-  # Pipeline parallelism (single card, pipeline=1): CIFAR10, AlexNet.
-  - path: training/pipeline_parallelism/train.py
-    profile: deepspeed
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - '--steps 10'
-      - '-p 1'
-      - '--deepspeed_config ds_config.json'
     timeout_minutes: 90
   # ZeRO offload_states: random synthetic data, no external dependency.
   - path: training/offload_states/offload_states.py
@@ -168,412 +160,260 @@ supported:
       - '--hidden_dim 1024'
       - '--nlayers 2'
     timeout_minutes: 60
-unsupported:
+  # Two-card expert-parallel CIFAR10. The upstream run_ds_moe.sh fixes the
+  # launcher recipe but has no $@ passthrough, so run_example.sh reproduces it
+  # and appends these CI-size overrides without editing the example checkout.
+  # DeepSpeed 0.19.7 wraps MoE helpers with optional torch.compile, while the
+  # current NPU image has no validated Triton-Ascend backend. The project runner
+  # disables that optional compiler only for this command and retains eager
+  # two-rank HCCL execution with EP=2.
+  - path: training/cifar/run_ds_moe.sh
+    profile: ds_cifar
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--epochs 1'
+      - '--log-interval 50'
+      - '--dtype bf16'
+      - '--stage 0'
+    timeout_minutes: 120
+  # Four-card AutoTP equivalence: reproduce upstream run_gpu.sh at TP=1/3/4,
+  # but pass the ModelScope Qwen3 path explicitly and keep only five steps.
+  - path: training/autotp_equivalence
+    exec: training/autotp_equivalence/train.py
+    profile: ds_autotp_equivalence
+    runner: linux-aarch64-a2-4
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model_name_or_path ${QWEN3_06B_PATH}'
+      - '--steps 5'
+      - '--seq_len 32'
+      - '--micro_batch_size 1'
+      - '--log_every 1'
+    timeout_minutes: 180
 
-  # non-DeepSpeed baseline / reference script; guarding goes through run_ds.sh.
-  - training/HelloDeepSpeed/run.sh
-  - training/HelloDeepSpeed/train_bert.py
-  - training/cifar/cifar10_tutorial.py
-  # invoked internally by a supported entry script (sub-script/config); not scheduled standalone.
-  - training/HelloDeepSpeed/train_bert_ds.py
-  - training/bf16_master_weight/gather_memory.py
-  - training/bf16_master_weight/plot_loss.py
-  - training/bf16_master_weight/run_comparison.sh
-  - training/cifar/run_ds.sh
-  - training/offload_states/run_benchmark.sh
-  - training/pipeline_parallelism/run.sh
-  # autotuning scan (multi-config tuning), not single-card deterministic CI.
-  - training/autotuning/hf/bert-base/test_tune.sh
-  - training/autotuning/hf/bert-large/test_tune.sh
-  - training/autotuning/hf/deberta/test_tune.sh
-  - training/autotuning/hf/distilbert/test_tune.sh
-  - training/autotuning/hf/gpt2-large/test_tune.sh
-  - training/autotuning/hf/gpt2-medium/test_tune.sh
-  - training/autotuning/hf/gpt2-xl/test_tune.sh
-  - training/autotuning/hf/gpt2/test_tune.sh
-  # multi-node/multi-GPU (mpi/ethernet/infiniband) or NCCL-bound BERT training, not single-card.
-  - training/BingBertGlue/nvidia_bert_dataset_provider.py
-  - training/BingBertGlue/run_glue_bert_base_finetune.sh
-  - training/BingBertGlue/run_glue_bert_large_finetune.sh
-  - training/BingBertGlue/run_glue_classifier_bert_base.py
-  - training/BingBertGlue/run_glue_classifier_bert_large.py
-  - training/BingBertSquad/1-bit_adam/mpi_ethernet/run_squad_deepspeed_onebitadam.sh
-  - training/BingBertSquad/1-bit_adam/mpi_ethernet/run_squad_mpi_onebitadam.sh
-  - training/BingBertSquad/1-bit_adam/mpi_infiniband/run_squad_deepspeed_onebitadam.sh
-  - training/BingBertSquad/1-bit_adam/mpi_infiniband/run_squad_mpi_onebitadam.sh
-  - training/BingBertSquad/1-bit_adam/nccl/run_squad_deepspeed_onebitadam.sh
-  - training/BingBertSquad/convert_bert_ckpt_to_deepspeed.py
-  - training/BingBertSquad/evaluate-v1.1.py
-  - training/BingBertSquad/evaluate.py
-  - training/BingBertSquad/nvidia_run_squad_baseline.py
-  - training/BingBertSquad/nvidia_run_squad_deepspeed.py
-  - training/BingBertSquad/run_hf.sh
-  - training/BingBertSquad/run_squad_baseline.sh
-  - training/BingBertSquad/run_squad_deepspeed.sh
-  - training/BingBertSquad/utils.py
-  - training/bing_bert/01_adam/mpi_ethernet/ds_train_bert_01adam_bsz4k_seq128_mpi_ethernet.sh
-  - training/bing_bert/01_adam/mpi_ethernet/ds_train_bert_01adam_bsz4k_seq512_mpi_ethernet.sh
-  - training/bing_bert/01_adam/mpi_infiniband/ds_train_bert_01adam_bsz4k_seq128_mpi_infiniband.sh
-  - training/bing_bert/01_adam/mpi_infiniband/ds_train_bert_01adam_bsz4k_seq512_mpi_infiniband.sh
-  - training/bing_bert/01_adam/nccl/ds_train_bert_01adam_bsz4k_seq128_nccl.sh
-  - training/bing_bert/01_adam/nccl/ds_train_bert_01adam_bsz4k_seq512_nccl.sh
-  - training/bing_bert/1-bit_adam/mpi_ethernet/ds_train_bert_onebitadam_bsz4k_seq128_mpi_ethernet.sh
-  - training/bing_bert/1-bit_adam/mpi_ethernet/mpi_train_bert_onebitadam_bsz4k_seq128_ethernet.sh
-  - training/bing_bert/1-bit_adam/mpi_infiniband/ds_train_bert_onebitadam_bsz4k_seq128_mpi_infiniband.sh
-  - training/bing_bert/1-bit_adam/mpi_infiniband/mpi_train_bert_onebitadam_bsz4k_seq128_infiniband.sh
-  - training/bing_bert/1-bit_adam/nccl/ds_train_bert_onebitadam_bsz4k_seq128_nccl.sh
-  - training/bing_bert/1-bit_lamb/mpi_ethernet/ds_train_bert_onebitlamb_bsz32k_seq512_mpi_ethernet.sh
-  - training/bing_bert/1-bit_lamb/mpi_ethernet/ds_train_bert_onebitlamb_bsz64k_seq128_mpi_ethernet.sh
-  - training/bing_bert/1-bit_lamb/mpi_ethernet/mpi_train_bert_onebitlamb_bsz32k_seq512_ethernet.sh
-  - training/bing_bert/1-bit_lamb/mpi_ethernet/mpi_train_bert_onebitlamb_bsz64k_seq128_ethernet.sh
-  - training/bing_bert/1-bit_lamb/mpi_infiniband/ds_train_bert_onebitlamb_bsz32k_seq512_mpi_infiniband.sh
-  - training/bing_bert/1-bit_lamb/mpi_infiniband/ds_train_bert_onebitlamb_bsz64k_seq128_mpi_infiniband.sh
-  - training/bing_bert/1-bit_lamb/mpi_infiniband/mpi_train_bert_onebitlamb_bsz32k_seq512_infiniband.sh
-  - training/bing_bert/1-bit_lamb/mpi_infiniband/mpi_train_bert_onebitlamb_bsz64k_seq128_infiniband.sh
-  - training/bing_bert/1-bit_lamb/nccl/ds_train_bert_onebitlamb_bsz32k_seq512_nccl.sh
-  - training/bing_bert/1-bit_lamb/nccl/ds_train_bert_onebitlamb_bsz64k_seq128_nccl.sh
-  - training/bing_bert/bert_dataset_provider.py
-  - training/bing_bert/bing_bert_dataset_provider.py
-  - training/bing_bert/data_worker.py
-  - training/bing_bert/deepspeed_train.py
-  - training/bing_bert/ds_sa_train_bert_bsz64k_seq128.sh
-  - training/bing_bert/ds_train_bert_bsz32k_seq512.sh
-  - training/bing_bert/ds_train_bert_bsz64k_seq128.sh
-  - training/bing_bert/ds_train_bert_nvidia_data_bsz32k_seq512.sh
-  - training/bing_bert/ds_train_bert_nvidia_data_bsz64k_seq128.sh
-  - training/bing_bert/ds_train_bert_progressive_layer_drop_bsz4k_seq128.sh
-  - training/bing_bert/nvidia_bert_dataset_provider.py
-  - training/bing_bert/run_glue_bert_base_finetune.sh
-  - training/bing_bert/run_glue_bert_large_finetune.sh
-  - training/bing_bert/run_glue_classifier_bert_base.py
-  - training/bing_bert/run_glue_classifier_bert_large.py
-  - training/bing_bert/timer.py
-  - training/bing_bert/utils.py
-  # requires full ImageNet, not usable in CI.
-  - training/imagenet/extract_ILSVRC.sh
-  - training/imagenet/main.py
-  - training/imagenet/run_ds.sh
-  - training/imagenet/run_ds_fp16.sh
-  - training/imagenet/run_ds_fp16_z1.sh
-  # Stable Diffusion; model 4GB+, training not feasible.
-  - training/stable_diffusion/inf_txt2img_loop.py
-  - training/stable_diffusion/local_pipeline_stable_diffusion.py
-  - training/stable_diffusion/mytrainbash.sh
-  - training/stable_diffusion/train_sd_distil_lora.py
-  # GAN training; gan_deepspeed_run.sh hardcodes --cuda and celeba needs external download, under evaluation.
-  - training/gan/gan_baseline_run.sh
-  - training/gan/gan_baseline_train.py
-  - training/gan/gan_deepspeed_run.sh
-  - training/gan/gan_deepspeed_train.py
-  - training/gan/gan_model.py
-  - training/gan/utils.py
-  # depends on remote HF datasets (alpaca/mmlu/imagenet...); promotable to supported after swapping to local fixtures (next round).
-  - training/data_efficiency/gpt_finetuning/analyze_data.py
-  - training/data_efficiency/gpt_finetuning/bash_script/run_base_random_ltd.sh
-  - training/data_efficiency/gpt_finetuning/bash_script/run_medium_random_ltd.sh
-  - training/data_efficiency/gpt_finetuning/finetune/ds_analyze_gpt_data_map.sh
-  - training/data_efficiency/gpt_finetuning/finetune/ds_analyze_gpt_data_reduce.sh
-  - training/data_efficiency/gpt_finetuning/finetune/ds_finetune_gpt2.sh
-  - training/data_efficiency/gpt_finetuning/finetune/ds_finetune_gpt2_run.sh
-  - training/data_efficiency/gpt_finetuning/learning_rates.py
-  - training/data_efficiency/gpt_finetuning/run_clm_no_trainer.py
-  - training/data_efficiency/variable_batch_size_and_lr/variable_batch_size_and_lr_example.py
-  - training/data_efficiency/vit_finetuning/bash_script/run_cifar_random_ltd.sh
-  - training/data_efficiency/vit_finetuning/bash_script/run_imagenet_random_ltd.sh
-  - training/data_efficiency/vit_finetuning/main_cifar.py
-  - training/data_efficiency/vit_finetuning/main_imagenet.py
-  - training/deepspeed_finetune_demo/benchmark.sh
-  - training/deepspeed_finetune_demo/convert_ds_to_hf.py
-  - training/deepspeed_finetune_demo/evaluate/gsm8k/eval_gsm8k.py
-  - training/deepspeed_finetune_demo/evaluate/gsm8k/gen_gsm8k.py
-  - training/deepspeed_finetune_demo/evaluate/mmlu/eval_mmlu.py
-  - training/deepspeed_finetune_demo/evaluate/mmlu/gen_mmlu.py
-  - training/deepspeed_finetune_demo/finetune.sh
-  - training/deepspeed_finetune_demo/finetune_llama.py
-  - training/deepspeed_finetune_demo/profile.sh
-  - training/deepspeed_finetune_demo/run_and_evaluate.sh
-  # tensor/pipeline/expert parallel or multi-node (>=2 cards); not on single-card a2-1.
-  - training/autotp_equivalence/compare_loss.py
-  - training/autotp_equivalence/run_cpu.sh
-  - training/autotp_equivalence/run_gpu.sh
-  - training/autotp_equivalence/tests/test_compare_loss.py
-  - training/autotp_equivalence/train.py
-  - training/cifar/run_ds_moe.sh
-  - training/cifar/run_ds_prmoe.sh
-  - training/expert_parallel/data_utils.py
-  - training/expert_parallel/init_weights.py
-  - training/expert_parallel/metrics.py
-  - training/expert_parallel/train.py
-  - training/expert_parallel/utils/compare_metrics.py
-  - training/expert_parallel/utils/prepare_init_weights.py
-  - training/opsd/benchmarks/bench_decode_1p1r.py
-  - training/opsd/config.py
-  - training/opsd/data.py
-  - training/opsd/losses.py
-  - training/opsd/main.py
-  - training/opsd/scripts/smoke_autotp.sh
-  - training/opsd/scripts/train_opsd_hybrid.sh
-  - training/opsd/teacher.py
-  - training/opsd/test_student_autotp_zero3.py
-  - training/opsd/test_teacher_autotp_zero3.py
-  - training/opsd/tests/test_data.py
-  - training/opsd/tests/test_losses.py
-  - training/opsd/tests/test_teacher_caching.py
-  - training/opsd/trainer.py
-  - training/opsd/utils.py
-  - training/tensor_parallel/basic_example/autotp_example.py
-  - training/tensor_parallel/basic_example/autotp_memory_compare.py
-  - training/tensor_parallel/custom_patterns/autotp_custom_patterns.py
-  - training/tensor_parallel/hf_integration/run.sh
-  - training/tensor_parallel/hf_integration/train.py
-  - training/tensor_parallel/hf_integration/train_bench_length.py
-  - training/tensor_parallel/hf_integration/utils.py
-  # large-model finetune (GPT-3 6.7B/13B, Llama-70B, Qwen3-30B...), beyond single-card CI.
-  - training/DeepSpeed-Domino/domino/gpt_model.py
-  - training/DeepSpeed-Domino/domino/language_model.py
-  - training/DeepSpeed-Domino/domino/training.py
-  - training/DeepSpeed-Domino/pretrain_gpt.py
-  - training/DeepSpeed-Domino/pretrain_gpt3_13b.sh
-  - training/DeepSpeed-Domino/pretrain_gpt3_6.7b.sh
-  - training/DeepSpeed-SuperOffload/finetune_gpt-oss-20b_1gpu.sh
-  - training/DeepSpeed-SuperOffload/finetune_llama-70b_4gpu.sh
-  - training/DeepSpeed-SuperOffload/finetune_llama-8b_1gpu.sh
-  - training/DeepSpeed-SuperOffload/finetune_phi-4_1gpu.sh
-  - training/DeepSpeed-SuperOffload/finetune_qwen3-14b_1gpu.sh
-  - training/DeepSpeed-SuperOffload/finetune_qwen3-30b-a3b_2gpu.sh
-  - training/DeepSpeed-SuperOffload/finetune_seed-oss-36b_2gpu.sh
-  - training/DeepSpeed-SuperOffload/finetune_zero3.py
-  - training/DeepSpeed-ZenFlow/benchmark/output_table.py
-  - training/DeepSpeed-ZenFlow/benchmark/run_benchmark.sh
-  - training/DeepSpeed-ZenFlow/benchmark/zf_benchmark.py
-  - training/DeepSpeed-ZenFlow/finetuning/finetune_llama.py
-  - training/DeepSpeed-ZenFlow/finetuning/finetune_llama.sh
-  # MoQ quantization, depends on CUDA quant operators.
-  - training/MoQ/run.sh
-  - training/MoQ/run_glue.py
-  # compression flow with hardcoded torch.device(cuda); needs patch before enabling (next-round candidate).
-  - compression/bert/bash_script/XTC/layer_reduction.sh
-  - compression/bert/bash_script/XTC/layer_reduction_1bit.sh
-  - compression/bert/bash_script/XTC/quant_1bit.sh
-  - compression/bert/bash_script/ZeroQuant/zero_quant.sh
-  - compression/bert/bash_script/ZeroQuant/zero_quant_lkd.sh
-  - compression/bert/bash_script/layer_reduction.sh
-  - compression/bert/bash_script/pruning_head.sh
-  - compression/bert/bash_script/pruning_row.sh
-  - compression/bert/bash_script/pruning_sparse.sh
-  - compression/bert/bash_script/pruning_sparse_snip_momentum.sh
-  - compression/bert/bash_script/quant_activation.sh
-  - compression/bert/bash_script/quant_weight.sh
-  - compression/bert/run_glue_lkd.py
-  - compression/bert/run_glue_no_trainer.py
-  - compression/bert/util.py
-  - compression/cifar/resnet.py
-  - compression/cifar/run_compress.sh
-  - compression/cifar/train.py
-  - compression/cifar/utils.py
-  - compression/gpt2/bash_script/run_zero_quant.sh
-  - compression/gpt2/run_clm_no_trainer.py
-  - compression/reasoning_aware_compression/bash_script/collect_traces_zero_inference.sh
-  - compression/reasoning_aware_compression/bash_script/eval_math500.sh
-  - compression/reasoning_aware_compression/bash_script/run_calibration_ablation.sh
-  - compression/reasoning_aware_compression/bash_script/run_rac_qwen1_5b.sh
-  - compression/reasoning_aware_compression/collect_traces.py
-  - compression/reasoning_aware_compression/prune.py
-  # perf/comm benchmark, no training entry; mostly multi-GPU or CUDA kernel bound.
-  - benchmarks/autosp/correctness/correctness.sh
-  - benchmarks/autosp/correctness/correctness_run.py
-  - benchmarks/autosp/correctness/validator.py
-  - benchmarks/autosp/distributed_attention.py
-  - benchmarks/autosp/ring_attention.py
-  - benchmarks/autosp/run.py
-  - benchmarks/autosp/run_autosp.sh
-  - benchmarks/autosp/sp_dp_registry.py
-  - benchmarks/communication/__init__.py
-  - benchmarks/communication/all_gather.py
-  - benchmarks/communication/all_reduce.py
-  - benchmarks/communication/all_to_all.py
-  - benchmarks/communication/broadcast.py
-  - benchmarks/communication/constants.py
-  - benchmarks/communication/pt2pt.py
-  - benchmarks/communication/run_all.py
-  - benchmarks/communication/utils.py
-  - benchmarks/deepcompile/gen_chart_acc_steps.py
-  - benchmarks/deepcompile/generate_conf.py
-  - benchmarks/deepcompile/plot.py
-  - benchmarks/deepcompile/plot_common.py
-  - benchmarks/deepcompile/run.sh
-  - benchmarks/deepcompile/run_bench.sh
-  - benchmarks/deepcompile/run_bench_acc.sh
-  - benchmarks/deepcompile/run_bench_lm.py
-  - benchmarks/deepcompile/run_bench_offload.sh
-  - benchmarks/deepcompile/run_bench_z1.sh
-  - benchmarks/deepcompile/run_multinode.sh
-  - benchmarks/inference/bert-bench.py
-  - benchmarks/inference/collect_results.py
-  - benchmarks/inference/deepspeedometer/run_example.sh
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/__init__.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/arg_parsing.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/benchmark_runner.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/__init__.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/azure_ml_client.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/base.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/dummy_client.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/fastgen_client.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/openai_client.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/vllm_client.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/config.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/prompt.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/response.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/sample_input.py
-  - benchmarks/inference/deepspeedometer/tests/__init__.py
-  - benchmarks/inference/deepspeedometer/tests/conftest.py
-  - benchmarks/inference/deepspeedometer/tests/test_benchmark.py
-  - benchmarks/inference/deepspeedometer/tests/test_config.py
-  - benchmarks/inference/deepspeedometer/tests/test_early_stop.py
-  - benchmarks/inference/deepspeedometer/tests/test_prompt.py
-  - benchmarks/inference/gpt-bench.py
-  - benchmarks/inference/mii/run_all.sh
-  - benchmarks/inference/mii/run_aml.sh
-  - benchmarks/inference/mii/run_benchmark.py
-  - benchmarks/inference/mii/run_example.sh
-  - benchmarks/inference/mii/run_fp6.sh
-  - benchmarks/inference/mii/src/__init__.py
-  - benchmarks/inference/mii/src/client.py
-  - benchmarks/inference/mii/src/defaults.py
-  - benchmarks/inference/mii/src/plot_effective_throughput.py
-  - benchmarks/inference/mii/src/plot_latency_percentile.py
-  - benchmarks/inference/mii/src/plot_repl_scale.py
-  - benchmarks/inference/mii/src/plot_th_lat.py
-  - benchmarks/inference/mii/src/plot_tp_sizes.py
-  - benchmarks/inference/mii/src/postprocess_results.py
-  - benchmarks/inference/mii/src/random_query_generator.py
-  - benchmarks/inference/mii/src/sample_input.py
-  - benchmarks/inference/mii/src/server.py
-  - benchmarks/inference/mii/src/utils.py
-  - benchmarks/inference/run_model.sh
-  - benchmarks/inference/run_triton_benchmark.sh
-  - benchmarks/inference/sweep.sh
-  - benchmarks/inference/triton-bert-benchmark.py
-  - benchmarks/opsd/benchmark_hybrid_engine_rollout.py
-  # needs NVMe hardware + libaio/GDS, not available in CI.
-  - deepnvme/ds_io/ds_io_read_sweep.sh
-  - deepnvme/ds_io/ds_io_sweep.sh
-  - deepnvme/ds_io/ds_io_write_sweep.sh
-  - deepnvme/file_access/aio_load_cpu_tensor.py
-  - deepnvme/file_access/aio_load_gpu_tensor.py
-  - deepnvme/file_access/aio_store_cpu_tensor.py
-  - deepnvme/file_access/aio_store_gpu_tensor.py
-  - deepnvme/file_access/gds_load_gpu_tensor.py
-  - deepnvme/file_access/gds_store_gpu_tensor.py
-  - deepnvme/file_access/py_load_cpu_tensor.py
-  - deepnvme/file_access/py_load_gpu_tensor.py
-  - deepnvme/file_access/py_store_cpu_tensor.py
-  - deepnvme/file_access/py_store_gpu_tensor.py
-  - deepnvme/file_access/run_load_tensor.sh
-  - deepnvme/file_access/run_store_tensor.sh
-  - deepnvme/file_access/utils.py
-  - deepnvme/model_checkpoint/deepspeed_save_model.py
-  - deepnvme/model_checkpoint/save_model_utils.py
-  - deepnvme/model_checkpoint/torch/serialization_fast_v2.6.0.py
-  - deepnvme/model_checkpoint/torch/serialization_orig_v2.6.0.py
-  - deepnvme/model_checkpoint/torch_save_load_model.py
-  - deepnvme/model_checkpoint/torch_save_model.py
-  - deepnvme/model_checkpoint/torch_save_tensor.py
-  - deepnvme/model_checkpoint/torch_save_utils.py
-  # HumanEval eval; needs openai/human-eval pkg + DeepSpeed-MII + 7B CodeLlama, not a light training entry.
-  - evaluation/inference/human_eval/run_human_eval.py
-  # no CLI to shrink / hardcoded CUDA / needs MII, SGLang or gated models; not on single-card NPU.
-  - inference/huggingface/automatic-speech-recognition/test-wav2vec2.py
-  - inference/huggingface/fill-mask/test-bert.py
-  - inference/huggingface/fill-mask/test-electra.py
-  - inference/huggingface/fill-mask/test-roberta.py
-  - inference/huggingface/stable-diffusion/local_pipeline_stable_diffusion.py
-  - inference/huggingface/stable-diffusion/test-stable-diffusion.py
-  - inference/huggingface/text-generation/arguments.py
-  - inference/huggingface/text-generation/ds-hf-compare.py
-  - inference/huggingface/text-generation/run-generation-script/test-gpt.sh
-  - inference/huggingface/text-generation/run-generation-script/test-run-generation.py
-  - inference/huggingface/text-generation/utils.py
-  - inference/huggingface/text2text-generation/test-t5.py
-  - inference/huggingface/translation/test-t5-base.py
-  - inference/huggingface/zero_inference/run_bloom175b_a6000.sh
-  - inference/huggingface/zero_inference/run_llama2_70b_a6000.sh
-  - inference/huggingface/zero_inference/run_model.py
-  - inference/huggingface/zero_inference/run_model.sh
-  - inference/huggingface/zero_inference/run_opt175b_a6000.sh
-  - inference/huggingface/zero_inference/run_opt1p3b_a6000.sh
-  - inference/huggingface/zero_inference/run_opt30b_a6000.sh
-  - inference/huggingface/zero_inference/run_opt66b_a6000.sh
-  - inference/huggingface/zero_inference/timer.py
-  - inference/huggingface/zero_inference/utils.py
-  - inference/mii/non-persistent/falcon.py
-  - inference/mii/non-persistent/llama2.py
-  - inference/mii/non-persistent/mixtral.py
-  - inference/mii/non-persistent/pipeline.py
-  - inference/mii/persistent/client.py
-  - inference/mii/persistent/serve.py
-  - inference/mii/persistent/terminate.py
-  - inference/sglang/run_llama3_1B.sh
-  - inference/sglang/run_llama3_70B.sh
-  - inference/sglang/run_llama3_8B.sh
-  # DeepSpeed-VisualChat: hardcoded cuda + needs CLIP + Llama-2-7B(gated) + tens of GB image data.
-  - applications/DeepSpeed-VisualChat/chat/chat.py
-  - applications/DeepSpeed-VisualChat/chat/chat_scripts/run.sh
-  - applications/DeepSpeed-VisualChat/eval/batch_generation.py
-  - applications/DeepSpeed-VisualChat/eval/eval_scripts/run_batch.sh
-  - applications/DeepSpeed-VisualChat/helper/extract_qwen_vl.py
-  - applications/DeepSpeed-VisualChat/training/main.py
-  - applications/DeepSpeed-VisualChat/training/training_scripts/run_7b.sh
-  # DeepSpeed-Chat library/eval/launcher wrappers, not direct guard entries (guard via each step main.py).
-  - applications/DeepSpeed-Chat/chat.py
-  - applications/DeepSpeed-Chat/e2e_rlhf.py
-  - applications/DeepSpeed-Chat/inference/chatbot.py
-  - applications/DeepSpeed-Chat/setup.py
-  - applications/DeepSpeed-Chat/tests/test_training.py
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/evaluation_scripts/run_prompt.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/prompt_eval.py
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/llama2/run_llama2_7b.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/llama2/run_llama2_7b_lora.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/multi_node/run_66b.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/single_gpu/run_1.3b.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/single_gpu/run_6.7b_lora.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/single_node/run_1.3b.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/single_node/run_1.3b_lora.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/single_node/run_13b.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/single_node/run_30b_lora.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/single_node/run_6.7b.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/single_node/sweep/run_single.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/single_node/sweep/run_step1_sweep.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/other_language/run_chinese.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/other_language/run_japanese.sh
-  - applications/DeepSpeed-Chat/training/step2_dpo_finetuning/training_scripts/llama2/run_llama2_7b.sh
-  - applications/DeepSpeed-Chat/training/step2_dpo_finetuning/training_scripts/llama2/run_llama2_7b_lora.sh
-  - applications/DeepSpeed-Chat/training/step2_dpo_finetuning/training_scripts/opt/multi_node/run_350m.sh
-  - applications/DeepSpeed-Chat/training/step2_dpo_finetuning/training_scripts/opt/single_gpu/run_350m.sh
-  - applications/DeepSpeed-Chat/training/step2_dpo_finetuning/training_scripts/opt/single_node/run_350m.sh
-  - applications/DeepSpeed-Chat/training/step2_dpo_finetuning/training_scripts/opt/single_node/sweep/run_single.sh
-  - applications/DeepSpeed-Chat/training/step2_dpo_finetuning/training_scripts/opt/single_node/sweep/run_step2_sweep.sh
-  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/evaluation_scripts/run_eval.sh
-  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/rw_eval.py
-  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/training_scripts/llama2/run_llama2_7b.sh
-  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/training_scripts/llama2/run_llama2_7b_lora.sh
-  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/training_scripts/opt/multi_node/run_350m.sh
-  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/training_scripts/opt/single_gpu/run_350m.sh
-  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/training_scripts/opt/single_node/run_350m.sh
-  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/training_scripts/opt/single_node/sweep/run_single.sh
-  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/training_scripts/opt/single_node/sweep/run_step2_sweep.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/llama2/run_llama2_7b.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/llama2/run_llama2_7b_lora.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/llama2/run_llama2_7b_mixz.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/multi_node/run_66b.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/single_gpu/run_1.3b.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/single_gpu/run_6.7b_lora.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/single_node/run_1.3b.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/single_node/run_1.3b_lora.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/single_node/run_13b.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/single_node/run_30b_lora.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/single_node/run_6.7b.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/single_node/sweep/run_single.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/single_node/sweep/run_step3_sweep.sh
-  # repo maintenance tool (license check), not a training example.
-  - scripts/check-license.py
+unsupported:
+  - training/bf16_master_weight/train.py  # CUDA 硬绑定（需 patch，次轮候选）：torch.cuda.set_device（第203行）、torch.autocast(device_type='cuda')（第301行）、torch.cuda.manual_seed_all/reset_peak_memory_stats/memory_allocated 全套 CUDA API；内置 SimpleTransformer + 合成数据本无外部依赖，但 device 全部走 cuda 命名空间，NPU 上 torch.cuda.set_device 抛 AttributeError；同 example 的 1 个 .sh 启动器 run_comparison.sh 已并入本条
+  - training/pipeline_parallelism/train.py  # NCCL+CUDA 硬绑定（需 patch，次轮候选）：--backend 默认 nccl（第58-61行，NPU 用 HCCL 不支持 nccl）、torch.cuda.set_device(args.local_rank)（第154行）；CIFAR10+AlexNet 本身单卡可跑，但分布式初始化与 device 设置绑死 CUDA；同 example 的 1 个 .sh 启动器 run.sh 已并入本条
+  - applications/DeepSpeed-Chat/chat.py  # 薄启动器：subprocess.Popen 调同 example 的 inference/chatbot.py 启动多轮交互对话 demo（chat.py 第19-21行），需 --path 指向已训练 actor 模型目录，非独立推理实现
+  - applications/DeepSpeed-Chat/e2e_rlhf.py  # 可跑编排入口：按 --step 1/2/3 依次用 bash 执行 training_scripts/opt/${deployment_type}/run_*.sh（get_script/get_cmd，deployment_type 含 multi_node=多机），默认 facebook/opt-1.3b actor、可选 6.7b/13b/66b（parse_args choices），实际训练需多 GPU/NCCL 与 DeepSpeed
+  - applications/DeepSpeed-Chat/inference/chatbot.py  # 交互 demo（while True 读命令行多轮对话），transformers pipeline 硬编码 device="cuda:0"（第57行），需已训练模型的 --path 及 config.json
+  - applications/DeepSpeed-Chat/setup.py  # setuptools 安装脚本（find_packages(['dschat'])），仅打包 dschat 库及依赖，非可运行入口
+  - applications/DeepSpeed-Chat/tests/test_training.py  # pytest 配套测试：subprocess 调 step3 的 training_scripts/opt/single_node/sweep/run_single.sh 跑 16 种 zero/hybrid/offload/lora 组合的 RLHF 训练，硬编码 actor facebook/opt-125m、要求环境变量 CRITIC_CKPT_DIR，需 GPU
+  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/prompt_eval.py  # 评测脚本：load baseline 与 finetune 两个 HF 模型（create_hf_model）并 device=torch.device(get_accelerator().device_name(0))（第198行）需 GPU，run_prompt.sh 中模型路径为 XXX 占位、需先完成 step1 训练；同 example 的 1 个 .sh 启动器已并入本条
+  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/rw_eval.py  # 评测脚本：create_critic_model 加载已训练 reward/critic 模型并 .to(device)（device 来自 get_accelerator，第108/116行）计算得分指标，run_eval.sh 的 --model_name_or_path 无默认值、需先完成 step2 训练；同 example 的 1 个 .sh 启动器已并入本条
+  - applications/DeepSpeed-VisualChat/chat/chat.py  # 交互视觉聊天 demo（读终端输入+图片路径循环生成），多处硬编码 .cuda()（第92/93/115/154行），需 --checkpoint_path 指向已训练 DSVL 检查点，配套 run.sh 用作者内网路径 /blob/transformers_cache 硬编码 Llama-2-13b-hf（gated）与 qwen-clip；同 example 的 1 个 .sh 启动器已并入本条
+  - applications/DeepSpeed-VisualChat/eval/batch_generation.py  # 评测入口：硬编码 .cuda()（第156/157/177/198行）+ torch.cuda.manual_seed_all，循环加载 final/best_eval 两个检查点跑 eval_single/comprehensive/robustness，配套 run_batch.sh 硬编码 /blob/transformers_cache Llama-2-13b-hf（gated）与 qwen-clip；同 example 的 1 个 .sh 启动器已并入本条
+  - applications/DeepSpeed-VisualChat/helper/extract_qwen_vl.py  # 一次性权重提取工具：from_pretrained("Qwen/Qwen-VL-Chat", device_map="cuda"...)（硬编码 CUDA），需联网下载 Qwen-VL-Chat 模型并 trust_remote_code，产物供 chat/eval 的 qwen-clip 视觉编码器使用
+  - applications/DeepSpeed-VisualChat/training/main.py  # 训练入口：第235行 device=torch.device("cuda")、第237行 torch.cuda.set_device(args.local_rank) 硬编码 CUDA，配套 run_7b.sh 指定 meta-llama/Llama-2-7b（gated）+ openai/clip-vit-large-patch14 + ZeRO-3 多卡，数据为 LLaVA/Otter-MIMICIT/Sparkles 等多模态图文数据集（需自备 ./data 与 COCO 等原始数据）；同 example 的 1 个 .sh 启动器已并入本条
+  - benchmarks/autosp/correctness/correctness.sh  # 多卡正确性编排脚本：默认 SP (2,1)/(4,1)/(8,1) × ZeRO-0/1 共 6 组合串行跑，经 correctness_run.py 用 accelerate 多进程启动训练（num_processes=sp×dp，最高 8 卡）+ 再调 validator.py 对比，因编排两个 .py 而非单一启动器故保留为独立条目。
+  - benchmarks/autosp/correctness/correctness_run.py  # 配套训跑脚本（独立 __main__，由 correctness.sh 调用）：内部以 accelerate launch --num_processes sp×dp（默认最高 8 进程）启动 ../run.py，硬编码 meta-llama/Llama-2-7b-chat-hf（gated）与 NCCL_DEBUG=WARN，多卡训练收集 per-rank loss 写 JSON。
+  - benchmarks/autosp/correctness/validator.py  # 配套正确性校验脚本（独立 __main__，由 correctness.sh 调用）：只读取两组 loss JSON 做逐 rank/step 阈值对比（default 1e-2），无模型/GPU 资源需求。
+  - benchmarks/autosp/distributed_attention.py  # 被 benchmarks/autosp/run.py import 的 Ulysses 序列并行注意力库（依赖 deepspeed.sequence.layer.DistributedAttention），无 __main__，非可运行入口。
+  - benchmarks/autosp/ring_attention.py  # 被 benchmarks/autosp/run.py import 的 ring-flash-attention 实现库（代码复制自 zhuzilin/ring-flash-attention），import flash_attn.flash_attn_interface 外部依赖，无 __main__，非可运行入口。
+  - benchmarks/autosp/run.py  # 多卡序列并行训练脚本（SP_SIZE=2×DP_SIZE≥2 个 accelerate 进程，sp/dp 可扩展）：torch.cuda.manual_seed/torch.cuda.memory_allocated 硬编码 CUDA；默认模型 meta-llama/Llama-2-7b-hf（gated）；ringattn 模式经 ring_attention.py 依赖外部 flash_attn 包；同 example 的 1 个 .sh 启动器已并入本条。
+  - benchmarks/autosp/sp_dp_registry.py  # 被 benchmarks/autosp/run.py、distributed_attention.py、ring_attention.py import 的 SP/DP 进程组注册库（dist.new_group 建组），非可运行入口。
+  - benchmarks/communication/__init__.py  # 空包标记文件（仅版权声明），非可运行入口。
+  - benchmarks/communication/all_gather.py  # 多卡通信性能基准（独立 __main__）：init_process_group 分布式初始化 + torch.cuda.Event 计时，循环测 all_gather（TorchBackend.get_all_gather_function）吞吐，纯通信算子无训练语义。
+  - benchmarks/communication/all_reduce.py  # 多卡通信性能基准（独立 __main__）：init_process_group 分布式初始化 + torch.cuda.Event 计时，循环测 all_reduce 吞吐/BusBW（Gbps），纯通信算子无训练语义。
+  - benchmarks/communication/all_to_all.py  # 多卡通信性能基准（独立 __main__）：init_process_group 分布式初始化 + torch.cuda.Event 计时，循环测 all_to_all_single 吞吐，纯通信算子无训练语义。
+  - benchmarks/communication/broadcast.py  # 多卡通信性能基准（独立 __main__）：init_process_group 分布式初始化 + torch.cuda.Event 计时，循环测 broadcast 吞吐，纯通信算子无训练语义。
+  - benchmarks/communication/constants.py  # 被 benchmarks/communication/utils.py 等 import 的通信基准参数常量库（DEFAULT_DEVICE=cuda、DEFAULT_DIST=deepspeed），非可运行入口。
+  - benchmarks/communication/pt2pt.py  # 多卡点对点通信性能基准（独立 __main__）：硬编码 rank0 send→rank1 recv（world_size 需≥2），torch.cuda.Event 计时测 send/recv 吞吐，纯通信算子无训练语义。
+  - benchmarks/communication/run_all.py  # 多卡通信基准汇总入口（独立 __main__）：aggregate 调用 all_reduce/all_gather/all_to_all/broadcast/pt2pt 五个算子函数，init_process_group 多卡 + torch.cuda.Event 计时，纯通信吞吐度量无训练语义。
+  - benchmarks/communication/utils.py  # 被 all_reduce.py/all_gather.py/all_to_all.py/broadcast.py/pt2pt.py/run_all.py 共用的通信基准工具库（init_process_group 分布式初始化、带宽折算、显存上限计算），非可运行入口。
+  - benchmarks/deepcompile/gen_chart_acc_steps.py  # 绘图/结果解析工具：只读 results.txt 日志，用 matplotlib/pandas 按自定义 MACs/FLOPs 公式计算画 iteration_time/throughput/flops/mfu 图（含日文注释），无训练语义。
+  - benchmarks/deepcompile/generate_conf.py  # 被 benchmarks/deepcompile/run.sh 调用的配置生成功具（独立 __main__）：用 jinja2 渲染 accelerate/deepspeed 模板写出 config.yaml/ds_config.json，非训练入口。
+  - benchmarks/deepcompile/plot.py  # 绘图/结果解析工具：正则解析 results.txt（iteration time、peak_mem、compile_time），用 matplotlib/pandas 计算吞吐/FLOPs/MFU 并画图，无训练语义。
+  - benchmarks/deepcompile/plot_common.py  # 全仓无任何文件 import plot_common（rg 全局验证），是与 plot.py/gen_chart_acc_steps.py 重复代码的孤立绘图辅助库，非可运行入口，可考虑删除。
+  - benchmarks/deepcompile/run_bench_lm.py  # 多机多卡大模型训练吞吐基准：启动链 run_bench.sh/run_bench_acc.sh/run_bench_z1.sh→run_multinode.sh→run.sh（generate_conf.py 生成 accelerate+DeepSpeed 配置后 accelerate launch 本文件）；run_bench.sh 默认 NUM_NODES=4、run_multinode.sh 用 ds_ssh -f hostfile_nX 跨节点分发、NCCL_DEBUG=WARN；硬编码 gated 模型 meta-llama/Llama-2-8B 与 70B-Instruct、mistralai/Mixtral-8x7B（70B 大模型）；ZeRO-3 + torch.cuda.memory_allocated/max_memory_allocated 硬编码 CUDA，纯吞吐无评测语义；同 example 的 6 个 .sh 启动器已并入本条。
+  - benchmarks/inference/bert-bench.py  # 推理延迟性能基准（fill-mask，打印 P50/P90 延迟分位，无训练语义）：deepspeed.init_distributed() 多进程初始化但固定 tp_size=1（单卡），无外部服务依赖，模型由 --model 参数传入。
+  - benchmarks/inference/collect_results.py  # 结果收集工具（独立 __main__）：os.walk 遍历 sweep.sh 生成的 results 目录，用正则提取 latency 分位并用 pandas 汇总写 CSV，无训练语义。
+  - benchmarks/inference/deepspeedometer/src/deepspeedometer/__init__.py  # 包导出模块（BenchmarkRunner、parse_args_to_configs），非可运行入口。
+  - benchmarks/inference/deepspeedometer/src/deepspeedometer/arg_parsing.py  # 被 benchmark_runner.py import 的 argparse→pydantic 配置解析库，非可运行入口。
+  - benchmarks/inference/deepspeedometer/src/deepspeedometer/benchmark_runner.py  # 推理服务压测框架入口（独立 __main__，python -m 启动）：multiprocessing 起 1..32 并行客户端测延迟/吞吐（warmup+early_stop），默认 api=azure_ml；fastgen/vllm 客户端分别 import deepspeed-mii、vllm 外部包，openai/azure_ml 客户端依赖外部服务端点；已并入的 run_example.sh 用 facebook/opt-125m+dummy 后端本地冒烟；同 example 的 1 个 .sh 启动器已并入本条。
+  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/__init__.py  # 客户端注册表库（client_classes/client_config_classes 映射 dummy/azure_ml/fastgen/vllm/openai），非可运行入口。
+  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/azure_ml_client.py  # AzureML REST API 客户端库（需外部 api_url/api_key/deployment_name），被 clients/__init__.py import，非可运行入口。
+  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/base.py  # 被各客户端实现 import 的抽象基类库（ABC），非可运行入口。
+  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/dummy_client.py  # dummy 后端客户端库（sleep 模拟固定延迟，可无服务本地冒烟），被 clients/__init__.py import，非可运行入口。
+  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/fastgen_client.py  # 依赖外部 deepspeed-mii 包的基准客户端库（import mii 失败即报错退出），被 clients/__init__.py import，非可运行入口。
+  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/openai_client.py  # OpenAI 兼容 API 客户端库（默认端点 http://127.0.0.1:26500/v1/completions），被 clients/__init__.py import，非可运行入口。
+  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/vllm_client.py  # 依赖外部 vllm 包的基准客户端库（import vllm 失败即报错），被 clients/__init__.py import，非可运行入口。
+  - benchmarks/inference/deepspeedometer/src/deepspeedometer/config.py  # pydantic BaseConfigModel 基类库，被 benchmark_runner/prompt/clients 等 import，非可运行入口。
+  - benchmarks/inference/deepspeedometer/src/deepspeedometer/prompt.py  # 被 benchmark_runner.py import 的 prompt 生成库（AutoTokenizer.from_pretrained 加载模型分词器、正态分布抽样长度），非可运行入口。
+  - benchmarks/inference/deepspeedometer/src/deepspeedometer/response.py  # 被 benchmark_runner.py import 的响应数据类库（dataclass），非可运行入口。
+  - benchmarks/inference/deepspeedometer/src/deepspeedometer/sample_input.py  # 被 prompt.py 使用的示例长文本常量库，非可运行入口。
+  - benchmarks/inference/deepspeedometer/tests/__init__.py  # 测试包空标记文件，非可运行入口。
+  - benchmarks/inference/deepspeedometer/tests/conftest.py  # pytest fixture 库（硬编码模型 facebook/opt-125m、dummy api），被各 test_*.py 使用，非可运行入口。
+  - benchmarks/inference/deepspeedometer/tests/test_benchmark.py  # pytest 单元测试：完整实例化并运行 BenchmarkRunner 冒烟（需从 HF 下载 facebook/opt-125m），非训练入口。
+  - benchmarks/inference/deepspeedometer/tests/test_config.py  # pytest 单元测试：校验 parse_args_to_configs 的必需参数/配置文件展开逻辑，非训练入口。
+  - benchmarks/inference/deepspeedometer/tests/test_early_stop.py  # pytest 单元测试：用 dummy 客户端验证 early_stop_latency 提前终止逻辑，非训练入口。
+  - benchmarks/inference/deepspeedometer/tests/test_prompt.py  # pytest 单元测试：校验 prompt 生成长度（seed/方差参数化），非训练入口。
+  - benchmarks/inference/gpt-bench.py  # 推理延迟性能基准（打印 P50/P90/P95/P99 latency 与 per-token latency，无训练语义）：内部 deepspeed.init_distributed()（默认 NCCL 后端）+ tensor_parallel tp_size=world_size 多卡推理；已并入的 sweep.sh 硬编码扫 gpt-neo-2.7B/1.3B、gpt-j-6B、facebook/opt-13b、bigscience/bloom-7b1 等>2B 模型×1/2/4/8 GPU×fp16/fp32×CUDA-graph/kernel 全组合，run_model.sh 用 deepspeed --num_gpus 启动；同 example 的 2 个 .sh 启动器已并入本条。
+  - benchmarks/inference/mii/run_benchmark.py  # 推理吞吐/延迟压测基准（独立 __main__：start_server→run_client→save_json_results，无训练语义）：已并入的 run_all.sh 硬编码 gated 模型 meta-llama/Llama-2-7b/13b/70b、tiiuae/falcon-40B/180B、mistralai/Mixtral-8x7B；backend fastgen/vllm/aml 分别依赖外部 DeepSpeed-MII、vllm、Azure ML 端点；defaults 中 TP tp_size=4/8 多卡；同 example 的 4 个 .sh 启动器已并入本条。
+  - benchmarks/inference/mii/src/__init__.py  # src 包空标记文件（仅版权声明），非可运行入口。
+  - benchmarks/inference/mii/src/client.py  # 被 run_benchmark.py import 的压测客户端库（fastgen/vllm/aml/openai 四后端、multiprocessing 并发请求与管理），文件尾另有 client-only __main__ 辅助入口。
+  - benchmarks/inference/mii/src/defaults.py  # 被 src/utils.py import 的默认参数库：MODEL_DEFAULTS 硬编码 Llama-2-7b/13b/70b、falcon-40B/180B、Mixtral-8x7B 与 tp_size 4/8，非可运行入口。
+  - benchmarks/inference/mii/src/plot_effective_throughput.py  # 基准结果绘图工具（SLA goodput 曲线）：按 token 级延迟阈值计算有效吞吐出图，无训练语义。
+  - benchmarks/inference/mii/src/plot_latency_percentile.py  # 基准结果绘图工具（token 延迟分位图）：统计 P50/P90/P99 token 延迟出图，无训练语义。
+  - benchmarks/inference/mii/src/plot_repl_scale.py  # 基准结果绘图工具（replica 扩展曲线）：按副本数画吞吐/延迟扩展图，无训练语义。
+  - benchmarks/inference/mii/src/plot_th_lat.py  # 基准结果绘图工具（吞吐-延迟曲线，被 run_aml.sh 调用）：读取 results JSON 用 matplotlib 出图，无训练语义。
+  - benchmarks/inference/mii/src/plot_tp_sizes.py  # 基准结果绘图工具（TP 尺寸扩展曲线）：按 tp_size 画吞吐/延迟对比图，无训练语义。
+  - benchmarks/inference/mii/src/postprocess_results.py  # 被各 plot_*.py import 的结果后处理库（ResponseDetails/吞吐/延迟汇总），文件尾另有独立 __main__ 后处理入口。
+  - benchmarks/inference/mii/src/random_query_generator.py  # 被 src/client.py import 的随机请求文本生成库（正态分布采样 prompt 长度），非可运行入口。
+  - benchmarks/inference/mii/src/sample_input.py  # 被 src/client.py、random_query_generator.py import 的示例长文本常量库（all_text），非可运行入口。
+  - benchmarks/inference/mii/src/server.py  # 被 run_benchmark.py import 的服务启动库（start_server/stop_server）：内部 Popen 起 python -m vllm.entrypoints.api_server 或 mii 服务并轮询等待启动（最长 5 分钟），文件尾另有独立 start/stop __main__。
+  - benchmarks/inference/mii/src/utils.py  # 被 run_benchmark.py、src/client.py、src/server.py import 的参数解析/笛卡尔组合/结果保存工具库（无 __main__），非可运行入口。
+  - benchmarks/inference/triton-bert-benchmark.py  # 推理延迟性能基准（每次 trial 计时打印 e2e/model latency，无训练语义）：torch.cuda.synchronize() 与 deepspeed.init_distributed("nccl") 硬编码 CUDA/NCCL，带 CUDA Graphs 与 Triton kernel 开关；已并入的 run_triton_benchmark.sh 用 deepspeed --num_gpus 1 跑 bert-base/large-cased、roberta-base/large 单卡各组合；同 example 的 1 个 .sh 启动器已并入本条。
+  - benchmarks/opsd/benchmark_hybrid_engine_rollout.py  # rollout 性能基准（独立 __main__）：profiling HybridEngine rollout 的 prompt_expansion/generation/post_processing 阶段延迟(ms)与 tokens_per_second 并统计 p50/p95，纯吞吐无训练语义；默认模型 facebook/opt-6.7b（>2B）；deepspeed.initialize(hybrid_engine)+accelerator.set_device 用 GPU，WORLD_SIZE≠1 时直接报错（当前仅单进程）。
+  - compression/bert/run_glue_lkd.py  # 训练入口：第235行 device=torch.device("cuda")、第237行 torch.cuda.set_device(args.local_rank) 硬编码 CUDA，zero_quant_lkd.sh 以 torch.distributed.launch --nproc_per_node=1 启动 GLUE mnli 蒸馏压缩任务；同 example 的 1 个 .sh 启动器已并入本条
+  - compression/bert/run_glue_no_trainer.py  # 训练入口：第230行 device=torch.device("cuda")、第232行 torch.cuda.set_device(args.local_rank) 硬编码 CUDA，配套 11 个 .sh（layer_reduction/pruning_*/quant_*/XTC 三个/ZeroQuant/zero_quant 等）均仅设置 CUDA_VISIBLE_DEVICES、压缩 config 与超参后以 torch.distributed.launch 启动本文件跑 GLUE mnli 蒸馏压缩；同 example 的 11 个 .sh 启动器已并入本条
+  - compression/bert/util.py  # 被 run_glue_no_trainer.py/run_glue_lkd.py（各第53行 from util import *）import 的训练/评测函数库（forward_loss/do_eval/save_clean_best_model 等），非可运行入口
+  - compression/cifar/resnet.py  # 被 train.py（第11行 from resnet import resnet）import 的 ResNet 模型定义库，非可运行入口
+  - compression/cifar/train.py  # 训练入口：--cuda 默认启用（第70-72行 action='store_false'，即缺省走 GPU），第108行 model.cuda()、第133行 data.cuda() 硬编码 CUDA，配套 run_compress.sh 先训练再 channel prune 均调本文件（--compression）；同 example 的 1 个 .sh 启动器已并入本条
+  - compression/cifar/utils.py  # 被 train.py（第10行 from utils import *）import 的数据/测试工具库（getData/test 等），非可运行入口
+  - compression/gpt2/run_clm_no_trainer.py  # 训练入口：第236行 device=torch.device("cuda")、第238行 torch.cuda.set_device(args.local_rank) 硬编码 CUDA，配套 run_zero_quant.sh 以 wikitext-2-raw-v1 + gpt2-large 做 ZeroQuant W8A8 量化并输出 perplexity（量化基准演示）；同 example 的 1 个 .sh 启动器已并入本条
+  - compression/reasoning_aware_compression/bash_script/eval_math500.sh  # 保留（无对应仓内 .py）：直接调用外部 lighteval vllm CLI（需 pip install lighteval[math,vllm]，vLLM 为 CI 不提供的外部依赖），用 NUM_GPUS 数据并行评 MATH-500、max_new_tokens 默认 32768，必须先有 pruned/dense 检查点 MODEL_DIR
+  - compression/reasoning_aware_compression/collect_traces.py  # 需 GPU 采样：--backend 默认 auto（vLLM 优先，否则 deepspeed ZeRO-Inference 多卡，第69/84-89行），默认模型 deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B（gated 需 HF 授权）+ 数据集 OpenR1-Math-220k + trace-tokens 默认 1M + max-new-tokens 8192，易超时；并入的 collect_traces_zero_inference.sh 默认 32B 模型 NUM_GPUS=2 并开 --cpu-offload，更不可在 CI 复现；同 example 的 1 个 .sh 启动器已并入本条
+  - compression/reasoning_aware_compression/prune.py  # 剪枝入口（可升级次轮候选）：--device 默认 cuda 可用则用（第53行，可换参跑 CPU），但 run_rac/run_calibration_ablation 两脚本硬编码 gated 模型 DeepSeek-R1-Distill-Qwen-1.5B + sparsegpt + nsamples 512 + seqlen 2048，可换小模型（如 gpt2）并降 nsamples 后跑通；同 example 的 2 个 .sh 启动器已并入本条
+  - deepnvme/ds_io/ds_io_read_sweep.sh  # ds_io_sweep.sh 的 read 入口包装，同 ds_io_sweep.sh 一起需 NVMe 硬件，非可运行
+  - deepnvme/ds_io/ds_io_sweep.sh  # 调 DeepSpeed 编译态 ds_io 二进制做 NVMe 读写带宽扫描，需 NVMe 盘与 GDS/async_io 编译支持，CI 不提供
+  - deepnvme/ds_io/ds_io_write_sweep.sh  # ds_io_sweep.sh 的 write 入口包装，同 ds_io_sweep.sh 一起需 NVMe 硬件，非可运行
+  - deepnvme/file_access/aio_load_cpu_tensor.py  # 同 file_access 族：DeepSpeed async_io 算子读 NVMe，需编译态 async_io + NVMe 硬件
+  - deepnvme/file_access/aio_load_gpu_tensor.py  # 同 file_access 族：async_io 算子加载到 GPU，需编译态 async_io + NVMe 硬件
+  - deepnvme/file_access/aio_store_cpu_tensor.py  # 同 file_access 族：async_io 算子写 NVMe，需编译态 async_io + NVMe 硬件
+  - deepnvme/file_access/aio_store_gpu_tensor.py  # 同 file_access 族：async_io 算子写 GPU 张量，需编译态 async_io + NVMe 硬件
+  - deepnvme/file_access/gds_load_gpu_tensor.py  # 同 file_access 族：GDS（GPUDirect Storage）读 NVMe，需 GDS 环境 + NVMe 硬件
+  - deepnvme/file_access/gds_store_gpu_tensor.py  # 同 file_access 族：GDS 写 NVMe，需 GDS 环境 + NVMe 硬件
+  - deepnvme/file_access/py_load_cpu_tensor.py  # DeepNVMe file_access 演示：Python API 从 NVMe 读张量，需 NVMe 硬件；编排脚本 run_load_tensor.sh/run_store_tensor.sh 已并入 file_access 各族条目
+  - deepnvme/file_access/py_load_gpu_tensor.py  # 同 file_access 族：Python API 加载张量到 GPU，需 NVMe 硬件
+  - deepnvme/file_access/py_store_cpu_tensor.py  # 同 file_access 族：Python API 写张量到 NVMe，需 NVMe 硬件
+  - deepnvme/file_access/py_store_gpu_tensor.py  # 同 file_access 族：Python API 写 GPU 张量到 NVMe，需 NVMe 硬件
+  - deepnvme/file_access/utils.py  # file_access 族共享工具库，非可运行入口
+  - deepnvme/model_checkpoint/deepspeed_save_model.py  # DeepNVMe 检查点存储基准：经 torch_save_utils.py 标载 test_ds_aio/gds_fast_save，需编译态 async_io/GDS 与 NVMe 盘
+  - deepnvme/model_checkpoint/save_model_utils.py  # 被 deepspeed_save_model.py / torch_save_model.py import 的模型构造与参数解析库，非可运行入口
+  - deepnvme/model_checkpoint/torch/serialization_fast_v2.6.0.py  # torch 2.6.0 序列化文件的加速补丁副本（paired with orig），配套物非可运行入口
+  - deepnvme/model_checkpoint/torch/serialization_orig_v2.6.0.py  # torch 2.6.0 序列化原始副本，配套物非可运行入口
+  - deepnvme/model_checkpoint/torch_save_load_model.py  # safetensors 检查点存储对比基准，与 torch_save_model.py 同族，需 NVMe 盘
+  - deepnvme/model_checkpoint/torch_save_model.py  # torch 检查点存储基准（提出 test_save/test_ds_gds_fast_save 等），需 GDS/async_io + NVMe 盘
+  - deepnvme/model_checkpoint/torch_save_tensor.py  # 单张望基准（torch/aio/gds 各 store 路径），需 GDS/async_io + NVMe 盘
+  - deepnvme/model_checkpoint/torch_save_utils.py  # 被 torch_save_model.py 等 import 的 IO 算子加载与 save 实现库，非可运行入口
+  - evaluation/inference/human_eval/run_human_eval.py  # 外部依赖 + gated 模型：import human_eval（openai/human-eval 包）并读硬编码路径 human-eval/data/HumanEval.jsonl.gz（本仓不含，需另行布置），mii.pipeline 依赖外部 DeepSpeed-MII 包，默认模型 codellama/CodeLlama-7b-Python-hf（gated）；torch.cuda.empty_cache() 硬编码 CUDA。
+  - inference/huggingface/automatic-speech-recognition/test-wav2vec2.py  # 硬编码 facebook/wav2vec2-base-960h 且 import 时即 load_dataset('librispeech_asr') 拉数 GB 评测集，deepspeed.init_inference 注入不解压单卡
+  - inference/huggingface/fill-mask/test-bert.py  # 默认 bert-large-cased（336M），world_size=4 张量并行默认 + --graphs/--triton 为 CUDA 专属路径；可降 tp=1 需 patch 验证，次轮候选
+  - inference/huggingface/fill-mask/test-electra.py  # 无 CLI，硬编码 google/electra-base-generator + world_size=4 张量并行 injection_policy，单卡不可控
+  - inference/huggingface/fill-mask/test-roberta.py  # 无 CLI，硬编码 roberta-large + world_size=4 张量并行 injection_policy，单卡不可控
+  - inference/huggingface/stable-diffusion/local_pipeline_stable_diffusion.py  # 被 test-stable-diffusion.py import 的 SD 管道改写库，非可运行入口
+  - inference/huggingface/stable-diffusion/test-stable-diffusion.py  # 硬编码 torch.device(f'cuda:{local_rank}') 与 enable_cuda_graph=True（第29/55行），且 prompthero/midjourney SD 权重 4GB+，CI 不现实
+  - inference/huggingface/text-generation/arguments.py  # 被 text-generation 各脚本 import 的参数解析库，非可运行入口
+  - inference/huggingface/text-generation/ds-hf-compare.py  # DS kernel-injected 与 HF 长文本生成对比（默认 min 200/max 300 token），核心靠 use_kernel 注入路径验证，CUDA 专属；可升级为 hf_baseline 简单（次轮候选）
+  - inference/huggingface/text-generation/run-generation-script/test-run-generation.py  # 硬编码 model.cuda() 与 torch.cuda.synchronize()，无 --no_cuda 生效路径；同 example 的 test-gpt.sh 启动器（gpt2-xl + fp16 + ds-inference）已并入本条
+  - inference/huggingface/text-generation/utils.py  # 被 text-generation 各脚本 import 的工具库（create_pipeline 等），非可运行入口
+  - inference/huggingface/text2text-generation/test-t5.py  # 硬编码 google/t5-v1_1-small + world_size=4 张量并行、device=local_rank（cuda 语义），无 CLI 不可压单卡
+  - inference/huggingface/translation/test-t5-base.py  # 硬编码 t5-base + world_size=4 张量并行、device=local_rank（cuda 语义），无 CLI 不可压单卡
+  - inference/huggingface/zero_inference/run_model.py  # 硬编码 deepspeed.init_distributed('nccl') 与 input_tokens.to(torch.cuda.current_device())，绑死 NCCL/CUDA；面向 OPT/BLOOM 大模型 ZeRO-inference offload 基准；同 example 的 7 个 .sh 启动器（run_model.sh + opt-1.3b/30b/66b/175b、bloom-175b、llama2-70b a6000）已并入本条
+  - inference/huggingface/zero_inference/timer.py  # 被 run_model.py import 的计时工具库，非可运行入口
+  - inference/huggingface/zero_inference/utils.py  # 被 run_model.py import 的工具库（内存/量化/日志），非可运行入口
+  - inference/mii/non-persistent/falcon.py  # 依赖 deepspeed-mii 包跑 tiiuae/falcon-7b，7B 模型 + MII 依赖，CI 不现实
+  - inference/mii/non-persistent/llama2.py  # 依赖 deepspeed-mii 包跑 meta-llama/Llama-2-7b-hf（gated），MII + gated 模型，CI 不可行
+  - inference/mii/non-persistent/mixtral.py  # 依赖 deepspeed-mii 包跑 Mixtral-8x7B（MoE 大模型），MII + 模型过大，CI 不现实
+  - inference/mii/non-persistent/pipeline.py  # 依赖 deepspeed-mii 包启动 Mistral-7B 推理服务（默认 7B），CI 不装 MII
+  - inference/mii/persistent/client.py  # deepspeed-mii 服务的客户端脚本（配套 serve.py），非独立 example
+  - inference/mii/persistent/serve.py  # 依赖 deepspeed-mii 包做持久化 serving（默认 Mistral-7B），服务模式非单卡训练看护
+  - inference/mii/persistent/terminate.py  # deepspeed-mii 服务的终止脚本（配套 serve.py），非独立 example
+  - inference/sglang/run_llama3_1B.sh  # 调 python -m sglang.bench_offline_throughput 做吞吐基准，依赖 SGLang fork + meta-llama/Llama-3.2-1B（gated）
+  - inference/sglang/run_llama3_70B.sh  # 同 sglang 吞吐基准，模型 Llama-3.1-70B gated 且 70B 过大，依赖 SGLang fork
+  - inference/sglang/run_llama3_8B.sh  # 同 sglang 吞吐基准，模型 Llama-3.1-8B gated，依赖 SGLang fork
+  - scripts/check-license.py  # 仓库 license 检查工具（非训练入口）：对传入的每个文件执行 git grep 校验 Copyright/SPDX-License-Identifier/DeepSpeed Team 三行版权头，缺失即 exit 1。
+  - training/BingBertGlue/nvidia_bert_dataset_provider.py  # NVIDIA 预训练 hdf5 数据集提供器（h5py 逐 key 读 hdf5）；第 16 行 from bert_dataset_provider import BertDatasetProviderInterface，但 BingBertGlue 目录下并无 bert_dataset_provider.py，且 GLUE 微调脚本不 import 本文件，属配套库、非可运行入口
+  - training/BingBertGlue/run_glue_classifier_bert_base.py  # CUDA+DeepSpeed GLUE(RTE) 微调：run_glue_bert_base_finetune.sh 设 NGPU=8 并以 deepspeed 启动本文件，torch.cuda.set_device(args.local_rank) 绑定 GPU，GLUE_DIR=/data/GlueData 数据路径硬编码；同 example 的 1 个 .sh 配置启动器已并入本条
+  - training/BingBertGlue/run_glue_classifier_bert_large.py  # CUDA+DeepSpeed GLUE(RTE) 微调 bert-large（NGPU=8 启动器、torch.cuda.set_device(args.local_rank) 绑定 GPU、GLUE_DIR=/data/GlueData 硬编码），且第 20 行硬编码 sys.path=['/home/t-yuchenglu/DeepSpeed'] 私人路径需 patch（次轮候选）；同 example 的 1 个 .sh 配置启动器已并入本条
+  - training/BingBertSquad/convert_bert_ckpt_to_deepspeed.py  # checkpoint 格式转换工具（TF/HF→DeepSpeed，惰性 import tensorflow，仅 torch.from_numpy 做 CPU 权重换算），无 CUDA/多卡硬编码、无 unsupported 项，可升级保留
+  - training/BingBertSquad/evaluate-v1.1.py  # SQuAD v1.1 官方评测入口壳：第 3 行 import evaluate as eval 且含 if __name__=='__main__' 入口，纯 CPU json 评测（无 GPU 依赖），可升级保留
+  - training/BingBertSquad/evaluate.py  # 被 evaluate-v1.1.py 以 import evaluate as eval 调用的 SQuAD v1.1 官方评测计算库（normalize_answer/f1_score 等，无独立 __main__），非可运行入口
+  - training/BingBertSquad/nvidia_run_squad_baseline.py  # CUDA 多卡 BERT-large SQuAD 基线训练（torch.cuda.set_device 绑定 GPU、DistributedSampler 多卡），是对照 deepspeed 版的性能基线，依赖外部 bert-large 权重与 SQuAD json 数据；同 example 的 1 个 .sh 配置启动器已并入本条
+  - training/BingBertSquad/nvidia_run_squad_deepspeed.py  # CUDA+DeepSpeed 多机多卡 BERT-large SQuAD 训练/推理（torch.cuda.set_device 绑定 GPU）：5 个 1-bit_adam .sh 硬编码 NUM_NODES=4/NGPU_PER_NODE=8，mpi 变体经 mpirun 或 deepspeed --launcher=mvapich、nccl 变体设 NCCL_IB_DISABLE 等环境变量并加 --deepspeed_transformer_kernel，run_squad_deepspeed.sh 亦以 deepspeed --num_gpus 启动本文件；同 example 的 6 个 .sh 配置启动器已并入本条
+  - training/BingBertSquad/run_hf.sh  # 配置启动器以 torch.distributed.launch 调用 nvidia_run_squad_mpi.py，但该 .py 不在本仓（BingBertSquad 目录下无此文件，rg 全仓亦检索不到），按规则保留 .sh 并标注目标脚本缺失；另硬编码 NUM_NODES=2/NGPU_PER_NODE=4、外部 bert-large-uncased 权重路径
+  - training/BingBertSquad/utils.py  # 被 nvidia_run_squad_baseline.py 与 nvidia_run_squad_deepspeed.py 以 from utils import get_argument_parser... 调用的参数/日志工具库（依赖 tensorboardX），非可运行入口
+  - training/DeepSpeed-Domino/domino/gpt_model.py  # 被 pretrain_gpt.py import 的库/GPT 模型定义（pretrain_gpt.py 第 18 行 from domino.gpt_model import GPTModel），import megatron 并复用 language_model.py，非独立入口。
+  - training/DeepSpeed-Domino/domino/language_model.py  # 被 gpt_model.py import 的库/语言模型定义（gpt_model.py 第 12-13 行 from .language_model import parallel_lm_logits/get_language_model），基于 Megatron 张量/序列并行 API，非独立入口。
+  - training/DeepSpeed-Domino/domino/training.py  # 被 pretrain_gpt.py import 的库/训练工具（pretrain_gpt.py 第 19 行 from domino.training import pretrain），内含 initialize_megatron 与 torch.cuda.DoubleTensor，非独立入口。
+  - training/DeepSpeed-Domino/pretrain_gpt.py  # 多卡+外部依赖：头部 from megatron import get_args 且 domino/training.py 调 initialize_megatron，同目录 Megatron-LM/megatron 子目录为空需外部获取；pretrain_gpt3_13b.sh 设 GPUS_PER_NODE=8 且 tensor-model-parallel-size=WORLD_SIZE(8)、pretrain_gpt3_6.7b.sh 设 4 卡，按 GPT3-13B(--hidden-size 5120)/GPT3-6.7B(--hidden-size 4096) 配置启动本文件，数据硬编码 dataset/BookCorpusDataset_text_document；同 example 的 2 个 .sh 启动器已并入本条。
+  - training/DeepSpeed-SuperOffload/finetune_zero3.py  # 模型过大+CUDA 绑定：AutoModelForCausalLM.from_pretrained 以 torch.bfloat16 加载模型后 deepspeed.initialize（模型到 engine.device GPU），7 个 .sh 硬编码 openai/gpt-oss-20b、meta-llama/Llama-3.3-70B-Instruct(4 卡)、meta-llama/Llama-3.1-8B、microsoft/phi-4、Qwen/Qwen3-14B、Qwen/Qwen3-30B-A3B(2 卡)、ByteDance-Seed/Seed-OSS-36B-Instruct(2 卡)，均从 HF 远程拉模型与 tatsu-lab/alpaca 数据集；同 example 的 7 个 .sh 启动器已并入本条。
+  - training/DeepSpeed-ZenFlow/benchmark/output_table.py  # 被 run_benchmark.sh 调用的库/结果表格输出脚本（run_benchmark.sh 末行 python output_table.py 解析 zf_benchmark.log 以 pandas/tabulate 打印 psql 表格），非可运行入口。
+  - training/DeepSpeed-ZenFlow/benchmark/zf_benchmark.py  # 多卡+性能基准：run_benchmark.sh 设 NGPUS=2 并以 deepspeed --num_gpus=2 循环启动 zf_benchmark.py，遍历 pin_memory/topk_ratios/update_intervals/overlap_steps 组合测量每步 step/fwd/bwd/selective_optimizer 毫秒耗时，结果写到 zenflow_report.log 由 output_table.py 汇总；同 example 的 1 个 .sh 启动器已并入本条。
+  - training/DeepSpeed-ZenFlow/finetuning/finetune_llama.py  # 多卡+gated 模型：finetune_llama.sh 硬编码 GPUS_PER_NODE=2 与 MODEL_NAME=meta-llama/Llama-2-7b-hf（gated），脚本从 HF 远程加载模型并调用 torch.cuda.is_available/torch.cuda.manual_seed_all，数据来自 load_dataset(tatsu-lab/alpaca)；同 example 的 1 个 .sh 启动器已并入本条。
+  - training/MoQ/run_glue.py  # GLUE(QNLI) 微调入口：run.sh 固定 CUDA_VISIBLE_DEVICES=0、torch.distributed.launch --nproc_per_node 1（单卡无多卡阻碍），ds_inference 默认 False 仅按参数启用 deepspeed 推理注入，但代码基于旧版 transformers/datasets API（load_metric 等已废弃），需升级适配（次轮候选）；同 example 的 1 个 .sh 配置启动器已并入本条
+  - training/autotp_equivalence/compare_loss.py  # 被 run_cpu.sh/run_gpu.sh 调用的库/对比脚本（run_gpu.sh 第 41/45 行 python compare_loss.py ...），比较 AutoTP=3/4 与 AutoTP=1 的 metrics.jsonl 损失曲线，非独立入口。
+  - training/autotp_equivalence/tests/test_compare_loss.py  # compare_loss.py 的 pytest 单元测试（通过 subprocess 调用 compare_loss.py 校验阈值逻辑），非可运行入口。
+  - training/autotuning/hf/bert-base/test_tune.sh  # autotuning 测试矩阵启动器：各分支调用 $HF_PATH=~/projects 下外部 transformers 示例脚本 examples/pytorch/text-classification/run_glue.py（不在本仓），按规则保留 .sh；hard-coded NGPUS=16 多卡、模型 bert-base-cased，torch.distributed.launch 旧版 API 需升级
+  - training/autotuning/hf/bert-large/test_tune.sh  # autotuning 测试矩阵启动器：各分支调用 $HF_PATH=~/projects 下外部 transformers 示例脚本 examples/pytorch/text-classification/run_glue.py（不在本仓），按规则保留 .sh；hard-coded NGPUS=16 多卡、模型 bert-large-uncased，torch.distributed.launch 旧版 API 需升级
+  - training/autotuning/hf/deberta/test_tune.sh  # autotuning 测试矩阵启动器：各分支调用 $HF_PATH=~/projects 下外部 transformers 示例脚本 examples/pytorch/text-classification/run_glue.py（不在本仓），按规则保留 .sh；hard-coded NGPUS=16 多卡、模型 microsoft/deberta-v2-xxlarge 且 PER_DEVICE_TRAIN_BATCH_SIZE=1/--fp16，torch.distributed.launch 旧版 API 需升级
+  - training/autotuning/hf/distilbert/test_tune.sh  # autotuning 测试矩阵启动器：各分支调用 $HF_PATH=~/projects 下外部 transformers 示例脚本 examples/pytorch/text-classification/run_glue.py（不在本仓），按规则保留 .sh；hard-coded NGPUS=16 多卡、模型 distilbert-base-uncased，torch.distributed.launch 旧版 API 需升级
+  - training/autotuning/hf/gpt2-large/test_tune.sh  # autotuning 测试矩阵启动器：各分支调用 $HF_PATH=~/projects 下外部 transformers 示例脚本 examples/pytorch/language-modeling/run_clm.py（不在本仓），按规则保留 .sh；hard-coded NGPUS=16 多卡、模型 gpt2-large、数据集 wikitext-2-raw-v1（在线下载），torch.distributed.launch 旧版 API 需升级
+  - training/autotuning/hf/gpt2-medium/test_tune.sh  # autotuning 测试矩阵启动器：各分支调用 $HF_PATH=~/projects 下外部 transformers 示例脚本 examples/pytorch/language-modeling/run_clm.py（不在本仓），按规则保留 .sh；hard-coded NGPUS=16 多卡、模型 gpt2-medium、数据集 wikitext-2-raw-v1（在线下载），torch.distributed.launch 旧版 API 需升级
+  - training/autotuning/hf/gpt2-xl/test_tune.sh  # autotuning 测试矩阵启动器：各分支调用 $HF_PATH=~/projects 下外部 transformers 示例脚本 examples/pytorch/language-modeling/run_clm.py（不在本仓），按规则保留 .sh；hard-coded NGPUS=16 多卡、模型 gpt2-xl 且 MAX_STEPS=50、数据集 wikitext-2-raw-v1，torch.distributed.launch 旧版 API 需升级
+  - training/autotuning/hf/gpt2/test_tune.sh  # autotuning 测试矩阵启动器：各分支调用 $HF_PATH=~/projects 下外部 transformers 示例脚本 examples/pytorch/language-modeling/run_clm.py（不在本仓），按规则保留 .sh；hard-coded NGPUS=16 多卡、模型 gpt2、数据集 wikitext-2-raw-v1，torch.distributed.launch 旧版 API 需升级
+  - training/bf16_master_weight/gather_memory.py  # 库/配套物：仅解析训练日志 baseline.log/bf16_full.log 中 SUMMARY 行的 params/peak_mem_bytes/alloc_mem_bytes/avg_step_time 并汇总显存对比表格，本身不训练（本仓 train.py 与 run_comparison.sh 不在清单）。
+  - training/bf16_master_weight/plot_loss.py  # 库/配套物：仅读取训练日志 loss CSV（--baseline/--bf16 参数）用 matplotlib 画平滑损失对比曲线并保存 PNG，依赖 numpy/matplotlib，本身不训练。
+  - training/bing_bert/bert_dataset_provider.py  # 被 bing_bert_dataset_provider.py 与 nvidia_bert_dataset_provider.py 以 from bert_dataset_provider import BertDatasetProviderInterface 引用的数据集接口基类库，非可运行入口
+  - training/bing_bert/bing_bert_dataset_provider.py  # 被 deepspeed_train.py 以 from bing_bert_dataset_provider import BingBertDatasetProvider 引用的 Bing 预训练语料提供器（数据集路径 wiki_pretrain_dataset/bc_pretrain_dataset 取自 json config、属内部非公开数据），非可运行入口
+  - training/bing_bert/data_worker.py  # 被 bing_bert_dataset_provider.py 以 from data_worker import AsyncWorker 引用的异步数据加载 worker 类库，非可运行入口
+  - training/bing_bert/deepspeed_train.py  # 多机多卡 BERT-large 预训练入口：deepspeed.init_distributed(dist_backend='nccl')、torch.cuda.set_device 绑定 GPU，27 个 .sh 启动器覆盖 openmpi/mvapich/mpirun(-n 128)、NCCL 环境变量（NCCL_IB_DISABLE/NCCL_SOCKET_IFNAME）、bsz4k/32k/64k 变体并含 --deepspeed_transformer_kernel，数据依赖 Bing 内部语料（无公开下载）；同 example 的 27 个 .sh 配置启动器已并入本条
+  - training/bing_bert/nvidia_bert_dataset_provider.py  # 被 deepspeed_train.py 以 from nvidia_bert_dataset_provider import NvidiaBertDatasetProvider 引用、由 --use_nvidia_dataset 参数启用（deepspeed_train.py:551）的 NVIDIA hdf5 数据集提供器，非可运行入口
+  - training/bing_bert/run_glue_classifier_bert_base.py  # CUDA+DeepSpeed GLUE 微调：run_glue_bert_base_finetune.sh 设 NGPU=1/MAX_GPU_BATCH_SIZE=32、GLUE_DIR=/data/GlueData 硬编码并以 deepspeed 启动本文件，torch.cuda.set_device(args.local_rank) 绑定 GPU；同 example 的 1 个 .sh 配置启动器已并入本条
+  - training/bing_bert/run_glue_classifier_bert_large.py  # CUDA+DeepSpeed GLUE 微调 bert-large：run_glue_bert_large_finetune.sh 以 NGPU=$1（可多卡）、deepspeed 启动本文件，torch.cuda.set_device(args.local_rank) 绑定 GPU，GLUE_DIR=/data/GlueData 硬编码；同 example 的 1 个 .sh 配置启动器已并入本条
+  - training/bing_bert/timer.py  # 计时工具类（文件注释 Borrowed from Nvidia Megatron code），rg 检索 bing_bert 目录无任何文件 import 它、亦无独立 __main__ 入口，属未被引用的配套库、非可运行入口
+  - training/bing_bert/utils.py  # 被 deepspeed_train.py 以 from utils import get_argument_parser, is_time_to_exit 引用的参数解析/中途退出控制工具库，非可运行入口
+  - training/cifar/cifar10_tutorial.py  # CUDA 绑定：PyTorch 官方 CIFAR10 教程脚本出现 torch.device("cuda:0" if torch.cuda.is_available() else "cpu") 的 cuda:0 硬编码；CIFAR10 数据虽小且可自动下载，但该脚本不是已接入的 accelerator-aware cifar10_deepspeed.py 路径。
+  - training/cifar/run_ds_prmoe.sh  # 两卡 PR-MoE 变体：deepspeed --num_gpus=2 启动已由普通/MoE 配方看护的 cifar10_deepspeed.py，固定 EXPERTS='2 4' 与 mlp-type=residual；先等待普通 MoE 两卡条目全绿，避免首轮重复跑同一入口。
+  - training/data_efficiency/gpt_finetuning/analyze_data.py  # 库/配套物：ds_analyze_gpt_data_map.sh 与 ds_analyze_gpt_data_reduce.sh 拼参数后以 python ../analyze_data.py 启动（map/reduce 两阶段），脚本内 save_path 硬编码 /blob/users/conglli/data/analysis_ptb_gpt/（企业内部 blob 路径）且加载 ptb_text_only 数据集做难度分析，非可运行入口；同 example 的 2 个 .sh 启动器已并入本条。
+  - training/data_efficiency/gpt_finetuning/finetune/ds_finetune_gpt2_run.sh  # 多卡+CUDA：脚本并发启动 4 个后台训练（cuda_device=0..3 写入 CUDA_VISIBLE_DEVICES、master_port 按卡号偏移），每次调 ds_finetune_gpt2.sh 拼参数后 torch.distributed.launch ../run_clm_no_trainer.py，微调 gpt2-medium（HF 远程）、ptb_text_only 数据集，跑 baseline/random-LTD/curriculum learning/混合四组实验；其调用的 ds_finetune_gpt2.sh 已作为启动器并入本 example 的 run_clm_no_trainer.py 条目。
+  - training/data_efficiency/gpt_finetuning/learning_rates.py  # 被 run_clm_no_trainer.py 与 analyze_data.py import 的库/学习率调度（两文件均有 from learning_rates import AnnealingLR），非可运行入口。
+  - training/data_efficiency/gpt_finetuning/run_clm_no_trainer.py  # 多卡+CUDA 绑定：run_base_random_ltd.sh/run_medium_random_ltd.sh 分别以 CUDA_VISIBLE_DEVICES=1/2 经 torch.distributed.launch 启动本脚本，脚本用 torch 设备判断与 DistributedSampler 并把 gpt2/gpt2-medium、ptb_text_only（HF 远程数据集）跑 random-ltd 训练；本 example 另有 ds_finetune_gpt2_run.sh 编排 4 组实验间接启动本文件；同 example 的 3 个 .sh 启动器已并入本条（run_base_random_ltd.sh、run_medium_random_ltd.sh、ds_finetune_gpt2.sh）。
+  - training/data_efficiency/variable_batch_size_and_lr/variable_batch_size_and_lr_example.py  # 多卡+CUDA：脚本 assert dist.get_local_rank() <= get_accelerator().device_count() 要求每进程至少 1 张 GPU，device 取 get_accelerator().current_device_name() 并把模型 .to(device)，演示 data_efficiency 动态批量与动态 LR 全流程（无 .sh，deepspeed 直接启动）。
+  - training/data_efficiency/vit_finetuning/main_cifar.py  # 可升级：run_cifar_random_ltd.sh 以 deepspeed --num_gpus 1（单卡）启动本文件，CIFAR-10 由 utils/get_data.py 的 datasets.CIFAR10(download=True) 自动下载、数据小，arch=vits16r224、batchsize=128；卡点是 main_cifar.py 内第 104 行 nn.CrossEntropyLoss().cuda()、第 173-175 行 cuda_transfer 的 images.cuda(non_blocking=True)、set_seed 的 torch.cuda.manual_seed_all 均硬编码 CUDA，需 patch 后可单卡小数据跑，次轮候选；同 example 的 1 个 .sh 启动器已并入本条。
+  - training/data_efficiency/vit_finetuning/main_imagenet.py  # 多卡+数据过大：run_imagenet_random_ltd.sh 设 used_gpu=0..15 共 16 卡、--batch-size 256，数据硬编码 /blob/data/ImageNetData/ 且 dist-backend nccl，main_imagenet.py 用 timm transforms_imagenet_* 处理约 138GB 的 ImageNet（--dummy 是唯一绕过方式）；同 example 的 1 个 .sh 启动器已并入本条。
+  - training/deepspeed_finetune_demo/convert_ds_to_hf.py  # 被 run_and_evaluate.sh 调用的库/转换脚本（run_and_evaluate.sh 中 --ep_size 8 调 convert_ds_to_hf.py），合并 AutoEP 各 rank 的 model_weights.pt 回 HF 格式，特定于 moonshotai/Moonlight-16B-A3B 键名，非独立入口。
+  - training/deepspeed_finetune_demo/evaluate/gsm8k/eval_gsm8k.py  # 被 run_and_evaluate.sh 调用的库/评分脚本：逐行读 gen_gsm8k.py 产出的 samples.jsonl，比对 predicted_answer 与 correct_answer 计算 GSM8K 准确率/pass@1，非可运行入口。
+  - training/deepspeed_finetune_demo/evaluate/gsm8k/gen_gsm8k.py  # 外部依赖（vLLM）+多卡：from vllm import LLM, SamplingParams 且 LLM(tensor_parallel_size=args.tp 默认 8)，加载远程 openai/gsm8k 数据集生成 samples.jsonl，纯 GPU 推理，被 run_and_evaluate.sh 调用。
+  - training/deepspeed_finetune_demo/evaluate/mmlu/eval_mmlu.py  # 被 run_and_evaluate.sh 调用的库/评分脚本：读 gen_mmlu.py 产出的 samples.jsonl 依据样本 letter 计算 MMLU 准确率，非可运行入口。
+  - training/deepspeed_finetune_demo/evaluate/mmlu/gen_mmlu.py  # 外部依赖（vLLM）+多卡：from vllm import LLM, SamplingParams 且 LLM(tensor_parallel_size=args.tp 默认 8)，加载远程 cais/mmlu 数据集生成 MMLU 样本（纯 GPU 推理），被 run_and_evaluate.sh 调用。
+  - training/deepspeed_finetune_demo/finetune_llama.py  # 多卡+CUDA 绑定+性能基准：finetune.sh/benchmark.sh/profile.sh 均以 deepspeed --num_gpus=$NUM（默认 2）启动本文件，脚本内 torch.cuda.is_available/torch.cuda.manual_seed_all 且默认用 GPU，数据集全部为 DATASET_REGISTRY 中的远程 HF 数据集（tatsu-lab/alpaca、sahil2801/CodeAlpaca-20k、meta-math/MetaMathQA、cais/mmlu），模型经 AutoModelForCausalLM.from_pretrained 从 HF 拉取（finetune.sh 默认 Qwen/Qwen2.5-0.5B），benchmark.sh/profile.sh 分别带 --bench_start/--profile_start 测吞吐与 timeline；同 example 的 3 个 .sh 启动器已并入本条。
+  - training/deepspeed_finetune_demo/run_and_evaluate.sh  # 多卡+外部依赖（vLLM）：脚本用 deepspeed --num_gpus=8、TP=8 训练默认 moonshotai/Moonlight-16B-A3B（16B 大模型），其后调用 evaluate/*/gen_*.py（gsm8k/mmlu 的 gen 脚本 import vllm LLM 多卡张量并行）与 evalplus、convert_ds_to_hf.py 完成 MBPP/MMLU/GSM8K 评测全流程，需要远程 HF 数据集。
+  - training/expert_parallel/data_utils.py  # 被 train.py import 的库/数据工具（train.py 第 33-38 行 import build_hf_batch_generator、get_tokenizer 等），按 --dataset_name 从 HF 加载 wikitext/imdb 等文本数据并构造 tokenizer/DistributedSampler/CausalLmBatch，非可运行入口。
+  - training/expert_parallel/init_weights.py  # 被 train.py（load_init_weights_artifact）与 utils/prepare_init_weights.py（save_init_weights_artifact）import 的库/初始化权重工件工具，读写 .safetensors 并做 sha256/config 指纹校验，非可运行入口。
+  - training/expert_parallel/metrics.py  # 被 train.py import 的库/CSV 指标记录（MetricsLogger 记录 loss/iter_time/tokens_per_sec/cuda 显存），reduce_max 显式 torch.tensor([value], device=torch.cuda.current_device())，CUDA 绑定，非可运行入口。
+  - training/expert_parallel/train.py  # 多卡+远程大模型：文件头注明 deepspeed --num_gpus 8 train.py，AutoEP 模式必须传 --autoep_size 且 build_tp_dp_groups 要求 tp_size*dp_size==world_size，模型预设为 Qwen3.5 MoE/Mixtral 8x7B/Llama4 Scout 17B（经 transformers 从 HF 远程下载，tokenizer 默认 mistralai/Mixtral-8x7B-v0.1 等），默认只取 wikitext 数据集 10%。
+  - training/expert_parallel/utils/compare_metrics.py  # 库/配套物：比较 AutoEP 与 ZeRO-3 leaf 两次运行的 CSV（--autoep_csv/--zero3_leaf_csv 必需）并画 loss 曲线图/汇总 JSON，头文件强制 matplotlib.use("Agg")，本仓无启动脚本，非独立入口。
+  - training/expert_parallel/utils/prepare_init_weights.py  # 配套物：以 python utils/prepare_init_weights.py --model ... --output ... 直接运行，构造 MODEL_PRESETS 中 MoE 配置并保存 init .safetensors 供 train.py --load_init_weights 消费，本仓无 .sh 启动它。
+  - training/gan/gan_baseline_train.py  # CUDA 绑定：gan_baseline_run.sh 原样调用 python gan_baseline_train.py --dataset celeba --cuda --tensorboard_path './runs/baseline'，脚本第 81 行 device=torch.device("cuda:0" if args.cuda else "cpu") 且 run.sh 已传 --cuda，纯 PyTorch 基线训练（无 DeepSpeed），celeba 数据需本地 dataroot；同 example 的 1 个 .sh 启动器已并入本条。
+  - training/gan/gan_deepspeed_train.py  # 多卡+CUDA 绑定：gan_deepspeed_run.sh（单行）以 deepspeed 启动 gan_deepspeed_train.py --dataset celeba --cuda --deepspeed_config gan_deepspeed_config.json，脚本内第 83-84 行 torch.cuda.set_device(args.local_rank) 与 torch.device("cuda", args.local_rank) 硬编码 CUDA，celeba 数据需本地 dataroot，是 DeepSpeed 版 GAN 训练；同 example 的 1 个 .sh 启动器已并入本条。
+  - training/gan/gan_model.py  # 被 gan_baseline_train.py 与 gan_deepspeed_train.py import 的库/DCGAN 模型定义（两文件第 11 行 from gan_model import Generator, Discriminator, weights_init），非可运行入口。
+  - training/gan/utils.py  # 被 gan_baseline_train.py 与 gan_deepspeed_train.py import 的库/参数与工具（两文件第 12 行 from utils import get_argument_parser, set_seed, create_folder），--ngpu 默认 16（多卡参数），set_seed 内 torch.cuda.manual_seed_all(value)，非可运行入口。
+  - training/imagenet/extract_ILSVRC.sh  # 数据过大：脚本解压 ILSVRC2012_img_train.tar（约 138GB）与 ILSVRC2012_img_val.tar（约 6.3GB）建 ImageNet 目录结构，并以 wget 拉取 soumith/imagenetloader.torch 的 valprep.sh 远程脚本，纯数据预处理、无对应 .py，保留 .sh 自身。
+  - training/imagenet/main.py  # 多卡+数据过大+需 patch：run_ds.sh/run_ds_fp16.sh/run_ds_fp16_z1.sh 都是 deepspeed main.py -a resnet50 --multiprocessing_distributed 且数据路径硬编码 /home/pagolnar/clones/clone_imagenet/imagenet/imagenet（个人机器路径，需改本地路径或用 --dummy），main.py 默认训练约 138GB 的 ImageNet 数据集（由 extract_ILSVRC.sh 解压产生），--multiprocessing_distributed 按 N GPUs 起进程；同 example 的 3 个 .sh 启动器已并入本条。
+  - training/offload_states/output_table.py  # 被 run_benchmark.sh 调用的库/结果表格输出脚本（读取 offload_states.log 的 CSV 按 pin_memory/non_blocking 四种组合生成 Markdown 表格；run_benchmark.sh 与 offload_states.py 不在本清单），非可运行入口。
+  - training/opsd/benchmarks/bench_decode_1p1r.py  # 性能基准+CUDA/多卡：微基准测量 1p1r HybridEngineRollout decode 的 prefill/decode_forward/sampling/overhead 每步毫秒耗时，import deepspeed.runtime.rollout.hybrid_engine_rollout.HybridEngineRollout，用法示例模型 Qwen/Qwen2.5-0.5B-Instruct（HF）。
+  - training/opsd/config.py  # 被 main.py import 的库/配置 dataclass（main.py 第 26 行 from config import OPSDConfig），import deepspeed.runtime.rollout.RolloutConfig 并校验 rollout.engine 只能为 hybrid_engine，非可运行入口。
+  - training/opsd/data.py  # 被 main.py import 的库/PromptDataset 与 LeftPaddedPromptCollator（main.py 第 27 行），读 JSONL 并把 prompt 左填充，tests/test_data.py 亦 import 它，非可运行入口。
+  - training/opsd/losses.py  # 被 trainer.py import 的库/蒸馏损失（trainer.py from losses import streamed_distillation_loss，tests/test_losses.py import chunked_distillation_loss），实现 forward_kl/reverse_kl/jsd 分块计算，非可运行入口。
+  - training/opsd/main.py  # 多卡+外部依赖（rollout）：scripts/train_opsd_hybrid.sh 默认 NUM_GPUS=8、scripts/smoke_autotp.sh 用 deepspeed --num_gpus 2 启动本文件，main.py 调 deepspeed.runtime.rollout.build_rollout（hybrid_engine 引擎，config 校验要求 engine 必须是 hybrid_engine），默认模型 Qwen/Qwen2.5-0.5B-Instruct（student）与 Qwen/Qwen2.5-Math-7B-Instruct（teacher）需 HF 远程下载，数据为本仓 data/prompts.jsonl；同 example 的 2 个 .sh 启动器已并入本条。
+  - training/opsd/teacher.py  # 被 main.py import 的库/教师模型封装（main.py 第 29 行 from teacher import TeacherWrapper），含 TeacherLogitCache 的 CPU 缓存与 lazy-import transformers/deepspeed，tests/test_teacher_caching.py import 其中缓存类，非可运行入口。
+  - training/opsd/test_student_autotp_zero3.py  # 两卡本可覆盖 AutoTP=2+ZeRO-3+CPU offload，且主体用 get_accelerator；但结束日志第54行硬调用 torch.cuda.max_memory_allocated()，NPU torch 无该 CUDA API，在“不改 example 源码”约束下训练后仍必失败，暂不接入。
+  - training/opsd/test_teacher_autotp_zero3.py  # 两卡本可覆盖 TeacherWrapper AutoTP=2+CPU offload；但结束日志第41行硬调用 torch.cuda.max_memory_allocated()，NPU torch 无该 CUDA API，且默认 1.5B 模型需改走本地 ModelScope 路径，暂不接入。
+  - training/opsd/tests/test_data.py  # 库/配套物：OPSD 的 pytest 单元测试，用 fake tokenizer 验证左填充 collator 布局/截断/pad-id 回退（CPU-only，无需 GPU），非可运行入口。
+  - training/opsd/tests/test_losses.py  # 库/配套物：OPSD 的 pytest 单元测试，CPU-only 校验 forward/reverse KL 与 JSD 蒸馏损失的数值正确性，非可运行入口。
+  - training/opsd/tests/test_teacher_caching.py  # 库/配套物：OPSD 的 pytest 单元测试，CPU-only 验证 TeacherLogitCache 的 bf16 打包/分块读取/错误边界，非可运行入口。
+  - training/opsd/trainer.py  # 被 main.py import 的库/训练循环（main.py 第 30 行 from trainer import OPSDTrainer），依赖 deepspeed.runtime.rollout.RolloutEngine/RolloutRequest，非可运行入口。
+  - training/opsd/utils.py  # 被 trainer.py、losses.py 与 tests import 的库/掩码工具（build_response_mask），刻意保持无 deepspeed/distributed 依赖以便 CPU 单测，非可运行入口。
+  - training/pipeline_parallelism/alexnet.py  # 被 train.py import 的 AlexNet 模型定义，非可运行入口。
+  - training/stable_diffusion/inf_txt2img_loop.py  # CUDA 绑定+可多卡：第 20 行 device=torch.device(f"cuda:{local_rank}")、第 46/53 行 torch.Generator("cuda") 硬编码 CUDA，按 WORLD_SIZE 以 deepspeed.init_inference(pipe, mp_size=world_size) 做 fp16 Stable Diffusion 2.1 多卡推理，默认模型 stabilityai/stable-diffusion-2-1-base（远程），无启动 .sh。
+  - training/stable_diffusion/local_pipeline_stable_diffusion.py  # 被 inf_txt2img_loop.py import 的库/SD 推理 pipeline（inf_txt2img_loop.py 第 4 行 from local_pipeline_stable_diffusion import StableDiffusionPipeline），基于 diffusers 的本地化实现，非可运行入口。
+  - training/stable_diffusion/train_sd_distil_lora.py  # 外部依赖+远程大模型：mytrainbash.sh 设 MODEL_NAME=stabilityai/stable-diffusion-2-1-base 后以 accelerate launch 启动本脚本，脚本依赖 accelerate/diffusers/huggingface_hub（check_min_version("0.17.0.dev0")）并以 create_repo/upload_folder 上传 HF Hub（需 token），做 SD 蒸馏训练；同 example 的 1 个 .sh 启动器已并入本条。
+  - training/tensor_parallel/basic_example/autotp_example.py  # 多卡+CUDA：默认 --tp_size 4 --dp_size 2 需 8 卡（build_tp_dp_groups 断言 tp_size*dp_size==world_size），第 91 行 device=torch.device(f"cuda:{rank % torch.cuda.device_count()}") 硬编码 CUDA，默认模型 meta-llama/Llama-3.1-8B（HF 远程），无启动脚本。
+  - training/tensor_parallel/basic_example/autotp_memory_compare.py  # 多卡+CUDA：默认 tp_size=4、dp_size=2 需 8 卡，torch.cuda 设备硬编码，默认模型 meta-llama/Llama-3.1-8B（HF 远程），--mode config/traditional 对比两种 AutoTP 初始化数值路径的显存占用，无启动脚本。
+  - training/tensor_parallel/custom_patterns/autotp_custom_patterns.py  # 多卡+CUDA：默认 tp_size=4、dp_size=2 需 8 卡，main() 中 torch.cuda.set_device(local_rank) 与 torch.device(f"cuda:{local_rank}") 硬编码 CUDA，默认模型 EleutherAI/pythia-6.9b（HF 远程），用 partition_config 自定义 QKV/MLP 切分模式做 AutoTP 训练，无启动脚本。
+  - training/tensor_parallel/hf_integration/train.py  # 多卡+CUDA：run.sh 默认 num_gpus=8（或按 AUTOTP_SIZE 4/8 调整）用 deepspeed --num_gpus 启动本文件，train.py 是 HF Trainer 微调脚本，权重默认 facebook/opt-125m（HF 远程），--data_path ./alpaca_data.json（本仓 23MB），zero1tp/zero2tp/tp 模式启用 AutoTP 张量并行需多卡；同 example 的 1 个 .sh 启动器已并入本条。
+  - training/tensor_parallel/hf_integration/train_bench_length.py  # 配套物：train.py 的变体，_tokenize_fn 中 padding="max_length" 把序列统一 pad 到 model_max_length 以便固定长度性能基准测量（文件头注明 for benchmarking purposes），import utils 复用数据加载函数，无独立 .sh，需 deepspeed 多卡启动。
+  - training/tensor_parallel/hf_integration/utils.py  # 被 train.py/train_bench_length.py import 的库/数据与 OpenAI 解码工具（jload 读数据文件、openai_completion 用 text-davinci-003 调 OpenAI Completion API），非可运行入口。
