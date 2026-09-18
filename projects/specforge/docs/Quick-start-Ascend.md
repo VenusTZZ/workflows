@@ -283,60 +283,6 @@ PY
 <MODEL_PATH>
 ```
 
-### 打 specforge NPU 补丁
-
-> SpecForge 上游 commit [`50b6287`](https://github.com/sgl-project/SpecForge/commit/50b6287) (`feat(mooncake): pooled pinned or device receive buffers for feature reads`) 引入 `ReceiveBufferPool`，配合后续 8 个 CUDA-only 修复合入 main，截至 `ed64d275` 仍未处理 Ascend NPU 路径。`_new_slot` 里的 `pin = torch.cuda.is_available()` 在 NPU 上恒为 False，导致 `register_buffer` 把 pageable host 内存交给 Mooncake，触发 **-600 ("RDMA host reads require registered memory")** —— trainer 第一个 data fetch 就崩，监控脚本报 `smoke: FAILED - no step/loss output in train log`。
->
-> 同一文件已经定义了 `_ascend_runtime_available()`（line 122–146，看 `ASCEND_RT_VISIBLE_DEVICES` 决定要不要 import `torch_npu`），上游忘了 OR 它进去。本节直接把这一行 patch 掉，让 `pinned` 在 NPU 上也请求 page-locked host memory。
->
-> **幂等**：以 `# npu-pinned-pool-fix-2026-09-17` 哨兵字符串做 guard。不能用 `_ascend_runtime_available` 本身做 guard——同名函数已存在，`grep -qF` 永远 true、patch 静默 no-op。
-
-```python #test-setup id="smoke-patch-specforge-mooncake"
-import importlib.util, os
-
-# 装到 site-packages 的副本才是 specforge train 实际加载的；上游 NPU 支持
-# （curnane-lab/npu_disaggregated #722 等）是独立 PR，main 上没人修这个 bug。
-# 用 find_spec() 拿路径而不真正 import，避免触发 mooncake 传输引擎初始化。
-mooncake_file = os.path.abspath(
-    importlib.util.find_spec("specforge.runtime.data_plane.mooncake_store").origin
-)
-guard = "npu-pinned-pool-fix-2026-09-17"
-old = (
-    "        else:\n"
-    "            pin = torch.cuda.is_available()\n"
-    "            storage = torch.empty(nbytes, dtype=torch.uint8, pin_memory=pin)"
-)
-new = (
-    "        else:\n"
-    f"            pin = torch.cuda.is_available() or _ascend_runtime_available()  # {guard}\n"
-    "            storage = torch.empty(nbytes, dtype=torch.uint8, pin_memory=pin)"
-)
-with open(mooncake_file) as f:
-    src = f.read()
-if guard in src:
-    print("smoke: specforge ReceiveBufferPool already NPU-aware; skipping")
-elif old not in src:
-    raise SystemExit(f"patch anchor not found in {mooncake_file}")
-else:
-    with open(mooncake_file, "w") as f:
-        f.write(src.replace(old, new, 1))
-    print(f"smoke: patched {mooncake_file} for NPU")
-```
-
-跑完会看到一行（具体路径取决于 specforge 安装位置，fuzzy 匹配只校验 `smoke: patched` 与 `mooncake_store.py for NPU` 两段）：
-
-```
-smoke: patched xxx/site-packages/specforge/runtime/data_plane/mooncake_store.py for NPU
-```
-
-或 idempotent 重跑时：
-
-```
-smoke: specforge ReceiveBufferPool already NPU-aware; skipping
-```
-
-**何时需要重做**：上游修了 `pin = torch.cuda.is_available()` 那行、guard 找不到也 anchor 找不到时，patch 会失败并保留 stderr —— 按新 anchor 重写 patch 即可，guard 字符串不变。
-
 ### 打补丁 + apt 依赖
 
 SGLang 需要打 spec-capture 补丁才能在推理时导出训练所需的 hidden states。SpecForge 仓库自带补丁和 apply 脚本，对镜像里的 sglang 0.5.18 直接执行；脚本处理不了的部分（Ascend 挂载段改写、个别字段兜底插入）由下方命令块内的 Python 段完成，均已验证过幂等可重跑。
@@ -719,7 +665,7 @@ CI 框架逐段执行本文命令块，单段 stdout/stderr 整段缓冲，只�
 
 #### 启动 specforge train（后台）
 
-在卡 1 上后台启动 1 步训练（batch/步数压到最小的 smoke 配置），30 秒后确认进程还活着——典型失败（mooncake 没起或补丁没生效）会在 30s 内直接退出：
+在卡 1 上后台启动 1 步训练（batch/步数压到最小的 smoke 配置），30 秒后确认进程还活着——典型失败（mooncake 没起或 sglang spec-capture 补丁没生效）会在 30s 内直接退出：
 
 ```shell #test id="smoke-train-launch" load="model_path>>MODEL_PATH" load="sharegpt_path>>SHAREGPT_PATH"
 set -euo pipefail
@@ -729,6 +675,13 @@ RECIPE="${SPECFORGE_RECIPE:-examples/configs/online/disaggregated/external/qwen3
 pushd "$SPECFORGE_ROOT" >/dev/null
 # 配方 output_dir 残留的 producer_claim / failed 标记会让 _claim_fresh_control_path 拒绝继续。
 rm -rf outputs/qwen3.5-4b-dflash-npu-online
+# 上游 38970f6d（2026-09-15 合入）把 deployment.disaggregated.receive_buffers 默认值从
+# pageable 改成 pinned：NPU 上 ReceiveBufferPool._new_slot 的 pin = torch.cuda.is_available()
+# 恒为 False，pageable host buffer register_buffer 返回 -600，且 f22bd36c 把该返回码变成硬
+# RuntimeError——trainer 第一个 feature fetch 就崩（run 35225016001）。显式回退 pageable：
+# pool=None 走 _store_get_tensor 老路径，register 失败被忽略、TCP get_into 正常工作（9/4
+# 成功 run 33872042104 即此语义）。上游给 pinned 补上 NPU 适配（同文件已有
+# _ascend_runtime_available()，一行 OR 的事）后可去掉此 override。
 # PYTHONUNBUFFERED=1 让 specforge train 的 stdout 无缓冲写 /tmp/smoke-train.log；
 # 即使外层框架缓冲整段命令输出，日志文件里也是行粒度（出问题后能 tail 看到断点位置）。
 PYTHONUNBUFFERED=1 \
@@ -746,6 +699,7 @@ nohup specforge train -c "$RECIPE" \
     training.log_interval=1 \
     tracking.report_to=none \
     deployment.trainer.nproc_per_node=1 \
+    deployment.disaggregated.receive_buffers=pageable \
     model.target_model_path="<MODEL_PATH>" \
     model.embedding_key="model.language_model.embed_tokens.weight" \
     >/tmp/smoke-train.log 2>&1 &
