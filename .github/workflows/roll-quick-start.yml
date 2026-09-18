@@ -19,9 +19,8 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # Enable after the first successful workflow_dispatch run.
-  # schedule:
-  #   - cron: '35 */6 * * *'
+  schedule:
+    - cron: '35 */6 * * *'
   workflow_dispatch:
 
 permissions:
