@@ -62,6 +62,19 @@ set +u
 source /home/coder/.hdc/env.sh 2>/dev/null || true
 set -u
 
+# PYTHONPATH for the source-built cv2 — must be set in this step as
+# well, because the examples-template workflow gives each step a
+# fresh shell and the PYTHONPATH exported by setup_example.sh does
+# not carry across (CI step boundary, not a same-shell export).
+# setup_example.sh builds into this prefix; if it's missing the
+# source build never ran and the example would fail on import anyway.
+OPENCV_INSTALL=/usr/local/opencv-cann
+PP="$OPENCV_INSTALL/lib/python3.12/site-packages"
+if [[ -d "$PP" ]] && [[ ":${PYTHONPATH:-}:" != *":$PP:"* ]]; then
+    export PYTHONPATH="$PP:${PYTHONPATH:-}"
+fi
+echo "run: PYTHONPATH -> $PYTHONPATH"
+
 # Sanity guard: source-built cv2 must be importable for the script to
 # do anything useful (DNN_BACKEND_CANN == 0 means the pip wheel was
 # loaded instead). Print a clear error rather than failing at the
