@@ -152,12 +152,18 @@ class RollProjectTests(unittest.TestCase):
             'vllm-ascend==0.23.0rc1',
             'triton-ascend==3.2.1',
             'modelscope==1.37.0',
+            'reasoning-gym==0.1.23',
             'repo.huaweicloud.com/repository/pypi/simple',
         ):
             self.assertIn(token, text)
         self.assertIn(
             'ms_download_model "Qwen/Qwen2.5-0.5B-Instruct"', text)
         self.assertNotIn('quay.io', text)
+
+    def test_run_entry_clears_vllm_incompatible_allocator(self) -> None:
+        text = (PROJECT / 'scripts/run_example.sh').read_text(
+            encoding='utf-8')
+        self.assertIn('unset PYTORCH_NPU_ALLOC_CONF', text)
 
 
 if __name__ == '__main__':

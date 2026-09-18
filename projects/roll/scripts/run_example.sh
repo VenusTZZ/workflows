@@ -71,6 +71,13 @@ source_vendor_env() {
 source_vendor_env /usr/local/Ascend/ascend-toolkit/set_env.sh
 source_vendor_env /usr/local/Ascend/nnal/atb/set_env.sh
 
+# vLLM-Ascend's CaMemAllocator asserts when
+# PYTORCH_NPU_ALLOC_CONF=expandable_segments:True (v0.3.0 camem.py,
+# tracked upstream at pytorch#147851).  ROLL clears it for vLLM workers,
+# but the EngineCore child inherits the job-level value exported during
+# setup, so clear it for the vLLM-only rollout.
+unset PYTORCH_NPU_ALLOC_CONF
+
 # Single-node Ray contract for the thin engine. ROLL starts Ray itself and
 # derives HCCL ranks from the per-worker ASCEND_RT_VISIBLE_DEVICES.  The
 # domestic CANN base image does not pre-set that variable the way the

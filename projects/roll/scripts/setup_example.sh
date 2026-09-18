@@ -158,10 +158,12 @@ install_rollout_stack() {
   # with.
   (cd "$target_root" && python -m pip install -q \
     --ignore-requires-python --no-deps "gem-llm==0.0.4")
+  # gem-llm 0.0.4 hard-requires reasoning-gym==0.1.23, which
+  # --no-deps drops; the agentic env import chain breaks without it.
   python -m pip install -q \
     "numpy==1.26.4" "transformers==4.57.6" "tensorboard==2.20.0" \
     "antlr4-python3-runtime==4.9.3" "modelscope==1.37.0" \
-    "gym_sokoban" "gymnasium[toy-text]"
+    "reasoning-gym==0.1.23" "gym_sokoban" "gymnasium[toy-text]"
 
   python - <<'PY'
 import torch, torch_npu, vllm, vllm_ascend, triton
