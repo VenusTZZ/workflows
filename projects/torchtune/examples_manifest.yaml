@@ -22,14 +22,27 @@ supported:
   # ===== 已在 coder hdc-stable-npu-3（910B4×2, torch 2.11.0+cpu, torch_npu 2.11.0,
   # CANN 9.1.0）端到端跑通（setup_example.sh 实跑 + recipe exit 0），依赖线 pin
   # 见 setup_example.sh 注释 =====
-  # 验证日期：2026-09-18；torchtune checkout=v0.6.1（latest release，engine
-  # monitor 自动取）；workflow_dispatch default=main（匹配 peft/torchtitan 模式，
-  # main HEAD 现在能跑——见 setup_example.sh 注释里 torch 2.11.0 升级解释）。
-  # 关键 pin：setup_torchtune() 动态探测 common_utils.py:19 的 NF4Tensor
-  # import line：
-  #   v0.6.x  → torchao.dtypes.nf4tensor（pin torchao==0.13.0）
-  #   main    → torchao.quantization（pin torchao==0.18.0，需 torch>=2.11；
-  #             ensure_torch_stack() 现在装 torch 2.11.0，这条路也通了）
+  # 验证日期：2026-09-18；torchtune checkout=main HEAD（commit bd2a0fc "docs:
+  # note torchtune wind-down in README"，CI run 35306700347 target_ref=main
+  # 也走这条）。v0.6.1 release tag 上的 manifest 也 work（patch guards 跳过
+  # 已有 import 的文件，no-op），但 main HEAD 才是 CI 实际跑的 target_ref。
+  # 关键 pin + patch：
+  #   - setup_torchtune() 动态探测 common_utils.py:19 的 NF4Tensor import
+  #     line：v0.6.x → torchao.dtypes.nf4tensor（pin torchao==0.13.0）；
+  #     main HEAD → torchao.quantization（pin torchao==0.18.0，需
+  #     torch>=2.11，ensure_torch_stack() 已装 torch 2.11.0）
+  #   - main HEAD 多模态 unconditional import torchvision
+  #     （data/_utils.py:12，路径：datasets/__init__.py:7 → multimodal →
+  #     _llava → data._messages → data → data._utils → import torchvision），
+  #     ensure_torch_stack() 显式装 torchvision==0.26.0+cpu（per 上游
+  #     compat table torch 2.11 ↔ torchvision 0.26）
+  #   - main HEAD 两个 upstream bug 由 patch_main_head_bugs() 修：
+  #     rlhf/loss/dpo.py 缺 typing/dataclass import；
+  #     training/quantization.py 缺 `import torch`（使用 torch.int4）
+  #   - 量化 Int8DynActInt4WeightQuantizer 的默认 groupsize=256 不整除
+  #     Qwen2.5-0.5B 的 hidden_size=896（896/256=3.5），overlay 改成
+  #     groupsize=128（896/128=7）。v0.6.1 的 torchao 0.13 不做这个校验
+  #     所以这个 overlay 对 v0.6.1 也不影响。
 
   # LoRA SFT：Qwen2.5-0.5B + 50 行 alpaca，1 step，1 卡 ~12 秒
   - path: recipes/lora_finetune_single_device.py
@@ -113,6 +126,14 @@ supported:
     timeout_minutes: 15
 
   # 量化：Qwen2.5-0.5B，Int8DynActInt4 权重量化（torchao）
+  # Int8DynActInt4WeightQuantizer 用 torchao 0.18 的
+  # Int8DynamicActivationIntxWeightConfig + PerGroup(groupsize=256)，
+  # 要求每一维的 hidden_size 是 groupsize 的倍数。Qwen2.5-0.5B 的
+  # hidden_size=896，896/256=3.5 不整除 → AssertionError at
+  # choose_qparams_affine。v0.6.1 跑得通是因为 torchao 0.13 的
+  # int8_dynamic_activation_int4_weight 不做这个 block_size 校验。
+  # 修法：overlay 把 groupsize 改成 128（896/128=7，整除）。
+  # 量化算法仍是 Int8DynActInt4，意图保留，只是 group size 调小。
   - path: recipes/quantize.py
     profile: torchtune
     runner: linux-aarch64-a2-1
@@ -127,6 +148,7 @@ supported:
       - checkpointer.checkpoint_files=[model.safetensors]
       - checkpointer.model_type=QWEN2  # 同 generate：走 qwen2_hf_to_tune
       - checkpointer.output_dir=${CI_OUTPUT_DIR}  # 量化结果落 CI 工作目录
+      - quantizer.groupsize=128  # Qwen2.5-0.5B hidden_size=896，128 是能整除的标准 group size
     timeout_minutes: 15
 
   # 评测：Qwen2.5-0.5B + lm_eval + 自定义 ci_truthfulqa_mc2 任务（本地 JSON 驱动）
