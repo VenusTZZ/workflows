@@ -182,6 +182,14 @@ PY
 #!/usr/bin/env bash
 # Launcher used by supported demo_data/*/config.py entries. Manifest
 # invokes it as `xtuner_train_demo.sh <cfg-path> <overlay args>`.
+# run_example.sh's *.sh branch sets cwd to $TARGET_ROOT/scripts/ before
+# invoking this launcher (matches torchtitan's `tune run` launcher
+# pattern), but xtuner.tools.train reads the cfg via `osp.isfile(...)`
+# which is cwd-relative. The manifest cfg path is relative to the
+# release checkout (e.g. `examples/demo_data/multi_turn_2/config.py`),
+# so this launcher must cd back to $TARGET_ROOT before invoking the
+# train module. TARGET_ROOT is exported by run_example.sh.
+cd "${TARGET_ROOT:?TARGET_ROOT is required}" || exit 1
 exec python -m xtuner.tools.train "$@"
 SH
   chmod +x "$TARGET_ROOT/scripts/xtuner_train_demo.sh"
