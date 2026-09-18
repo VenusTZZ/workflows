@@ -250,12 +250,14 @@ supported:
 
 # ===== unsupported（每条附理由：coder npu-3 2026-09-14 逐例验证 / 静态分析；
 # 2026-09-17 对照上游 main db7d68a 源码逐条审计 + 实测复跑取证；
-# 2026-09-18 复审（peft HEAD = a5526d2 复测后）：
+# 2026-09-18 复审（peft HEAD = a5526d2 复测后；2026-09-18 二次校正对照 v0.21.0）：
 #   - 删 9 条 utility 误收录（convert_*/eval/load-only/HTTP client/synth 等
 #     非 training example——audit 工具按 .py/.sh 文件名扫描，不区分
-#     utility 与 example，误将 9 条非训练脚本纳入 unsupported，现移除）
-#   - 2 条 upstream 已删（kasa_finetuning/、shadow_finetuning/），归类归到
-#     末尾「archived」说明
+#     utility 与 example，误将 9 条非训练脚本纳入 unsupported，现移到末尾
+#     「Archived」段以备查）
+#   - 复审中曾**误判** kasa/shadow 为 "upstream 已删"（仅看 a5526d2 sparse
+#     checkout），二次校验发现 main HEAD `3a1f888` + v0.21.0 都还在，**已
+#     恢复**至 unsupported 主列表（详见底部 A2 段教训）
 #   - 修 3 条过期注释（idx 8/10/25，详见条目）
 # 行号以 db7d68a 为准；"待复跑取证" = 实测挂但源码找不到对应阻塞点，
 # "翻案候选" = 无后端硬编码，换模型/换数据/多卡 runner 即可能转 supported，
@@ -778,6 +780,12 @@ unsupported:
   # 216-217），归因待复跑取证
   - examples/unilora_finetuning/unilora_finetuning.py
 
+  # coder 实测 backward ERR00100 归因待复跑取证；脚本直接调 variants 路径
+  # variants.py:1567-1594 linear+广播乘，疑 bf16 nll 反向或环境问题。
+  # 注：2026-09-18 复审时误归类为「upstream 已删」是错的——v0.21.0 / main HEAD
+  # 该目录仍存在；现恢复至此作为 unsupported 真 training example。
+  - examples/kasa_finetuning/kasa_finetuning.py
+
   # 版本敏感：trl 1.10 可跑（exit 0）、1.12 backward 崩，与 mica/miss 配方冲突
   # （脚本自身无 NPU 特有路径，断裂点在 trl 内部，待复跑取证）
   - examples/psoft_finetuning/psoft_finetuning.py
@@ -796,6 +804,13 @@ unsupported:
   # :52-60 设备分支 cuda/xpu/else→cpu，无 npu → device_map="cpu" 先落主机内存
   # （原"8B HBM 溢出"不成立：fp16/bf16 8B≈16G）；README 提供 accelerate launch 用法
   - examples/lorafa_finetune/lorafa_finetuning.py
+
+  # :59 device = "cuda" if torch.cuda.is_available() else "cpu"——NPU 上落 CPU、
+  # 单设备硬编码多卡无效（属实）；但实测 SIGKILL 是主机 RAM OOM（fp32 8B≈32GB）
+  # 而非"HBM"；默认模型 Qwen3-8B（非 llama 系）。
+  # 注：2026-09-18 复审时误归类为「upstream 已删」是错的——v0.21.0 / main HEAD
+  # 该目录仍存在；现恢复至此作为 unsupported 真 training example。
+  - examples/shadow_finetuning/shadow_finetuning.py
 
   # :59 device = "cuda" if torch.cuda.is_available() else "cpu"——NPU 上落 CPU、
   # 单设备硬编码多卡无效（属实）；但实测 SIGKILL 是主机 RAM OOM（fp32 8B≈32GB）
@@ -853,13 +868,15 @@ unsupported:
 #     三条 stage-1 准备（synthesize 产 distill.jsonl，train 包装 distill）；无独立训练循环。
 #   → audit 工具若再标这 9 条 +new 是已知 false-positive，下次可忽略或写 .audit-exclude。
 
-# ---- A2. 2 条 upstream peft HEAD（a5526d2）已删除（已从 unsupported 主列表删除）：
-#   - examples/kasa_finetuning/kasa_finetuning.py
-#     原行号归因：截断在 init detach 后、forward 仅 linear+广播乘
-#     （variants.py:1567-1594），疑 bf16 nll 反向或环境问题。
-#   - examples/shadow_finetuning/shadow_finetuning.py
-#     原行号归因：device = "cuda" if torch.cuda.is_available() else "cpu"；
-#     实测 SIGKILL 是主机 RAM OOM（fp32 8B≈32GB）而非 HBM；默认模型 Qwen3-8B。
-#   → 这两条无法在 NPU 上复测，归档保留原注释备查；CI/coder 看到这俩名字说明
-#     它们已经从 upstream peft 仓移除。
+# ---- A2. 【已校正】早期错误归类（2026-09-18 复审时把 kasa/shadow 误删）：
+#   复审时 Explore agent 在 audit-cache 的 sparse-checkout at commit `a5526d2`
+#   没看到 kasa_finetuning/、shadow_finetuning/，**误归类为 upstream 已删**。
+#   实际验证（2026-09-18 v0.21.0 + main HEAD `3a1f888`）：
+#     - examples/kasa_finetuning/    HEAD ✓ / v0.21.0 ✓ / v0.20.0 ✓ 全部存在
+#     - examples/shadow_finetuning/  HEAD ✓ / v0.21.0 ✓ / v0.20.0 ✓ 全部存在
+#   两条都是真 training example，**已恢复至 unsupported 主列表**（恢复时连同原
+#   归因注释一起放回：kasa 走 unilora 段、shadow 走 lorafa 段）。
+#   教训：判断 "upstream 已删" 必须 anchor 到 latest release tag 或 main HEAD，
+#   不能只看 sparse-checkout 中间 commit——peft 这种日更仓的中间状态可能不
+#   代表最终发布。
 
