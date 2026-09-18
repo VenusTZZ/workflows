@@ -189,11 +189,19 @@ prepare_dataset_shim
 
 # Launcher modes for python entry points. LAUNCHER comes from the
 # manifest entry (optional field, empty = default bare run):
+#   torchrun — torch.distributed.run with --nproc_per_node = visible
+#     NPU count; activates the multi-card paths (DDP wrap, comm hooks,
+#     gather_for_metrics cross-rank aggregation) that bare `python`
+#     silently skips on multi-card runners.
 #   accelerate-deepspeed — exercises the DeepSpeed config branch by
 #     launching via `accelerate launch --config_file` with a ZeRO-2
 #     bf16 DeepSpeed json materialized in the CI working copy (never
 #     committed). num_processes follows the visible NPU count so the
 #     same entry works on a2-1/a2-2 runners.
+count_npus() {
+  "$PYTHON" -c "import torch, torch_npu; print(torch.npu.device_count())"
+}
+
 prepare_deepspeed_configs() {
   local cfg_dir="$GITHUB_WORKSPACE/ci_patch"
   mkdir -p "$cfg_dir"
@@ -207,7 +215,7 @@ prepare_deepspeed_configs() {
 }
 EOF
   local npus
-  npus=$("$PYTHON" -c "import torch, torch_npu; print(torch.npu.device_count())")
+  npus=$(count_npus)
   cat > "$cfg_dir/accelerate-deepspeed.yml" <<EOF
 compute_environment: LOCAL_MACHINE
 deepspeed_config:
@@ -235,13 +243,27 @@ case "$LAUNCH_PATH" in
     ;;
   *)
     cd "$TARGET_ROOT"
-    if [[ "${LAUNCHER:-}" == "accelerate-deepspeed" ]]; then
-      prepare_deepspeed_configs
-      "$PYTHON" -m accelerate.commands.launch \
-        --config_file "$GITHUB_WORKSPACE/ci_patch/accelerate-deepspeed.yml" \
-        "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
-    else
-      "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
-    fi
+    case "${LAUNCHER:-}" in
+      accelerate-deepspeed)
+        prepare_deepspeed_configs
+        "$PYTHON" -m accelerate.commands.launch \
+          --config_file "$GITHUB_WORKSPACE/ci_patch/accelerate-deepspeed.yml" \
+          "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+        ;;
+      torchrun)
+        npus=$(count_npus)
+        echo "torchrun launcher: --nproc_per_node $npus"
+        "$PYTHON" -m torch.distributed.run \
+          --nproc_per_node "$npus" \
+          "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+        ;;
+      "")
+        "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+        ;;
+      *)
+        echo "unknown LAUNCHER: $LAUNCHER (supported: torchrun, accelerate-deepspeed)" >&2
+        exit 2
+        ;;
+    esac
     ;;
 esac

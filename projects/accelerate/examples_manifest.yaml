@@ -26,6 +26,9 @@ supported:
   #     - argparse required=True 必填（cv/complete_cv 的 --data_dir）
   #     - 显式 override 默认的（checkpointing_steps / output_dir / with_tracking / project_dir）
   # launcher 约定（可选字段，透传到 run_example.sh 的 LAUNCHER env）：
+  #   torchrun → torch.distributed.run --nproc_per_node <可见 NPU 数>，激活
+  #   多卡路径（DDP wrap / comm hook / 跨 rank 聚合）；用于特性激活依赖
+  #   多进程、裸 python 会静默退化的 example（a2-2 条目）。
   #   accelerate-deepspeed → run_example.sh 在 CI 工作副本物化 ZeRO-2 bf16
   #   ds json + accelerate launch --config_file 启动（num_processes 跟随
   #   可见 NPU 数）。用于特性激活依赖 launcher 的 example（deepspeed 分支）。
@@ -216,41 +219,48 @@ supported:
 
   # 多卡 launcher 验证：单进程 gather_for_metrics 返回本地 tensor（无 cross-rank 聚合），
   # example 本意场景缺失。a2-2 实跑 torchrun --nproc-per-node 2 多卡全 3 epochs exit 0。
+  # launcher: torchrun 让 CI 走同款多卡路径（nproc=可见 NPU 数），不再裸 python 退化。
   - path: examples/by_feature/multi_process_metrics.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-2
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    launcher: torchrun
     overlay_args: []
     timeout_minutes: 30
 
   # 多卡 launcher 验证：LocalSGD step() 在 distributed_type==NO 下直接 no-op 静默退化为
   # 普通训练 exit 0（accelerate/local_sgd.py:81 守卫），单进程验证不到 LocalSGD 行为。
-  # a2-2 实跑 torchrun --nproc-per-node 2 多卡全 3 epochs exit 0。
+  # a2-2 实跑 torchrun --nproc-per-node 2 多卡全 3 epochs exit 0。launcher: torchrun
+  # 让 CI 走同款多卡路径。
   - path: examples/by_feature/local_sgd.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-2
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    launcher: torchrun
     overlay_args: []
     timeout_minutes: 30
 
   # 多卡 launcher 验证：DDP wrap 条件 self.multi_device（accelerator.py:1883），单进程
   # 不 wrap，DistributedDataParallelKwargs(comm_hook=...) 完全不生效。a2-2 实跑 torchrun
-  # --nproc-per-node 2 多卡全 3 epochs exit 0。
+  # --nproc-per-node 2 多卡全 3 epochs exit 0。launcher: torchrun 让 CI 走同款多卡路径。
   - path: examples/by_feature/ddp_comm_hook.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-2
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    launcher: torchrun
     overlay_args: []
     timeout_minutes: 30
 
   # 多卡 launcher 验证：FSDP1 wrap / peak memory tracking 都需 launcher 触发
   # distributed_type != NO；裸 python 退化为普通训练。a2-2 实跑 torchrun
   # --nproc-per-node 2 --model_name_or_path bert-base-cased 全 3 epochs exit 0，
-  # peak mem 数值有效（1141MB 训练+1340MB eval/peak）。
+  # peak mem 数值有效（1141MB 训练+1340MB eval/peak）。launcher: torchrun
+  # 让 CI 走同款多卡路径。
   - path: examples/by_feature/fsdp_with_peak_mem_tracking.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-2
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    launcher: torchrun
     overlay_args:
       - --model_name_or_path bert-base-cased
     timeout_minutes: 30
