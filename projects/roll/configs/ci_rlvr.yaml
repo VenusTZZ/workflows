@@ -7,15 +7,15 @@ hydra:
 pg_variant: ppo
 exp_name: roll-ci-rlvr
 seed: 42
-logging_dir: ${CI_OUTPUT_DIR}/logs
-output_dir: ${CI_OUTPUT_DIR}/output
+logging_dir: ${oc.env:CI_OUTPUT_DIR}/logs
+output_dir: ${oc.env:CI_OUTPUT_DIR}/output
 system_envs:
   USE_MODELSCOPE: "1"
   MODEL_DOWNLOAD_TYPE: MODELSCOPE
 
 checkpoint_config:
   type: file_system
-  output_dir: ${CI_OUTPUT_DIR}/ckpt
+  output_dir: ${oc.env:CI_OUTPUT_DIR}/ckpt
 
 track_with: stdout
 
@@ -23,7 +23,7 @@ num_gpus_per_node: 4
 max_steps: 1
 save_steps: 10
 logging_steps: 1
-eval_steps: -1
+eval_steps: 1000
 resume_from_checkpoint: false
 
 rollout_batch_size: 2
@@ -58,7 +58,7 @@ actor_train:
   worker_cls: roll.pipeline.rlvr.actor_pg_worker.ActorPGWorker
   pg_variant: ppo
   model_args:
-    attn_implementation: fa2
+    flash_attn: fa2
     disable_gradient_checkpointing: false
     dtype: bf16
     model_type: ~
@@ -72,10 +72,12 @@ actor_train:
   data_args:
     template: qwen2_5
     file_name:
-      - ci_math_8.jsonl
+      # v0.3.0 DataArguments has no dataset_dir field (dacite drops the
+      # YAML key and get_dataset falls back to '.'), so embed the absolute
+      # fixture path directly in file_name.
+      - ${oc.env:FIXTURE_DIR}/ci_math_8.jsonl
     domain_interleave_probs:
       math_rule: 1
-    dataset_dir: ${FIXTURE_DIR}
     messages: messages
     interleave_probs: "1.0"
     preprocessing_num_workers: 1
@@ -88,12 +90,12 @@ actor_train:
       reshard_after_forward: true
       offload_policy: false
       use_batched_model_update: false
-  device_mapping: [0, 1]
+  device_mapping: list(range(0,2))
   infer_batch_size: 1
 
 actor_infer:
   model_args:
-    attn_implementation: fa2
+    flash_attn: fa2
     disable_gradient_checkpointing: true
     dtype: bf16
   generating_args:
@@ -113,26 +115,21 @@ actor_infer:
       max_model_len: 256
       enforce_eager: true
       load_format: auto
-  device_mapping: [2]
+  device_mapping: list(range(2,3))
   infer_batch_size: 1
 
 reference:
   model_args:
-    attn_implementation: fa2
+    flash_attn: fa2
     disable_gradient_checkpointing: true
     dtype: bf16
     model_type: ~
   data_args:
     template: qwen2_5
   strategy_args:
-    strategy_name: fsdp2_infer
-    strategy_config:
-      fsdp_size: 1
-      param_dtype: bf16
-      reduce_dtype: bf16
-      reshard_after_forward: true
-      offload_policy: false
-  device_mapping: [3]
+    strategy_name: hf_infer
+    strategy_config: ~
+  device_mapping: list(range(3,4))
   infer_batch_size: 1
 
 rewards:
@@ -143,5 +140,5 @@ rewards:
     data_args:
       template: qwen2_5
     tag_included: [ci_math]
-    world_size: 8
+    world_size: 1
     infer_batch_size: 1

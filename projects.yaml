@@ -667,3 +667,4 @@ projects:
     dir: projects/roll
     workflows:
       quick_start: .github/workflows/roll-quick-start.yml
+      examples: .github/workflows/roll-examples.yml
