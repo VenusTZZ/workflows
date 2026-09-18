@@ -123,7 +123,12 @@ supported:
       - 'prompt.user="The capital of France is"'  # Dict[Role,str] 格式（generate.py:104 强类型）；内嵌空格会被 shlex.split 拆开，run_example.sh 必须改用 shlex.quote 包值或收紧为单 token；CI 矩阵里此 overlay_arg 在 coder 复现必抛 ValueError "got capital"，由 examples-guard 守护
       - 'prompt.system=null'  # 同上：Dict 键
       - max_new_tokens=20  # upstream 默认 300：压 token 数
-    timeout_minutes: 15
+    # 2026-09-18 CI run 35322839791：timeout=15 在 setup 阶段撞墙，torch 148MB
+    # 走 cluster pip cache 被 4 个并发 job 压到 237 kB/s，光 torch 就要 10min；
+    # torchvision 装到一半容器被 k8s 杀掉 ("container implementation failed")。
+    # 跟同 run 的 lora_finetune/full_finetune/lora_dpo（timeout=30，setup 17min 内
+    # 跑通）对齐，提到 30。
+    timeout_minutes: 30
 
   # 量化：Qwen2.5-0.5B，Int8DynActInt4 权重量化（torchao）
   # Int8DynActInt4WeightQuantizer 用 torchao 0.18 的
@@ -149,7 +154,8 @@ supported:
       - checkpointer.model_type=QWEN2  # 同 generate：走 qwen2_hf_to_tune
       - checkpointer.output_dir=${CI_OUTPUT_DIR}  # 量化结果落 CI 工作目录
       - quantizer.groupsize=128  # Qwen2.5-0.5B hidden_size=896，128 是能整除的标准 group size
-    timeout_minutes: 15
+    # 2026-09-18 CI run 35322839791：同上 setup timeout 不足，提到 30
+    timeout_minutes: 30
 
   # 评测：Qwen2.5-0.5B + lm_eval + 自定义 ci_truthfulqa_mc2 任务（本地 JSON 驱动）
   # eleuther_eval recipe 在 __init__ 强检 `version("lm-eval") < "0.4.5"`
@@ -194,7 +200,11 @@ supported:
       - limit=2  # fixture 只有 2 行
       - batch_size=1  # 0.5B + 多项选择 5 个候选，loglikelihood 一次跑就行
       - max_seq_length=512  # upstream 默认 4096：2 行短问答压短
-    timeout_minutes: 15
+    # 2026-09-18 CI run 35322839791：setup 比其它 3 个 recipe 还要重（多装
+    # lm-eval==0.4.5 + evaluate==0.4.6 + sacrebleu + scikit-learn 等 30+ 包），
+    # 15min 连 setup 跑不完；同 run 的 lora_finetune/full_finetune/lora_dpo
+    # 用 30min 全过，对齐到 30。
+    timeout_minutes: 30
 
 # ===== unsupported（每条附 runtime-verified 标签 + 实测失败堆栈） =====
 # 2026-09-15 在 coder hdc-stable-npu-4（910B4×2, torch 2.12.0+cpu, torch_npu 2.12.0,
