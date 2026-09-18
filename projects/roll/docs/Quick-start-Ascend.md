@@ -121,6 +121,7 @@ set -e
 git clone --branch <ref> https://github.com/alibaba/ROLL.git
 cd ROLL
 grep -v '^gem-llm' requirements_common.txt > requirements_npu.txt
+sed -i 's/^decord$/decord2/' requirements_npu.txt
 pip install -r requirements_npu.txt
 pip install --ignore-requires-python gem-llm==0.0.4
 pip install "numpy==1.26.4"
