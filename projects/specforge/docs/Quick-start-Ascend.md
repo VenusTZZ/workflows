@@ -415,20 +415,6 @@ PY
 fi
 popd >/dev/null
 
-# wheel 自带的 bundled libs 走 RPATH 在 site-packages/mooncake/ 互相解析，但
-# libcurl4 / libibverbs1 / libnuma1 wheel 没带——apt 补，否则 import mooncake.store 报错。
-apt-get update -qq >/dev/null 2>&1
-apt-get install -qq -y --no-install-recommends \
-    libcurl4 libibverbs1 libnuma1 >/dev/null 2>&1
-
-# 防御性 verify：再做一次 import 自检，撞 fail 把 stderr 整段打出来好排查
-#（典型根因是上面的 apt 依赖没装成功）。
-if ! python -c 'import mooncake.store' 2>/tmp/smoke-stub.err; then
-    echo "smoke: FAILED - mooncake.store import still broken:" >&2
-    tail -10 /tmp/smoke-stub.err >&2 || true
-    exit 1
-fi
-
 # 防御性 verify：base patch 必须在 server_args.py 引入 enable_spec_capture /
 # spec_capture_aux_layer_ids / spec_capture_method 三个字段（run 33493594121 复现
 # 过 apply 脚本 stdout 说成功但 server_args.py 没落盘——可能是 git apply 在非 git
