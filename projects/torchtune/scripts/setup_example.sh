@@ -296,11 +296,21 @@ patch_main_head_bugs() {
   # → `from .dpo import DPOLoss` → NameError cascading from TypeVar →
   # Optional. Triggered by `lora_dpo_single_device.py` via overlay_args
   # `loss._component_=torchtune.rlhf.loss.DPOLoss`.
-  if [[ -f "$dpo" ]] && ! grep -q "^from typing import.*TypeVar" "$dpo"; then
+  #
+  # Guard: `from torchtune.utils._logging import deprecated` exists in
+  # main HEAD only (v0.6.1's dpo.py has no such import line at all —
+  # it's a different file shape). The previous guard
+  # `! grep -q "^from typing import.*TypeVar"` was wrong: v0.6.1 also
+  # has no TypeVar import, so the guard was TRUE there and the assert
+  # inside the python heredoc blew up with
+  # `AssertionError: anchor missing in dpo.py` (CI run 35329364605,
+  # tested ref=v0.6.1). Using the deprecated-import as the discriminator
+  # means the patch only fires on ref where the bug is actually present.
+  if [[ -f "$dpo" ]] && grep -qF "from torchtune.utils._logging import deprecated" "$dpo"; then
     echo "patching $dpo: adding typing/dataclass imports (main HEAD bug)"
-    python - <<PY
-import pathlib
-p = pathlib.Path("$dpo")
+    _PATCH_DPO="$dpo" python - <<'PY'
+import pathlib, os, sys
+p = pathlib.Path(os.environ["_PATCH_DPO"])
 src = p.read_text()
 needle = "from torchtune.utils._logging import deprecated\n"
 assert needle in src, "anchor missing in dpo.py: %s" % p
@@ -318,14 +328,21 @@ PY
   # only (no bare `import torch`), but the Int8DynActInt4WeightQuantizer
   # uses `weight_dtype=torch.int4` at the call site. `quantize.py`
   # recipe triggers this and aborts with NameError. Add bare `import torch`
-  # so the `torch.int4` lookup resolves. Guarded on `^import torch$`
-  # so v0.6.1 (which already has it) and any future fixed main HEAD
-  # both skip this.
-  if [[ -f "$quant" ]] && ! grep -q "^import torch$" "$quant"; then
+  # so the `torch.int4` lookup resolves.
+  #
+  # Guard: `weight_dtype=torch.int4` exists in main HEAD only. v0.6.1's
+  # Int8DynActInt4WeightQuantizer uses the older
+  # `int8_dynamic_activation_int4_weight(groupsize)` callable from torchao
+  # 0.13, no `torch.int4` lookup, so no patch needed there. Same mistake
+  # as the dpo guard above: the previous `! grep -q "^import torch$"`
+  # check was TRUE for v0.6.1 too (v0.6.1 has no bare `import torch`
+  # either, only `from torch import nn`), so the patch would fire and
+  # silently add a redundant `import torch` — harmless but misleading.
+  if [[ -f "$quant" ]] && grep -qF "weight_dtype=torch.int4" "$quant"; then
     echo "patching $quant: adding bare 'import torch' (main HEAD bug)"
-    python - <<PY
-import pathlib
-p = pathlib.Path("$quant")
+    _PATCH_QUANT="$quant" python - <<'PY'
+import pathlib, os
+p = pathlib.Path(os.environ["_PATCH_QUANT"])
 src = p.read_text()
 needle = "from typing import Callable, Optional\n"
 assert needle in src, "anchor missing in quantization.py: %s" % p
