@@ -14,3 +14,9 @@ projects:
   - project: TRL
     owner: lltiaor
     url: https://github.com/huggingface/trl/blob/main/docs/source/quickstart.md
+
+  # TGI 官方 README 变化时提醒更新 projects/tgi/docs/Quick-start-Ascend.md
+  # （NPU 适配目前只在 VenusTZZ fork 上，跟随上游文档同步尤为重要）
+  - project: tgi
+    owner: VenusTZZ
+    url: https://github.com/huggingface/text-generation-inference/blob/main/README.md
