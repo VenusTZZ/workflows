@@ -47,6 +47,151 @@ supported:
       - --output_dir ${CI_OUTPUT_DIR}   # 默认仓内相对路径：输出必须进 CI 输出目录
     timeout_minutes: 90
 
+  # ===== sft 多卡脚本 ×5（a2-2 + scale_processes；coder npu-5 2026-09-18
+  # 2×910B4 逐条实跑 exit 0，train_loss 4.63-4.64 / eval_loss 4.37-4.39）。
+  # 统一配方：0.5B + ci_sft_8 fixture + bnb/flash_attn/grad_ckpt/packing 全关
+  # + bs 2 + grad_accum 1 + max_steps 1。scale_processes: true 让
+  # run_example.sh 在 CI 工作副本（不 commit）里把启动行 --nproc_per_node 8
+  # 和 config num_processes: 8 改写成可见 NPU 数，deepspeed 的
+  # gradient_accumulation_steps 跟随 overlay 值（transformers 硬校验两者
+  # 一致）。这些 .sh 无 "$@"，靠引擎 ensure_passthrough 尾部挂载
+  # "$@" + overlay 追加（train.py 参数全部走 SFTConfig/ModelArguments） =====
+
+  # SFT + FSDP1（Llama-2-70b 换 0.5B）：fsdp_config.yaml num_processes 8→2
+  # 由 scale 改写；npu-5 实跑 1m07s exit 0
+  - path: examples/sft/run_peft_fsdp.sh
+    profile: peft
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    scale_processes: true
+    overlay_args:
+      - --model_name_or_path ${SFT_MODEL_PATH}   # 默认 gated meta-llama/Llama-2-70b-hf：换 seed 的 0.5B
+      - --dataset_name ${TARGET_ROOT}/fixtures/ci_sft_8.jsonl   # 默认 smangrul/ultrachat-10k-chatml：换仓内 fixture（messages 字段，chatml 模板兼容）
+      - --use_flash_attn False          # .sh 默认 True，flash-attn 仅 CUDA
+      - --gradient_checkpointing False  # 0.5B 无需省显存；避开 NPU reentrant 兼容问题
+      - --use_reentrant False           # 双保险
+      - --push_to_hub False             # 默认 True：CI 不推模型仓
+      - --hub_private_repo False        # 同上
+      - --packing False                 # 8 行样本无需打包
+      - --per_device_train_batch_size 2   # 8 行 / bs2 / 2 rank = 各 2 步，DDP/FSDP 均衡
+      - --per_device_eval_batch_size 2
+      - --gradient_accumulation_steps 1 # 1 step 即可验证
+      - --max_steps 1
+      - --logging_steps 1
+      - --report_to none
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 30
+
+  # SFT + torchrun DDP（Mistral-7B 换 0.5B）：首行 --nproc_per_node 8→2 由
+  # scale 改写；hccl 双 rank exit 0（npu-5 56s）
+  - path: examples/sft/run_peft_multigpu.sh
+    profile: peft
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    scale_processes: true
+    overlay_args:
+      - --model_name_or_path ${SFT_MODEL_PATH}   # 默认 mistralai/Mistral-7B-v0.1：换 0.5B
+      - --dataset_name ${TARGET_ROOT}/fixtures/ci_sft_8.jsonl
+      - --use_4bit_quantization False   # .sh 默认 True：bnb 无 NPU 后端
+      - --use_nested_quant False        # 同上（bnb_4bit_* 残留参数 4bit 关时不被消费）
+      - --use_flash_attn False
+      - --gradient_checkpointing False
+      - --use_reentrant False
+      - --push_to_hub False
+      - --hub_private_repo False
+      - --packing False
+      - --per_device_train_batch_size 2
+      - --per_device_eval_batch_size 2
+      - --gradient_accumulation_steps 1
+      - --max_steps 1
+      - --logging_steps 1
+      - --report_to none
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 30
+
+  # SFT + QLoRA-FSDP（Llama-2-70b 换 0.5B，bnb 关掉退化成 LoRA+FSDP1）：
+  # fsdp_config_qlora.yaml 本就 num_processes: 2，scale 为无操作纯保险；
+  # 本条目零启动行改写，纯 runner + overlay（npu-5 1m18s exit 0）
+  - path: examples/sft/run_peft_qlora_fsdp.sh
+    profile: peft
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    scale_processes: true
+    overlay_args:
+      - --model_name_or_path ${SFT_MODEL_PATH}
+      - --dataset_name ${TARGET_ROOT}/fixtures/ci_sft_8.jsonl
+      - --use_4bit_quantization False   # .sh 默认 True：bnb 无 NPU 后端，关掉退化 LoRA+FSDP
+      - --use_nested_quant False
+      - --use_flash_attn False
+      - --gradient_checkpointing False
+      - --use_reentrant False
+      - --push_to_hub False
+      - --hub_private_repo False
+      - --packing False
+      - --per_device_train_batch_size 2
+      - --per_device_eval_batch_size 2
+      - --gradient_accumulation_steps 1
+      - --max_steps 1
+      - --logging_steps 1
+      - --report_to none
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 30
+
+  # SFT + DeepSpeed ZeRO-3（Llama-2-70b 换 0.5B）：deepspeed_config.yaml
+  # num_processes 8→2 + gradient_accumulation_steps 4→1（跟随 overlay）由
+  # scale 改写；profile peft_ds 装 deepspeed 0.19.7（npu accelerator 自动
+  # 识别，DS_BUILD_OPS=0 免编译）；npu-5 1m40s exit 0
+  - path: examples/sft/run_peft_deepspeed.sh
+    profile: peft_ds
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    scale_processes: true
+    overlay_args:
+      - --model_name_or_path ${SFT_MODEL_PATH}
+      - --dataset_name ${TARGET_ROOT}/fixtures/ci_sft_8.jsonl
+      - --use_flash_attn False
+      - --gradient_checkpointing False
+      - --use_reentrant False
+      - --push_to_hub False
+      - --hub_private_repo False
+      - --packing False
+      - --per_device_train_batch_size 2
+      - --per_device_eval_batch_size 2
+      - --gradient_accumulation_steps 1 # 必须与 ds config 一致（scale 同步改写，否则 transformers 硬校验崩）
+      - --max_steps 1
+      - --logging_steps 1
+      - --report_to none
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 30
+
+  # SFT + QLoRA-DeepSpeed-Z3（Llama-2-70b 换 0.5B，bnb 关掉退化 ZeRO-3+
+  # LoRA）：deepspeed_config_z3_qlora.yaml 本就 num_processes: 2，scale 为
+  # 无操作纯保险；npu-5 1m38s exit 0
+  - path: examples/sft/run_peft_qlora_deepspeed_stage3.sh
+    profile: peft_ds
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    scale_processes: true
+    overlay_args:
+      - --model_name_or_path ${SFT_MODEL_PATH}
+      - --dataset_name ${TARGET_ROOT}/fixtures/ci_sft_8.jsonl
+      - --use_4bit_quantization False
+      - --use_nested_quant False
+      - --use_flash_attn False
+      - --gradient_checkpointing False
+      - --use_reentrant False
+      - --push_to_hub False
+      - --hub_private_repo False
+      - --packing False
+      - --per_device_train_batch_size 2
+      - --per_device_eval_batch_size 2
+      - --gradient_accumulation_steps 1
+      - --max_steps 1
+      - --logging_steps 1
+      - --report_to none
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 30
+
   # BEFT：mt0-small + financial_phrasebank，原样跑通（两套环境均 exit 0）
   - path: examples/beft_finetuning/beft_finetuning.py
     profile: peft
@@ -698,40 +843,19 @@ unsupported:
   - examples/road_finetuning/road_finetuning.py
 
 
-  # ---- C-多卡脚本：num_processes 写死 + 70B/8B 模型容量 ----
-  # Llama-2-70b（bf16≈140GB）：ZeRO-3 无 offload、config num_processes 写死 8
-  # （2/4 卡须覆盖）；flash-attn 为可选开关（--use_flash_attn False 可关）——
-  # 换小模型 + 覆盖进程数可跑 peft 侧路径
-  - examples/sft/run_peft_deepspeed.sh
+  # ---- C-多卡脚本：已迁 5/6 → supported（sft ×5，见 supported 段）----
+  # 2026-09-18 翻案落定：run_example.sh 新增 scale_processes 启动行/配置
+  # 改写通道（CI 工作副本、不 commit，与 ensure_passthrough 同类）+ runner
+  # a2-2 + setup_peft_ds（deepspeed 0.19.7 自动识别 NPU）。coder npu-5
+  # 2×910B4 逐条实跑 exit 0：fsdp 1m07s / multigpu 56s / qlora_fsdp 1m18s /
+  # deepspeed 1m40s / qlora_ds_z3 1m38s（统一 0.5B + ci_sft_8 配方）。
+  # 历史教训（run 35303810367 曾误迁 3 条）：launcher flag 不能走 overlay
+  # 通道——overlay 只追加在 train.py 参数尾部，--nproc_per_node/
+  # --num_processes 必须位于 train.py 之前；且 a2-1 单卡容不下 2 进程。
 
-  # run 35303810367 实测双阻塞（曾按 coder 2 卡验证结论误迁 supported）：
-  # (1) launcher flag 通道缺失：accelerate/torchrun 的启动器参数
-  #   （--num_processes/--config_file/--nproc_per_node/--nnodes）必须位于
-  #   train.py 之前，而引擎 ensure_passthrough 只把 overlay_args 追加到
-  #   .sh 最后一条命令的行尾（train.py 参数之后）→ HfArgumentParser 报
-  #   "Some specified arguments are not used"（各 rank 全崩）；env var
-  #   覆盖也不行（PET_NPROC_PER_NODE 是缺省值，CLI 写死 8 优先）。
-  #   不 patch 源 .sh / 不改引擎无法解。
-  # (2) runner：现配 a2-1 单卡（devices: 1），2 进程无卡可用；需 a2-2。
-  # 翻案条件：引擎增加启动器参数通道（EXEC 机制扩展）+ runner 换 a2-2，
-  #   coder 2 卡验证配方（见 git 历史本轮删除的 supported 条目）可直接复用。
-  # run_peft_fsdp.sh：t5-base + FSDP1 + 2 卡 exit 0（loss 4.12, 11.5s）
-  - examples/sft/run_peft_fsdp.sh
-
-  # run_peft_multigpu.sh：bloomz-7b1 torchrun DDP + 2 卡 exit 0（loss 4.11, 3.5s）
-  # （同上双阻塞：--nproc_per_node 8 写死在脚本第 1 行）
-  - examples/sft/run_peft_multigpu.sh
-
-  # run_peft_qlora_fsdp.sh：t5-base + QLoRA-FSDP 2 卡 exit 0（loss 4.12, 13.1s；
-  # bnb 4bit 无 NPU kernel，overlay 关掉退化 LoRA+FSDP）（同上双阻塞）
-  - examples/sft/run_peft_qlora_fsdp.sh
-
-  # GPTQ INT4 预量化模型（8B 非 70B，容量无忧）：GPTQ 内核 exllama/marlin 仅 CUDA
+  # GPTQ INT4 预量化模型（8B 非 70B，容量无忧）：GPTQ 内核 exllama/marlin 仅
+  # CUDA——换普通模型即失去条目意义，不支持
   - examples/sft/run_peft_fsdp_gptq.sh
-
-  # bnb qlora（use_4bit_quantization True，主阻塞）；70B-4bit≈35-40GB、ZeRO-3 分
-  # 2 卡容量本可容——容量是次要项，bnb 先崩
-  - examples/sft/run_peft_qlora_deepspeed_stage3.sh
 
 
   # ---- C-架构级硬阻塞（peft 源码 / 数据路径 / 设备分支） ----

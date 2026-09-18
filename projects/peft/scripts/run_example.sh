@@ -118,6 +118,51 @@ PY
 
 ensure_passthrough "$LAUNCH_PATH"
 
+# SCALE_PROCESSES (manifest field scale_processes): rewrite the
+# hardcoded process counts of self-launching .sh examples in this CI
+# working copy only (never committed - same policy as ensure_passthrough):
+#   - launcher line: --nproc_per_node <n> -> visible NPU count
+#     (run_peft_multigpu.sh pins 8; a2-2 must run 2)
+#   - referenced accelerate configs (--config_file <path>):
+#     num_processes: <n> -> visible NPU count (fsdp/deepspeed configs
+#     pin 8), and deepspeed gradient_accumulation_steps: <n> -> the
+#     overlay value (default 1; transformers trainer_config_finalize
+#     hard-rejects a ds config that disagrees with TrainingArguments)
+scale_launcher_processes() {
+  local script="$1"
+  [[ "$script" == *.sh ]] || return 0
+  local npus
+  npus=$("$PYTHON" -c "import torch, torch_npu; print(torch.npu.device_count())")
+  echo "scaling launcher process counts to $npus npu(s)"
+
+  sed -i -E "s/--nproc_per_node [0-9]+/--nproc_per_node $npus/" "$script"
+
+  local script_dir cfg_rel cfg_path ga i
+  script_dir=$(dirname "$script")
+  ga=1
+  for ((i = 0; i < ${#EXTRA_ARGS[@]} - 1; i++)); do
+    if [[ "${EXTRA_ARGS[i]}" == "--gradient_accumulation_steps" ]]; then
+      ga="${EXTRA_ARGS[i + 1]}"
+    fi
+  done
+  for cfg_rel in $(grep -oE -- '--config_file[[:space:]]+"?[^"[:space:]]+\.ya?ml' "$script" \
+                   | sed -E 's/^--config_file[[:space:]]+"?//'); do
+    cfg_path="$script_dir/$cfg_rel"
+    [[ -f "$cfg_path" ]] || { echo "config not found: $cfg_path" >&2; exit 1; }
+    # Keys may sit at column 0 (accelerate config) or nested inside
+    # deepspeed_config: (indented) - tolerate leading whitespace.
+    sed -i -E "s/^([[:space:]]*)num_processes: [0-9]+/\1num_processes: $npus/" "$cfg_path"
+    if grep -qE '^[[:space:]]*gradient_accumulation_steps: [0-9]+' "$cfg_path"; then
+      sed -i -E "s/^([[:space:]]*)gradient_accumulation_steps: [0-9]+/\1gradient_accumulation_steps: $ga/" "$cfg_path"
+    fi
+    echo "scaled $cfg_rel: num_processes=$npus gradient_accumulation_steps=$ga"
+  done
+}
+
+if [[ -n "${SCALE_PROCESSES:-}" ]]; then
+  scale_launcher_processes "$LAUNCH_PATH"
+fi
+
 # One sitecustomize.py, two patches, injected at interpreter startup:
 # 1. CUDA->NPU: most peft examples hardcode device="cuda";
 #    torch_npu's transfer_to_npu maps torch.cuda onto npu.

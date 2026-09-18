@@ -316,12 +316,25 @@ unsupported:
   # [平台/版本] Megatron-LM：立即死因是
   # transformers >=4.57 移除了
   # send_example_telemetry（megatron_lm_gpt_pretraining.py:50 的 import，任何
-  # 平台同样炸，与 NPU 无关）；即使换旧版 transformers，脚本对 megatron plugin
-  # 的访问也有 distributed_type 守卫（:546）退化普通 CLM，本意场景需要 NVIDIA
-  # Megatron-LM mpu + 多卡，NPU 无对应后端
+  # 平台同样炸，与 NPU 无关）；即使换旧版 transformers，后面还有两道硬墙
+  # （2026-09-18 复核 accelerate 源码钉死）：
+  #   ① accelerate 胶水层本身就是 CUDA-only——src/accelerate/utils/
+  #     megatron_lm.py 的 initialize() 硬断言
+  #     `assert torch.cuda.is_available(), "Megatron requires CUDA."`，
+  #     get_batch_transformer / MegatronEngine.forward 还直接调
+  #     torch.cuda.current_device() / torch.cuda.FloatTensor()。装不装
+  #     megatron 包，NPU 在这条断言就挂。
+  #   ② 没有 accelerate MegatronPlugin 可 import 的 drop-in mcore 包。
+  #     "昇腾没有 Megatron"并不成立：MindSpeed-LLM（前身 ModelLink，已迁
+  #     gitcode.com/Ascend）就是基于 NVIDIA Megatron-Core (mcore) 的昇腾
+  #     PyTorch 分布式训练框架（MindSpeed 为 MindSpore 版）。但它不是可
+  #     pip 装的 megatron.core/megatron.training 替代物，配套还钉死
+  #     torch 2.1/2.6 + CANN 8.2.RC1，与 CI 栈（CANN 9.1.0 + torch 2.9）
+  #     不兼容。
   # （coder 实跑：ImportError: cannot import name 'send_example_telemetry' from
   # 'transformers.utils'，rc=2）
-  # [不可解] 上游 API 移除 + NPU 无 NVIDIA Megatron-LM mpu 后端（与 transformers 版本无关）
+  # [不可解] 上游 API 移除 + accelerate 胶水层 CUDA 硬断言 + 无 drop-in
+  # mcore 包（与 transformers 版本无关）
   - examples/by_feature/megatron_lm_gpt_pretraining.py
 
   # [不支持] torch.profiler FunctionEventAvg 缺 self_npu_time_total：
@@ -400,32 +413,57 @@ unsupported:
   - examples/inference/pippy/llama.py
 
   # [平台] FP8：模块级 from torchao.float8 import Float8LinearConfig
-  # （fsdp2_fp8.py:24）；FP8 三后端 TE / torchao / msamp 均无 Ascend 实现
-  # （910B4 硬件 FP8 尚未在 torch_npu.ao ship），装 torchao 也无 NPU kernel
-  # （coder 实跑：ModuleNotFoundError: No module named 'torchao'，rc=2）
+  # （fsdp2_fp8.py:24）。2026-09-18 npu-4 源码+实测复核，blocker 分四层：
+  #   ① torch API 契约：torchao 0.18.0 import 即死——要
+  #     torch.nn.functional.ScalingType/scaled_grouped_mm（torch 2.10+ API），
+  #     而栈被 torch_npu 2.9 ABI 钉在 torch 2.9；torchao==0.15.0（纯 py
+  #     wheel）可 import 且 is_torchao_available()=True——依赖层可解但需钉旧版
+  #   ② 真根因（实测）：fp8 dtype 在 910B4 被 torch_npu kernel 层拒绝——
+  #     t.to(float8_e4m3fn) 死于 aclnnInplaceCopy err 561103；torchao 全部
+  #     fp8 GEMM 走的 torch._scaled_mm 同死在这层。硬件无 FP8 单元，软件
+  #     连存储都不给，任何依赖组合无解。昇腾 FP8 硬件现状：910B3/B4 均无
+  #     FP8；910C（Atlas 950 / CloudMatrix 384）是唯一宣称原生 FP8
+  #     （E4M3/E5M2）的昇腾卡，但当前 runner 池（a2-1/a2-2/npu-1..4）
+  #     全是 910B4，没有 FP8 卡可跑
+  #   ③ example 设计：默认 Hermes-8B 随机 init + cpu_ram_efficient_loading=
+  #     False → nd_parallel 同款 32G cgroup OOM；TorchDynamoPlugin(
+  #     backend="inductor") 无条件传入，NPU 栈无 inductor 后端（需
+  #     triton-ascend）——--precision bf16 逃生门也被堵且守护不到 fp8 语义
+  #   ④ TE / msamp 两后端同样 CUDA-only
+  # （coder 实跑：ModuleNotFoundError rc=2 为①的前身；①②③已逐层实测钉死）
+  # 转正条件 = 910C 级 FP8 硬件 + 配套 torch_npu FP8 kernel + torchao NPU
+  # 后端（③的 inductor 还需 triton-ascend 就绪）
   - examples/torch_native_parallelism/fsdp2_fp8.py
 
-  # [资源] ND parallelism：argparse 默认全 1（nd_parallel.py:44-47；旧注
-  # "2/2/2 缺 rank 断言"来自 README 示例命令，非脚本默认值）。真实 blocker
-  # 是 **容器 host memory cgroup 上限 32GB 撞 8B 模型 FSDP2 init**：
-  # 默认模型硬编 Hermes-3-Llama-3.1-8B（nd_parallel.py:39 MODEL_ID），
-  # 走 accelerate launch --num_processes 2 + FSDP2 --dp-shard-size 2 时，
-  # FSDP2 init 阶段每个 rank 要先把全 16GB bf16 权重 load 到 host RAM 再
-  # shard 到 NPU HBM，2 rank × 16GB = 32GB 已经吃满 cgroup，再加上
-  # Python/datasets/comms 开销必超。2026-09-17 coder npu-1 实跑：
-  # dmesg 显示 oom-kill:constraint=CONSTRAINT_MEMCG，task=python,
-  # pid 31483/29156 多次 SIGKILL；--num-steps 1 --sequence-length 128
-  # 最小化配置同样被杀。
-  # 与 NPU HBM 容量无关：NPU 2×32GB=64GB 装得下 shard+activation。
-  # 与 NPU 专属无关：CUDA a2-2 同 32GB cgroup 也 OOM。这是 **container 资源**
-  # 问题，需更大 cgroup memory limit 的 pod（a2-7/A2-8 类，64GB+）。
-  # nd_parallel_trainer.py:23 同款 Hermes-3-Llama-3.1-8B 默认，同 blocker。
-  # 其它小项（log_with=["wandb"]、裸 python dist.all_reduce 无 pg）都属
-  # 次要：wandb 已装可跑，dist.all_reduce 只在裸 python 触发，accelerate
-  # launch 后无关。
+  # [不可解] ND parallelism：原注"32G cgroup 撞 8B FSDP2 init、需 64G+ pod"
+  # 已 2026-09-18 npu-2 a2-2 overlay 实证推翻——CLI `--model-name` 被所有历史
+  # 验证忽略：默认 Hermes-3-Llama-3.1-8B（nd_parallel.py:39 MODEL_ID 硬编）才是
+  # host RAM 杀手（2 rank × 16GB = 32GB）；overlay 换 SmolLM-360M（Llama
+  # 架构，已 CI 种子）后 host RAM 仅 2×0.7GB，cgroup 毫无压力。
+  # FSDP2 + bf16 + NPU HCCL 训练本身 rc 内正常（Step 0/2/3 loss 输出，
+  # trainer 版 step 60 loss 2.16→2.10 收敛）。
+  # 真正的剩余 blocker 是两个与资源无关的 torch_npu/FSDP2 边角：
+  #   (a) nd_parallel.py:158 末尾 `model.save_pretrained(...)` 把
+  #       FSDP2 分片后的 tensor 交给 safetensors → _find_shared_tensors
+  #       触发 storage.data_ptr() → RuntimeError "Attempted to access the
+  #       data pointer on an invalid python storage"（safetensors × FSDP2
+  #       sharded × torch_npu 三方 ABI gap；单卡非 FSDP2 保存正常，
+  #       `accelerate.save_state` 也正常，分片视图才触发）
+  #   (b) nd_parallel_trainer.py:51 `TrainingArguments(num_train_epochs=1,
+  #       per_device_train_batch_size=1, logging_steps=5, ...)` 写死 1
+  #       epoch 无 max_steps CLI 旋钮，CI smoke（默认 1-2 epoch）跑不完
+  #       （SmolLM×a2-2 1 epoch ≈ 4-5h）
+  # 多卡解决不了 32G cgroup——host RAM 需求随 rank 数线性增，4 rank = 64GB；
+  # 上游 `cpu_ram_efficient_loading`（只 rank0 加载 + sync）example 未传且
+  # 无 CLI 旋钮——此路径才是"多卡后 RAM 更省"的明证 override，但打不开。
+  # 旧注另提的 log_with=["wandb"]、裸 python dist.all_reduce 无 pg 在
+  # accelerate launch + WANDB_DISABLED 下都不是问题。
   # （coder 实跑：accelerate launch --num_processes 2 --mixed_precision bf16
-  #   nd_parallel.py --dp-shard-size 2 --num-steps {1,3} --sequence-length {128,512}
-  #   --model-name <local Hermes> 全部 SIGKILL @ cgroup OOM）
+  #   nd_parallel.py --dp-shard-size 2 --num-steps 3 --sequence-length 128
+  #   --model-name HuggingFaceTB/SmolLM-360M 训练 OK；末尾 save_pretrained
+  #   rc=1 @ safetensors storage.data_ptr）
+  # nd_parallel_trainer.py:23 同款 Hermes-3-Llama-3.1-8B 默认，但 overlay
+  # --model-name 同样可绕；跑不完是 num_train_epochs=1 无 max_steps 写死。
   - examples/torch_native_parallelism/nd_parallel.py
   - examples/torch_native_parallelism/nd_parallel_trainer.py
 
@@ -447,7 +485,10 @@ unsupported:
   # `image.save(f"image_{prompt}.png")` 把完整 parti prompt 拼进文件名，
   # 长提示词 >255 字节触发 OSError: [Errno 36] File name too long——
   # 任何 Linux 平台同样炸，与 NPU 无关，改上游才能修。
-  # 另注：默认模型 PixArt-Sigma-XL-2-1024-MS 的 T5-XXL 权重 ~20G，若上游
-  # 修复后转正，建议 overlay 到 SD v1.5 控制冷缓存成本。
+  # 另注：默认模型 PixArt-Sigma-XL-2-1024-MS 的 T5-XXL 权重 ~20G；ckpt_id
+  # 是 fire.Fire 暴露的 CLI 参数（overlay 可换模型），但 prompt 数据集
+  # nateraw/parti-prompts 硬编无旋钮——Errno 36 由 prompt 拼文件名触发，
+  # 与模型无关，换模型不能解决；overlay --ckpt_id 到 SD v1.5 只能省冷缓存
+  # 成本。要绿必须改代码（文件名截断）或换短 prompt 数据集（也需改代码）。
 # （coder 实跑 rc=1：OSError Errno 36 @ 307/1632 images）
   - examples/inference/distributed/distributed_image_generation.py
