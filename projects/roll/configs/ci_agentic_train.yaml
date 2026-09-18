@@ -6,21 +6,21 @@ hydra:
 
 exp_name: roll-ci-agentic-train
 seed: 42
-logging_dir: ${CI_OUTPUT_DIR}/logs
-output_dir: ${CI_OUTPUT_DIR}/output
+logging_dir: ${oc.env:CI_OUTPUT_DIR}/logs
+output_dir: ${oc.env:CI_OUTPUT_DIR}/output
 system_envs:
   USE_MODELSCOPE: "1"
   MODEL_DOWNLOAD_TYPE: MODELSCOPE
 
 checkpoint_config:
   type: file_system
-  output_dir: ${CI_OUTPUT_DIR}/ckpt
+  output_dir: ${oc.env:CI_OUTPUT_DIR}/ckpt
 
 num_gpus_per_node: 2
 max_steps: 1
 save_steps: 10
 logging_steps: 1
-eval_steps: -1
+eval_steps: 1000
 resume_from_checkpoint: false
 
 track_with: stdout
@@ -63,7 +63,7 @@ actor_train:
       reduce_dtype: bf16
       reshard_after_forward: true
       offload_policy: false
-  device_mapping: [0]
+  device_mapping: list(range(0,1))
   infer_batch_size: 1
 
 actor_infer:
@@ -87,7 +87,7 @@ actor_infer:
       load_format: auto
       max_model_len: 256
       enforce_eager: true
-  device_mapping: [1]
+  device_mapping: list(range(1,2))
 
 reference:
   model_args:
@@ -100,7 +100,7 @@ reference:
   strategy_args:
     strategy_name: hf_infer
     strategy_config: ~
-  device_mapping: [0]
+  device_mapping: list(range(0,1))
   infer_batch_size: 1
 
 reward_normalization:

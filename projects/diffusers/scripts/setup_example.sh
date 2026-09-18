@@ -112,10 +112,13 @@ install_example_stack() {
   # examples/advanced_diffusion_training/requirements.txt.
   # datasets<4.0.0: diffusers examples (e.g. controlnet's load_dataset path)
   # break on datasets 4.x; the whole project stays below 4.
+  # wandb: every training script does `if is_wandb_available(): import wandb`
+  # and several default --report_to to wandb; installed once here, kept
+  # offline by the global WANDB_MODE=disabled.
   python -m pip install \
     "transformers>=5.0,<6.0" "accelerate>=1.0,<2.0" "peft>=0.6" \
     "datasets<4.0.0" ftfy tensorboard Jinja2 sentencepiece "torchvision==0.24.0" \
-    prodigyopt "modelscope==1.37.0"
+    prodigyopt "modelscope==1.37.0" wandb
   python -c "import diffusers, transformers, accelerate, peft; print('diffusers', diffusers.__version__, '/ transformers', transformers.__version__, '/ accelerate', accelerate.__version__, '/ peft', peft.__version__)"
 }
 
@@ -174,7 +177,9 @@ if "sdxl" in WANT:
             "text_encoder/*", "text_encoder_2/*",
             "tokenizer/*", "tokenizer_2/*", "scheduler/*",
         ],
-        ignore_file_pattern=["*.fp16.*"],
+        # .bin is the duplicate of .safetensors; skip both fp16 and .bin to
+        # halve the download (and the .bin download is what fails).
+        ignore_file_pattern=["*.fp16.*", "*.bin"],
     )
 
 # SDXL fp16-safe VAE. Only entries that pass
@@ -194,7 +199,9 @@ if "sd15" in WANT:
             "unet/*", "vae/*",
             "text_encoder/*", "tokenizer/*", "scheduler/*",
         ],
-        ignore_file_pattern=["*.fp16.*"],
+        # Same as SDXL: the repo carries both .bin and .safetensors; only the
+        # latter is needed.
+        ignore_file_pattern=["*.fp16.*", "*.bin"],
     )
 
 # CogVideoX-2b (transformer + T5 text_encoder + VAE). The ModelScope repo
@@ -285,13 +292,13 @@ PY
 # and add the delta here; never `pip install -r` it verbatim (it pins to git
 # main / loose versions and pulls CUDA-only deps).
 
-# diffusers-sdxl: SDXL advanced dreambooth/LoRA training examples.
+# diffusers-sdxl: SDXL advanced dreambooth/LoRA training example. Uses the
+# tiny HF model at run time, so no ModelScope pre-download.
 setup_diffusers_sdxl() {
   install_example_stack
-  download_assets sdxl,3d-icon
 }
 
-# diffusers-sd15: SD1.5 advanced dreambooth/LoRA training examples.
+# diffusers-sd15: SD1.5 advanced dreambooth/LoRA training example.
 setup_diffusers_sd15() {
   install_example_stack
   download_assets sd15,3d-icon
@@ -301,6 +308,10 @@ setup_diffusers_sd15() {
 # amused/amused-256 nor the m1guelpf/nouns dataset, so nothing is
 # pre-downloaded: the example fetches both via hf-mirror at run time
 # (the engine sets HF_ENDPOINT + HF_HUB_DISABLE_XET).
+# amused's --report_to defaults to wandb (wandb is in the base stack; the
+# global WANDB_MODE=disabled keeps it offline). Do NOT use
+# --report_to tensorboard: amused passes list-valued args to init_trackers,
+# which tensorboard's add_hparams rejects.
 setup_diffusers_amused() {
   install_example_stack
 }
@@ -365,6 +376,15 @@ select_pip_index
 python -m pip install -U pip setuptools wheel
 ensure_torch_stack
 prepare_fixtures
+
+# All examples: keep wandb offline. Some entrypoints default --report_to to
+# wandb; WANDB_MODE=disabled prevents any network reporting and is harmless
+# for the ones that use tensorboard. Persisted to the run step via GITHUB_ENV.
+echo "WANDB_MODE=disabled" >> "$GITHUB_ENV"
+
+# All examples: let HCCL pick a free socket port range (required on some
+# Ascend setups to avoid "address already in use" on multi-process init).
+echo "HCCL_NPU_SOCKET_PORT_RANGE=auto" >> "$GITHUB_ENV"
 
 # Profile names map to setup_<profile with '-' -> '_'> functions.
 "setup_${PROFILE//-/_}"

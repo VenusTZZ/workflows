@@ -295,20 +295,21 @@ unsupported:
   # + sdpa）：ZeRO-2 flags / ZeRO-3 flags / 本 example 原版
   # sp-alst.ds-config.json（ZeRO-3 + seq_parallel_communication_data_type
   # bf16）全部 rc=0，loss 三轮逐位一致，ALST 可微 loss-gather 正常。
-  # 剩余两个 blocker（均非 NPU 能力问题）：
-  #   a) [资源] example 硬编 sp_size=4 且无 CLI 旋钮，需单机 4 卡（fleet
-  #      全是 2 卡 AscendA2；2 卡跑 4 进程会在 transformers 自动
-  #      deepspeed.zero.Init 的 set_device(local_rank=2) 炸 invalid
-  #      device——CUDA 同样炸，accelerate state.py:843 的 modulo 只保
-  #      accelerate 自己的设备选择，管不到 transformers/deepspeed 内部）；
-  #   b) [上游 bug] 当前 main sp-alst.py:116
-  #      accelerator.torch_device_mesh["sp"].get_group()——#3916 给
-  #      deepspeed SP 加 mesh-skip（build_device_mesh 返回 None）后 example
-  #      未同步，探针实证 mesh=None → TypeError（'NoneType' object is not
-  #      subscriptable），任何平台同样炸；上游 CI 只跑测试脚本不跑本
-  #      example。等 upstream 修（参照测试脚本用
-  #      deepspeed.utils.groups._get_sequence_parallel_group）或提
-  #      one-line PR 后，配 4 卡 runner 即可转正。
+  # 剩余 blocker（非 NPU 能力问题）：
+  #   [上游 bug] 当前 main sp-alst.py:116
+  #   accelerator.torch_device_mesh["sp"].get_group()——#3916 给 deepspeed
+  #   SP 加 mesh-skip（build_device_mesh 返回 None）后 example 未同步。
+  #   2026-09-18 npu-4（4×910B4）原样实跑 sp-alst.sh：4 进程全部拉起，
+  #   transformers 自动 zero.Init（此前 2 卡 4 进程会在此炸
+  #   set_device(local_rank=2) invalid device，资源限制 CUDA 同样炸）+
+  #   ZeRO-3 ds_initialize + Ulysses SP 注册 + DL adapter 全部通过
+  #   （"DL w/ adapter" 已打印），随即 4 个 rank 皆死于 line 116
+  #   TypeError: 'NoneType' object is not subscriptable——与 2 卡探针结论
+  #   一致，任何平台同样炸；上游 CI 只跑测试脚本不跑本 example。
+  #   等 upstream 修（参照测试脚本用
+  #   deepspeed.utils.groups._get_sequence_parallel_group）或提 one-line
+  #   PR 后，npu-4 4 卡 runner + torchrun 类 launcher 即可转正（example
+  #   自带的 accelerate-config yml/ds json 也可直接用 config_file 流）。
   - examples/alst_ulysses_sequence_parallelism/sp-alst.py
   - examples/alst_ulysses_sequence_parallelism/sp-alst.sh
 

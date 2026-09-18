@@ -6,8 +6,9 @@
 #
 # Dependency line (mirror Quick-start-Ascend.md lines 85-88, 114-117, 168-172;
 # quick-start is the canonical install path for torchtune on this image):
-#   torch 2.11.0+cpu + torch_npu 2.11.0 + transformers 4.57.1
-#   + omegaconf + tokenizers + safetensors + modelscope 1.37.0
+#   torch 2.11.0+cpu + torch_npu 2.11.0 + torchvision 0.26.0+cpu
+#   + transformers 4.57.1 + omegaconf + tokenizers + safetensors
+#   + modelscope 1.37.0
 # - torch 2.11.0 + torch_npu 2.11.0: pin explicit in ensure_torch_stack()
 #   below (was: "reuse whatever image ships", which was 2.9.0+cpu). The +cpu
 #   wheel comes from aliyun's mirror of pytorch.org/whl/cpu; the cluster pip
@@ -17,6 +18,16 @@
 #   for `from torch.nn.functional import ScalingType` that torchao 0.18
 #   needs, so upgrading makes the main HEAD path in the dynamic case below
 #   work too (instead of being a known-broken documented limitation).
+# - torchvision 0.26.0+cpu: pinned by ensure_torch_stack(). main HEAD
+#   unconditionally imports torchvision at torchtune/data/_utils.py:12,
+#   triggered by `from torchtune import datasets` (datasets/__init__.py:7 →
+#   multimodal → _llava → data._messages → data → data._utils → import
+#   torchvision). v0.6.1 doesn't hit this (no torchvision import in
+#   data/_utils.py). Per upstream's published compat table, torch 2.11 ↔
+#   torchvision 0.26; pinning ≤0.28 also dodges v0.29.0's stable ABI
+#   requirement (see torchvision-v29-stable-abi memory). The +cpu wheel
+#   is the only one in the aliyun pytorch-wheels/cpu find-links repo, so
+#   plain `torchvision==0.26.0` resolves to the +cpu aarch64 wheel.
 # - transformers 4.57.1: matches torchtune v0.6.x's LlamaModel / Qwen2
 #   forward signatures; 5.x has renamed some attributes.
 # - torchao pin: still decided dynamically inside setup_torchtune() because
@@ -96,6 +107,25 @@ ensure_torch_stack() {
   python -m pip install \
     --find-links https://mirrors.aliyun.com/pytorch-wheels/cpu \
     torch==2.11.0
+  # main HEAD torchtune (post-multimodal merge) unconditionally imports
+  # torchvision at torchtune/data/_utils.py:12 — this sits upstream of
+  # torchtune.datasets (datasets/__init__.py:7 → multimodal → _llava →
+  # data._messages → data → data._utils → import torchvision), so
+  # `import torchtune` fails with ModuleNotFoundError when torchvision is
+  # absent. v0.6.1 release doesn't hit this path (data/_utils.py has no
+  # torchvision import there), but main HEAD does, so we always install
+  # it for consistency.
+  #
+  # Per torchvision's published compat table, torch 2.11 → torchvision 0.26.
+  # Pinning 0.26.0 also sidesteps the v0.29.0 stable-ABI requirement (it
+  # calls stable::permute which is torch 2.14 only; torch_npu has no 2.14
+  # release) — see torchvision-v29-stable-abi memory. The +cpu wheel is
+  # the only one in the aliyun pytorch-wheels/cpu find-links repo, so
+  # plain "torchvision==0.26.0" resolves to the +cpu aarch64 wheel.
+  echo "installing torchvision==0.26.0+cpu (main HEAD data/_utils.py unconditional import; matches torch 2.11 per upstream compat table)"
+  python -m pip install \
+    --find-links https://mirrors.aliyun.com/pytorch-wheels/cpu \
+    torchvision==0.26.0
   echo "installing torch_npu==2.11.0 (Huawei ascend index)"
   pip_ascend torch_npu==2.11.0
 }
@@ -144,6 +174,7 @@ setup_torchtune() {
   # same. There is no single torchao that satisfies both import paths,
   # so we must probe the actual checkout before pinning.
   echo "installing torchtune from $TARGET_ROOT (non-editable, see Quick-start-Ascend.md:164-167)"
+  patch_main_head_bugs
   python -m pip install "$TARGET_ROOT"
   python -m pip install "transformers==4.57.1" "omegaconf>=2.3,<3" \
     tokenizers safetensors tqdm pyyaml
@@ -242,6 +273,71 @@ with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"TT_MODEL_PATH={local}\n")
 print("TT_MODEL_PATH=", local)
 PY
+}
+
+# Patch two upstream bugs in main HEAD torchtune. v0.6.1 release doesn't
+# have either; the grep guards make these no-ops there. Operates on the
+# SOURCE in $TARGET_ROOT before `pip install` copies it to site-packages,
+# so the installed files inherit the fixes. If torchtune ever ships a
+# fix upstream, the grep guard causes the patch to become a no-op
+# automatically — no script change needed.
+patch_main_head_bugs() {
+  local dpo="$TARGET_ROOT/torchtune/rlhf/loss/dpo.py"
+  local quant="$TARGET_ROOT/torchtune/training/quantization.py"
+
+  # Bug 1: torchtune/rlhf/loss/dpo.py:14 does
+  #     T = TypeVar("T", bound=dataclass)
+  # but the header only imports torch + torchtune internals — no
+  # `from typing import TypeVar`, no `from typing import Optional/Tuple`,
+  # no `from dataclasses import dataclass`. The class body itself
+  # also references Optional[T] / Tuple[...] at type annotations on
+  # PreferenceLoss.forward, so all four names must be in scope at
+  # class-definition time (not just call time). `import torchtune.rlhf.loss`
+  # → `from .dpo import DPOLoss` → NameError cascading from TypeVar →
+  # Optional. Triggered by `lora_dpo_single_device.py` via overlay_args
+  # `loss._component_=torchtune.rlhf.loss.DPOLoss`.
+  if [[ -f "$dpo" ]] && ! grep -q "^from typing import.*TypeVar" "$dpo"; then
+    echo "patching $dpo: adding typing/dataclass imports (main HEAD bug)"
+    python - <<PY
+import pathlib
+p = pathlib.Path("$dpo")
+src = p.read_text()
+needle = "from torchtune.utils._logging import deprecated\n"
+assert needle in src, "anchor missing in dpo.py: %s" % p
+addition = "from typing import Optional, Tuple, TypeVar\nfrom dataclasses import dataclass\n"
+if "from typing import" not in src.split(needle)[0]:
+    src = src.replace(needle, needle + addition, 1)
+    p.write_text(src)
+    print("  patched: %s" % p)
+else:
+    print("  already patched (race), skipping: %s" % p)
+PY
+  fi
+
+  # Bug 2: torchtune/training/quantization.py imports `from torch import nn`
+  # only (no bare `import torch`), but the Int8DynActInt4WeightQuantizer
+  # uses `weight_dtype=torch.int4` at the call site. `quantize.py`
+  # recipe triggers this and aborts with NameError. Add bare `import torch`
+  # so the `torch.int4` lookup resolves. Guarded on `^import torch$`
+  # so v0.6.1 (which already has it) and any future fixed main HEAD
+  # both skip this.
+  if [[ -f "$quant" ]] && ! grep -q "^import torch$" "$quant"; then
+    echo "patching $quant: adding bare 'import torch' (main HEAD bug)"
+    python - <<PY
+import pathlib
+p = pathlib.Path("$quant")
+src = p.read_text()
+needle = "from typing import Callable, Optional\n"
+assert needle in src, "anchor missing in quantization.py: %s" % p
+addition = "import torch\n"
+if "import torch\n" not in src.split("from typing import Callable, Optional\n")[0]:
+    src = src.replace(needle, needle + addition, 1)
+    p.write_text(src)
+    print("  patched: %s" % p)
+else:
+    print("  already patched (race), skipping: %s" % p)
+PY
+  fi
 }
 
 supported_profiles() {

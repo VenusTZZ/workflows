@@ -104,7 +104,7 @@ files:
 ## peft 的现状（实测 ModelScope API 后，2026-09-16；plant 迁入 workflow 2026-09-17；
 ## +2026-09-18 adamss_image 三资产）
 
-peft 10 个 supported 例的 model/dataset 来源，按例分别走哪条路：
+peft supported 例的 model/dataset 来源，按例分别走哪条路：
 
 | 例 | model 路径来源 | dataset 路径来源 |
 |---|---|---|
@@ -116,10 +116,13 @@ peft 10 个 supported 例的 model/dataset 来源，按例分别走哪条路：
 | sequence_classification | overlay `--model_name_or_path ${BERT_BASE_UNCASED_PATH}` | `glue/mrpc`（ms_seeds plant）|
 | adamss ×2 | overlay `--model_name_or_path ${ROBERTA_BASE_PATH}` | `glue/mrpc` 或 `glue/cola`（ms_seeds plant）|
 | adamss_image | 硬编码 `google/vit-base-patch16-224-in21k` → **cache-seed** | 硬编码 `Multimodal-Fatima/CIFAR10_train` + `CIFAR10_test` → **cache-seed** |
+| dreambooth ×5 | overlay `--pretrained_model_name_or_path ${SD_MODEL_PATH}`（peft_dreambooth profile 从 refs/main 解析） | overlay fixture `ci_dummy_image`（2 张 256×256 PNG）|
 
 **ms_seeds.yaml（`cache-seed/peft/ms_seeds.yaml`）装 ModelScope 有的**：
-- model ×5：Qwen2.5-0.5B / roberta-base（裸 id，adamss_manual 硬编码）/
-  bert-base-uncased / mt0-small / dinov2-base
+- model ×6：Qwen2.5-0.5B / roberta-base（裸 id，adamss_manual 硬编码）/
+  bert-base-uncased / mt0-small / dinov2-base /
+  stable-diffusion-v1-5（dreambooth ×5；与 accelerate 的 seed 条目同资产，
+  共享缓存卷已 plant，本条目冷缓存兜底）
 - dataset ×1：glue 只取 mrpc/cola 子树
 
 2026-09-17 前 plant 活在 peft 的 setup_example.sh（TO_ENV/TO_PLANT_MODEL/

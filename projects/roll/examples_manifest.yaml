@@ -3,8 +3,8 @@ version: 1
 # 对账单位是「完整运行配置」（.yaml）：根目录 start_*_pipeline.py 与各目录 run_*.sh
 # 是公共 launcher / 别名，不重复登记；examples/config/ 是被其他配置继承的共享片段。
 #
-# supported 只保留上游官方 Ascend 文档列出的三类能力的最小 NPU 代表：
-# Agentic / Agentic-Rollout / RLVR（FSDP2 + vLLM-Ascend）。
+# 阶段二 supported 三条链路：单卡 rollout、两卡 Agentic train、四卡 RLVR。
+# 所有条目使用国内 CANN 基础镜像 + setup 动态装栈，配置契约以 v0.3.0 为准。
 # unsupported 的语义是「本看护体系当前不跑它」：注释区分硬阻塞与待实测项。
 scan:
   root: examples
@@ -15,39 +15,39 @@ scan:
     # 仅有 Hydra defaults 的空壳配置，没有模型 / worker / 资源配置
     - examples/qwen2.5-0.5B-agentic/agentic_val_webshop.yaml
 supported:
-  # Agentic：Sokoban 环境多轮交互 + vLLM rollout + FSDP2 更新。与上游 agentic_val_sokoban.yaml 同 pipeline / 同官方 NPU 路径，
-  # CI 重写为 ci_agentic_train：0.5B 模型、2 卡（训练/推断分置）、单步 2 环境组、序列 256。
-  - path: examples/qwen2.5-0.5B-agentic/agentic_val_sokoban.yaml
-    profile: agentic_train_npu
-    runner: linux-aarch64-a2-2
-    image: quay.io/ascend/roll@sha256:f7c7d0eebf92d13796cfa028e8781a00cbe8c0da6d7a7aa3d54e8a26201b092d
-    exec: examples/start_agentic_pipeline.py
-    overlay_args:
-      - --config_path
-      - ci_roll
-      - --config_name
-      - ci_agentic_train
-    timeout_minutes: 180
   # Agentic-Rollout：仅推理的 Sokoban 多轮环境交互与轨迹组装。与上游 agentic_rollout_sokoban.yaml 同 pipeline，
-  # CI 重写为 ci_agentic_rollout：单卡 vLLM-Ascend、单环境、序列 256。
+  # CI 重写为 ci_agentic_rollout：单卡 vLLM-Ascend、单环境、序列 256。国内 CANN 基础镜像启动后
+  # 由 setup 据 v0.3.0 的官方升腾环境文档安装固定版本的 torch_npu / vLLM-Ascend。
   - path: examples/qwen2.5-0.5B-agentic/agentic_rollout_sokoban.yaml
     profile: agentic_rollout_npu
     runner: linux-aarch64-a2-1
-    image: quay.io/ascend/roll@sha256:f7c7d0eebf92d13796cfa028e8781a00cbe8c0da6d7a7aa3d54e8a26201b092d
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     exec: examples/start_agentic_rollout_pipeline.py
     overlay_args:
       - --config_path
       - ci_roll
       - --config_name
       - ci_agentic_rollout
-    timeout_minutes: 120
-  # RLVR：官方 examples/ascend_examples RLVR 路径。与上游 qwen3_8b_rlvr_fsdp2.yaml 同 pipeline / 同后端组合，
-  # CI 重写为 ci_rlvr：0.5B 模型（数据 template 同步 qwen2_5）、4 卡（FSDP2 训练 2 + vLLM 1 + 参考模型 1）、
-  # 2 prompt x 2 采样、序列 192，8 行本地 math_rule fixture。
+    timeout_minutes: 180
+  # Agentic：Sokoban 多轮交互 + vLLM rollout + GRPO reward/advantage + FSDP2 backward + optimizer step。
+  # CI 重写为 ci_agentic_train：0.5B 模型、2 卡（FSDP2 train 占卡 0，vLLM infer 卡 1，reference 与 train 同卡），单步。
+  - path: examples/qwen2.5-0.5B-agentic/agentic_val_sokoban.yaml
+    profile: agentic_train_npu
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: examples/start_agentic_pipeline.py
+    overlay_args:
+      - --config_path
+      - ci_roll
+      - --config_name
+      - ci_agentic_train
+    timeout_minutes: 240
+  # RLVR：官方 examples/ascend_examples RLVR 路径。CI 重写为 ci_rlvr：0.5B 模型、
+  # 4 卡（FSDP2 train 0-1，vLLM 2，hf reference 3）、8 行本地 math_rule fixture、reward 单副本、单步。
   - path: examples/ascend_examples/qwen3_8b_rlvr_fsdp2.yaml
     profile: rlvr_npu
     runner: linux-aarch64-a2-4
-    image: quay.io/ascend/roll@sha256:f7c7d0eebf92d13796cfa028e8781a00cbe8c0da6d7a7aa3d54e8a26201b092d
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     exec: examples/start_rlvr_pipeline.py
     overlay_args:
       - --config_path

@@ -683,3 +683,4 @@ projects:
     dir: projects/tgi
     workflows:
       quick_start: .github/workflows/tgi-quick-start.yml
+      examples: .github/workflows/roll-examples.yml

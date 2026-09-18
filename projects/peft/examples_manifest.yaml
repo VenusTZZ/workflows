@@ -250,82 +250,35 @@ supported:
 
 # ===== unsupported（每条附理由：coder npu-3 2026-09-14 逐例验证 / 静态分析；
 # 2026-09-17 对照上游 main db7d68a 源码逐条审计 + 实测复跑取证；
-# 2026-09-18 复审（peft HEAD = a5526d2 复测后）：
+# 2026-09-18 复审（peft HEAD = a5526d2 复测后；2026-09-18 二次校正对照 v0.21.0）：
 #   - 删 9 条 utility 误收录（convert_*/eval/load-only/HTTP client/synth 等
 #     非 training example——audit 工具按 .py/.sh 文件名扫描，不区分
-#     utility 与 example，误将 9 条非训练脚本纳入 unsupported，现移除）
-#   - 2 条 upstream 已删（kasa_finetuning/、shadow_finetuning/），归类归到
-#     末尾「archived」说明
+#     utility 与 example，误将 9 条非训练脚本纳入 unsupported，现移到末尾
+#     「Archived」段以备查）
+#   - 复审中曾**误判** kasa/shadow 为 "upstream 已删"（仅看 a5526d2 sparse
+#     checkout），二次校验发现 main HEAD `3a1f888` + v0.21.0 都还在，**已
+#     恢复**至 unsupported 主列表（详见底部 A2 段教训）
 #   - 修 3 条过期注释（idx 8/10/25，详见条目）
 # 行号以 db7d68a 为准；"待复跑取证" = 实测挂但源码找不到对应阻塞点，
 # "翻案候选" = 无后端硬编码，换模型/换数据/多卡 runner 即可能转 supported，
 # "翻案前置 patch" = NPU 实测可通，但需要源码侧 patch 才能进 supported
 #  （如硬编码 fp16=True、pin_memory=True、network 依赖）；
 # 已迁移：corda / glora / hira / olora / waveft / adamss_image /
-# sft_(fsdp/multigpu/qlora_fsdp) / pissa / deft / delora / randlora /
-# dora_caching / (lora/oft/deft/hra/stable_diffusion)_dreambooth → supported，
-# 详见 entry 备注） =====
-  # SFT + FSDP1：t5-base + FSDP + 2 卡 NPU exit 0（loss 4.12, 11.5s）；
-  # overlay 关 bnb 4bit + flash-attn + gradient_checkpointing；
-  # FSDP config num_processes 写死 8，overlay 加 --num_processes 2 即可
-  - path: examples/sft/run_peft_fsdp.sh
-    profile: peft
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
-    overlay_args:
-      - --config_file configs/fsdp_config.yaml
-      - --num_processes 2
-      - --num_machines 1
-      - --use_4bit_quantization False
-      - --use_flash_attn False
-      - --gradient_checkpointing False
-      - --use_reentrant False
-      - --push_to_hub False
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-
-  # SFT + torchrun DDP：bloomz-7b1（默认）+ 2 卡 NPU exit 0（loss 4.11, 3.5s）
-  - path: examples/sft/run_peft_multigpu.sh
-    profile: peft
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
-    overlay_args:
-      - --nproc_per_node 2
-      - --nnodes 1
-      - --use_4bit_quantization False
-      - --use_nested_quant False
-      - --use_flash_attn False
-      - --push_to_hub False
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-
-  # SFT + QLoRA-FSDP：t5-base + FSDP1 + 2 卡 NPU exit 0（loss 4.12, 13.1s）；
-  # bnb 4bit 在 NPU 上无 kernel，overlay 关掉退化为 LoRA+FSDP
-  - path: examples/sft/run_peft_qlora_fsdp.sh
-    profile: peft
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
-    overlay_args:
-      - --config_file configs/fsdp_config_qlora.yaml
-      - --num_processes 2
-      - --num_machines 1
-      - --use_4bit_quantization False
-      - --use_nested_quant False
-      - --use_flash_attn False
-      - --gradient_checkpointing False
-      - --use_reentrant True
-      - --bnb_4bit_compute_dtype bfloat16
-      - --bnb_4bit_quant_storage_dtype bfloat16
-      - --push_to_hub False
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-
-  # PiSSA：Qwen2.5-0.5B + ci_alpaca_10_dir fixture + trl 1.12 NLL loss，
+# pissa / deft / delora / randlora / dora_caching /
+# (lora/oft/deft/hra/stable_diffusion)_dreambooth → supported，
+# 详见 entry 备注；
+# sft_(fsdp/multigpu/qlora_fsdp) 曾误迁 supported（run 35303810367 实测
+# 12 失败例之三），已退回 unsupported C-多卡脚本段：launcher flag 无法经
+# 引擎 overlay 通道传递 + a2-1 单卡） =====
+  # PiSSA：Qwen2.5-0.5B + ci_alpaca_10 fixture + trl 1.12 NLL loss，
   # 1 epoch 5.17s exit 0（loss 5.33→1.59）。
   # 关键 overlay：--loss_type nll 绕开 [[trl-chunked-nll-functools-partial-bug]]
   # （pissa 用 device_map="auto" 触发 accelerate.add_hook_to_module 把 forward
   # 包成 functools.partial，trl chunked_nll inspect.signature(__func__) 崩）；
   # --bits bf16（脚本默认 fp32，省内存）
+  # data_path 复用 waveft 同款 ci_alpaca_10（目录 + train.jsonl，字段
+  # instruction/input/output——alpaca 标准格式）；run 35303810367 曾指向
+  # 不存在的 ci_alpaca_10_dir（fixture 从未提交），字段名本身没错。
   - path: examples/pissa_finetuning/pissa_finetuning.py
     profile: peft
     runner: linux-aarch64-a2-1
@@ -333,7 +286,7 @@ supported:
     overlay_args:
       - --base_model_name_or_path ${SFT_MODEL_PATH}
       - --bits bf16
-      - --data_path ${TARGET_ROOT}/fixtures/ci_alpaca_10_dir
+      - --data_path ${TARGET_ROOT}/fixtures/ci_alpaca_10
       - --dataset_field instruction output
       - --dataset_split 'train[:100%]'
       - --max_steps 5
@@ -426,8 +379,13 @@ supported:
   # --report_to tensorboard（accelerate 拒 "none"）
   # --center_crop 是 store_true flag，不传 =True
   # --mixed_precision no（peft SD 例无 grad_scaler，NPU bf16 需 explicit）
+  # CI 资产（run 35303810367 缺 diffusers 崩 import）：profile peft_dreambooth
+  # 在 setup_peft 之上装 diffusers + tensorboard 并从共享缓存解析
+  # ${SD_MODEL_PATH}（stable-diffusion-v1-5/stable-diffusion-v1-5，cache-seed
+  # 投递，见 cache-seed/peft/ms_seeds.yaml）；ci_dummy_image fixture =
+  # 2 张 256×256 PNG。
   - path: examples/lora_dreambooth/train_dreambooth.py
-    profile: peft
+    profile: peft_dreambooth
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     overlay_args:
@@ -445,7 +403,7 @@ supported:
 
   # SD dreambooth + OFT：同上配方，10 steps exit 0（loss 0.00172）
   - path: examples/oft_dreambooth/train_dreambooth.py
-    profile: peft
+    profile: peft_dreambooth
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     overlay_args:
@@ -463,7 +421,7 @@ supported:
 
   # SD dreambooth + DeFT：同上配方，10 steps exit 0（loss 0.00452）
   - path: examples/deft_dreambooth/train_dreambooth.py
-    profile: peft
+    profile: peft_dreambooth
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     overlay_args:
@@ -484,7 +442,7 @@ supported:
   # （父 args 在子 parser 之前生效，lora 子 parser 仅接收 --unet_r/--unet_alpha 等）
   # 10 steps exit 0（loss 0.0247，17s）
   - path: examples/stable_diffusion/train_dreambooth.py
-    profile: peft
+    profile: peft_dreambooth
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     overlay_args:
@@ -504,7 +462,7 @@ supported:
   # SD dreambooth + HRA：10 steps exit 0（loss 0.00313，17s）。
   # overlay 额外需要 --validation_prompt（脚本 :83 无条件访问）
   - path: examples/hra_dreambooth/train_dreambooth.py
-    profile: peft
+    profile: peft_dreambooth
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     overlay_args:
@@ -746,6 +704,28 @@ unsupported:
   # 换小模型 + 覆盖进程数可跑 peft 侧路径
   - examples/sft/run_peft_deepspeed.sh
 
+  # run 35303810367 实测双阻塞（曾按 coder 2 卡验证结论误迁 supported）：
+  # (1) launcher flag 通道缺失：accelerate/torchrun 的启动器参数
+  #   （--num_processes/--config_file/--nproc_per_node/--nnodes）必须位于
+  #   train.py 之前，而引擎 ensure_passthrough 只把 overlay_args 追加到
+  #   .sh 最后一条命令的行尾（train.py 参数之后）→ HfArgumentParser 报
+  #   "Some specified arguments are not used"（各 rank 全崩）；env var
+  #   覆盖也不行（PET_NPROC_PER_NODE 是缺省值，CLI 写死 8 优先）。
+  #   不 patch 源 .sh / 不改引擎无法解。
+  # (2) runner：现配 a2-1 单卡（devices: 1），2 进程无卡可用；需 a2-2。
+  # 翻案条件：引擎增加启动器参数通道（EXEC 机制扩展）+ runner 换 a2-2，
+  #   coder 2 卡验证配方（见 git 历史本轮删除的 supported 条目）可直接复用。
+  # run_peft_fsdp.sh：t5-base + FSDP1 + 2 卡 exit 0（loss 4.12, 11.5s）
+  - examples/sft/run_peft_fsdp.sh
+
+  # run_peft_multigpu.sh：bloomz-7b1 torchrun DDP + 2 卡 exit 0（loss 4.11, 3.5s）
+  # （同上双阻塞：--nproc_per_node 8 写死在脚本第 1 行）
+  - examples/sft/run_peft_multigpu.sh
+
+  # run_peft_qlora_fsdp.sh：t5-base + QLoRA-FSDP 2 卡 exit 0（loss 4.12, 13.1s；
+  # bnb 4bit 无 NPU kernel，overlay 关掉退化 LoRA+FSDP）（同上双阻塞）
+  - examples/sft/run_peft_qlora_fsdp.sh
+
   # GPTQ INT4 预量化模型（8B 非 70B，容量无忧）：GPTQ 内核 exllama/marlin 仅 CUDA
   - examples/sft/run_peft_fsdp_gptq.sh
 
@@ -778,6 +758,12 @@ unsupported:
   # 216-217），归因待复跑取证
   - examples/unilora_finetuning/unilora_finetuning.py
 
+  # coder 实测 backward ERR00100 归因待复跑取证；脚本直接调 variants 路径
+  # variants.py:1567-1594 linear+广播乘，疑 bf16 nll 反向或环境问题。
+  # 注：2026-09-18 复审时误归类为「upstream 已删」是错的——v0.21.0 / main HEAD
+  # 该目录仍存在；现恢复至此作为 unsupported 真 training example。
+  - examples/kasa_finetuning/kasa_finetuning.py
+
   # 版本敏感：trl 1.10 可跑（exit 0）、1.12 backward 崩，与 mica/miss 配方冲突
   # （脚本自身无 NPU 特有路径，断裂点在 trl 内部，待复跑取证）
   - examples/psoft_finetuning/psoft_finetuning.py
@@ -796,6 +782,13 @@ unsupported:
   # :52-60 设备分支 cuda/xpu/else→cpu，无 npu → device_map="cpu" 先落主机内存
   # （原"8B HBM 溢出"不成立：fp16/bf16 8B≈16G）；README 提供 accelerate launch 用法
   - examples/lorafa_finetune/lorafa_finetuning.py
+
+  # :59 device = "cuda" if torch.cuda.is_available() else "cpu"——NPU 上落 CPU、
+  # 单设备硬编码多卡无效（属实）；但实测 SIGKILL 是主机 RAM OOM（fp32 8B≈32GB）
+  # 而非"HBM"；默认模型 Qwen3-8B（非 llama 系）。
+  # 注：2026-09-18 复审时误归类为「upstream 已删」是错的——v0.21.0 / main HEAD
+  # 该目录仍存在；现恢复至此作为 unsupported 真 training example。
+  - examples/shadow_finetuning/shadow_finetuning.py
 
   # :59 device = "cuda" if torch.cuda.is_available() else "cpu"——NPU 上落 CPU、
   # 单设备硬编码多卡无效（属实）；但实测 SIGKILL 是主机 RAM OOM（fp32 8B≈32GB）
@@ -853,13 +846,15 @@ unsupported:
 #     三条 stage-1 准备（synthesize 产 distill.jsonl，train 包装 distill）；无独立训练循环。
 #   → audit 工具若再标这 9 条 +new 是已知 false-positive，下次可忽略或写 .audit-exclude。
 
-# ---- A2. 2 条 upstream peft HEAD（a5526d2）已删除（已从 unsupported 主列表删除）：
-#   - examples/kasa_finetuning/kasa_finetuning.py
-#     原行号归因：截断在 init detach 后、forward 仅 linear+广播乘
-#     （variants.py:1567-1594），疑 bf16 nll 反向或环境问题。
-#   - examples/shadow_finetuning/shadow_finetuning.py
-#     原行号归因：device = "cuda" if torch.cuda.is_available() else "cpu"；
-#     实测 SIGKILL 是主机 RAM OOM（fp32 8B≈32GB）而非 HBM；默认模型 Qwen3-8B。
-#   → 这两条无法在 NPU 上复测，归档保留原注释备查；CI/coder 看到这俩名字说明
-#     它们已经从 upstream peft 仓移除。
+# ---- A2. 【已校正】早期错误归类（2026-09-18 复审时把 kasa/shadow 误删）：
+#   复审时 Explore agent 在 audit-cache 的 sparse-checkout at commit `a5526d2`
+#   没看到 kasa_finetuning/、shadow_finetuning/，**误归类为 upstream 已删**。
+#   实际验证（2026-09-18 v0.21.0 + main HEAD `3a1f888`）：
+#     - examples/kasa_finetuning/    HEAD ✓ / v0.21.0 ✓ / v0.20.0 ✓ 全部存在
+#     - examples/shadow_finetuning/  HEAD ✓ / v0.21.0 ✓ / v0.20.0 ✓ 全部存在
+#   两条都是真 training example，**已恢复至 unsupported 主列表**（恢复时连同原
+#   归因注释一起放回：kasa 走 unilora 段、shadow 走 lorafa 段）。
+#   教训：判断 "upstream 已删" 必须 anchor 到 latest release tag 或 main HEAD，
+#   不能只看 sparse-checkout 中间 commit——peft 这种日更仓的中间状态可能不
+#   代表最终发布。
 
