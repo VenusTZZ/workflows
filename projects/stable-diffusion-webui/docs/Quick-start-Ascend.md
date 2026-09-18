@@ -18,6 +18,7 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 | torch | 2.9.0+cpu | 昇腾 PyPI 源 |
 | torch_npu | 2.9.0.post2 | 昇腾 PyPI 源 |
 | transformers | 4.44.2 | PyPI |
+| blendmodes | 2023 | PyPI |
 | scikit-image | 0.25.2 | PyPI |
 | Pillow | 10.4.0 | PyPI |
 | stable-diffusion-webui | v1.10.1 | GitHub |
@@ -69,11 +70,11 @@ HEAD xxx
 按上游锁定清单安装依赖，先解除 Python 3.12 与 NPU 无法安装的钉死版本；CLIP 无预编译包从 GitHub 源码安装，modelscope 用于下载模型：
 ```shell #test-setup
 cd stable-diffusion-webui
-sed -i -e 's/transformers==4.30.2/transformers==4.44.2/' -e 's/scikit-image==0.21.0/scikit-image==0.25.2/' -e 's/Pillow==9.5.0/Pillow==10.4.0/' requirements_versions.txt
+sed -i -e 's/transformers==4.30.2/transformers==4.44.2/' -e 's/blendmodes==2022/blendmodes==2023/' -e 's/scikit-image==0.21.0/scikit-image==0.25.2/' -e 's/Pillow==9.5.0/Pillow==10.4.0/' requirements_versions.txt
 pip install -r requirements_versions.txt
 pip install modelscope
 pip install torch==2.9.0 torchvision==0.24.0 torch_npu==2.9.0.post2
-sed -i -e 's/transformers==4.30.2/transformers==4.44.2/' -e 's/scikit-image>=0.19/scikit-image==0.25.2/' requirements.txt
+sed -i -e 's/transformers==4.30.2/transformers==4.44.2/' -e 's/blendmodes$/blendmodes==2023/' -e 's/scikit-image>=0.19/scikit-image==0.25.2/' requirements.txt
 pip install -r requirements.txt
 pip install 'setuptools<70' wheel
 pip install --no-build-isolation "https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip"
