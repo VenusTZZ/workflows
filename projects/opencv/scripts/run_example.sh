@@ -18,7 +18,7 @@
 #     we have no equivalent here, but PYTHONPATH must already be set
 #     by setup_example.sh; we just verify it is).
 
-set -uo pipefail
+set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
     echo "usage: $0 <example-relpath>" >&2
