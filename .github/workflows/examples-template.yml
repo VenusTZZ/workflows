@@ -303,6 +303,7 @@ jobs:
           EXAMPLE_PATH: ${{ matrix.example.path }}
           EXEC: ${{ matrix.example.exec }}
           LAUNCHER: ${{ matrix.example.launcher || '' }}
+          SCALE_PROCESSES: ${{ matrix.example.scale_processes || '' }}
           OVERLAY_ARGS: ${{ toJSON(matrix.example.overlay_args) }}
         run: |
           df -h /dev/shm

@@ -220,6 +220,19 @@ print(f"{var}={snap}", flush=True)
 PY
 }
 
+setup_peft_ds() {
+  # deepspeed 多卡 sft 例（run_peft_deepspeed.sh /
+  # run_peft_qlora_deepspeed_stage3.sh）：setup_peft 之上装 deepspeed。
+  # 0.19.7 的 npu accelerator 自动识别 Ascend + HCCL，coder npu-5
+  # 2026-09-18 实跑 ZeRO-3 2 卡 exit 0（loss 4.64）。DS_BUILD_OPS=0
+  # 跳过 CPU op 内核编译：ZeRO-3 bf16 训练路径不需要编译 op，且
+  # 编译耗时 + 裸镜像缺编译链，CI 不划算。
+  setup_peft
+  echo "installing deepspeed for ZeRO-3 sft entries"
+  DS_BUILD_OPS=0 python -m pip install deepspeed==0.19.7
+  python -c "import deepspeed; from deepspeed.accelerator import get_accelerator; print('deepspeed', deepspeed.__version__, 'accelerator', get_accelerator()._name)"
+}
+
 supported_profiles() {
   declare -F | awk '/^declare -f setup_/ { sub(/^declare -f setup_/, ""); print }' | paste -sd' ' -
 }
