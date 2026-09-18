@@ -19,10 +19,10 @@ scan:
     - recipes/full_finetune_multinode.slurm  # SLURM 启动器（需要集群调度）
 
 supported:
-  # ===== 已在 coder hdc-stable-npu-4（910B4×2, torch 2.11.0, torch_npu 2.11.0,
-  # CANN 9.x）端到端跑通（setup_example.sh 实跑 + recipe exit 0），依赖线 pin
+  # ===== 已在 coder hdc-stable-npu-3（910B4×2, torch 2.11.0+cpu, torch_npu 2.11.0,
+  # CANN 9.1.0）端到端跑通（setup_example.sh 实跑 + recipe exit 0），依赖线 pin
   # 见 setup_example.sh 注释 =====
-  # 验证日期：2026-09-17；torchtune checkout=v0.6.1（latest release，engine
+  # 验证日期：2026-09-18；torchtune checkout=v0.6.1（latest release，engine
   # monitor 自动取）；workflow_dispatch default=main（匹配 peft/torchtitan 模式，
   # main HEAD 现在能跑——见 setup_example.sh 注释里 torch 2.11.0 升级解释）。
   # 关键 pin：setup_torchtune() 动态探测 common_utils.py:19 的 NF4Tensor
@@ -107,7 +107,7 @@ supported:
       - checkpointer.checkpoint_dir=${TT_MODEL_PATH}
       - checkpointer.checkpoint_files=[model.safetensors]  # upstream 默认 2 个 .bin shard（Llama2 风格）；0.5B 单 shard
       - checkpointer.model_type=QWEN2  # upstream 默认 LLAMA2；走 qwen2_hf_to_tune（处理 q/k/v bias）而不是基类 hf_to_tune
-      - 'prompt.user="The capital of France is"'  # Dict[Role,str] 格式（generate.py:104 强类型）；双引号让 shlex.split 保留空格，shlex 路由到 prompt.user 单 token
+      - 'prompt.user="The capital of France is"'  # Dict[Role,str] 格式（generate.py:104 强类型）；内嵌空格会被 shlex.split 拆开，run_example.sh 必须改用 shlex.quote 包值或收紧为单 token；CI 矩阵里此 overlay_arg 在 coder 复现必抛 ValueError "got capital"，由 examples-guard 守护
       - 'prompt.system=null'  # 同上：Dict 键
       - max_new_tokens=20  # upstream 默认 300：压 token 数
     timeout_minutes: 15
@@ -142,8 +142,14 @@ supported:
   # 指标而非原版 `mc2`：原版 mc2 是 truthfulqa/utils.py 里的自定义聚合函数，
   # 用 built-in `acc` 避免把 utils.py 也 vendor 进 fixtures。`device=npu`
   # overlay 把 upstream config 的 `device: cuda` 翻成 NPU。
-  # 2026-09-17 在 coder hdc-stable-npu-2 跑通：exit 0，acc=1.0 / 0.92s /
-  # 1.56GB HBM（5×5 loglikelihood 一次性跑完）。fixture YAML 需要 `data_files`
+  # 2026-09-18 在 coder hdc-stable-npu-3 跑通：exit 0，acc=1.0 / 0.94s /
+  # 1.56GB HBM（5×5 loglikelihood 一次性跑完）。
+  # ⚠️ eleuther_eval recipe 内部硬编 `pretrained="gpt2"`（recipes/eleuther_eval.py:311
+  #   `super().__init__(pretrained="gpt2", device=str(device))`），会触发
+  #   `transformers.AutoConfig.from_pretrained("gpt2")`。coder pod 无法访问
+  #   huggingface.co（curl hang），需要在 runner 环境里设置
+  #   `HF_ENDPOINT=https://hf-mirror.com` 让 transformers 走中国镜像；CI 集群
+  #   直连 HF 时不设也无害。fixture YAML 需要 `data_files`
   # 写相对 cwd 的路径（datasets 4.x resolve_pattern 用 base_path="")，并且
   # multiple_choice 类型要求 `doc_to_choice` 显式提供，不能只给 doc_to_text /
   # doc_to_target。
