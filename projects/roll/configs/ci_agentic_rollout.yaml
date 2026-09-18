@@ -50,7 +50,9 @@ actor_infer:
       load_format: auto
       max_model_len: 256
       enforce_eager: true
-  device_mapping: [0]
+  # v0.3.0 worker_config evals device_mapping; it must stay a string
+  # expression, matching the upstream config's list(range(...)) style.
+  device_mapping: list(range(0,1))
 
 train_env_manager:
   format_penalty: -0.15
