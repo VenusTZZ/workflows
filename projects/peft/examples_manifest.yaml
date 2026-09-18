@@ -326,17 +326,44 @@ unsupported:
   # ZeRO-3 无 offload + 1 进程，仅剩 deepspeed-NPU 构建未验证，翻案候选
   - examples/conditional_generation/peft_lora_seq2seq_accelerate_ds_zero3_offload.py
 
-  # epoch 0 + eval 已完成（bart-base），全量未确认，候选；零 argparse（模型/epoch
-  # 均硬编码），压时长须改源码
+  # 实测（2026-09-17 coder npu-3）：fork 副本 + mt0-small（ModelScope 预下）
+  # + zeroshot/twitter-financial-news-sentiment（HF-Mirror 缓存）+ 1 epoch
+  # bs=4，train 2147 步 @2.42it/s，eval_loss=0.3020，exit 0——AdaLoRA 训练循环
+  # 在 NPU 上完整跑通。**不迁 supported**：源脚本 :14 硬编码 `device=...else "cuda"`,
+  # 必须源码 patch 才能直接跑；按用户"不要打 patch"方针不进 supported，但
+  # 实证已证 NPU 可跑（仅源改 device 兜底即可）
   - examples/conditional_generation/peft_adalora_seq2seq.py
 
-  # 原"单卡 32G / 同 eva"不成立：bf16 + device_map="auto"（:239,:462）多卡自动
-  # 切分 + --model_name 可换小模型（README 有 gpt2 示例）；仅剩家族 FA 推断，
-  # 翻案候选
+  # 实测（2026-09-17 coder npu-3）：fork 副本 + gpt2（ModelScope 预下）+ ScienceQA
+  # 任务 1 走本地 parquet（derek-thomas/ScienceQA 数据集 xet 401 不可走，MS 镜像
+  # 替代；multimodal image 列已 drop），其余任务 stub 空集跳过。**不迁 supported**：
+  # OSF 训练循环在 gpt2 + bf16=false + effective_rank=1.0 下首步即
+  # `RuntimeError: element 0 of tensors does not require grad and does not have a
+  # grad_fn`（OSF 算法本身对 gpt2 这种小 base + 全部 effective_rank 的分解路径，
+  # 残差冻结 + adapter 极小 → 完整 loss 不在 autograd 图上）。这是 OSF 算法与
+  # 模型规模不匹配的硬阻塞，不是 NPU 问题；全量 llama-3.1-8B 是 OSF 设计的本意
+  # 体量，8B 单卡 32G 跑不动需要多卡 + 该训练循环挂 3 个任务数小时——CI 翻案成本
+  # 远超 B 组其他条目
   - examples/orthogonal_subspace_learning/osf_continual_learning.py
 
-  # 原"单卡 32G"不成立：device_map="auto"（:83,:102）多卡切分、模型本就必须 CLI
-  # 传入；阻塞为家族 FA 推断（默认 sdpa dispatch）；--bits 默认 fp32，翻案候选
+  # 实测（2026-09-17 coder npu-3）：fork 副本 + gpt2 + imdb 1%（ModelScope 镜像
+  # + HF 缓存）+ trl 1.12 SFTTrainer + --loss_type=nll 绕开 chunked_nll。
+  # **不迁 supported**，三重阻塞：
+  # (1) torch.linalg.svd 在 NPU 镜像上极慢（单次 2304×768 SVD >90s 未返回，CPU
+  #     SVD fallback）。PiSSA 在 init 阶段对每层 Conv1D 做 SVD 分解（gpt2 有
+  #     12 层 × c_attn + 12 × c_proj = 24 次），实际等待 >30 min 仍未完成 init
+  #     之前的 print 都打不出。这种"print 后纯 SVD"卡死是 npu 镜像 torch.linalg
+  #     没有 nvfuser/native linalg 优化、SVD 走 ATen 默认 fallback 的根因
+  # (2) device_map="auto" + accelerate.accelerator.add_hook_to_module + trl 1.12
+  #     sft_trainer.py:383 _patch_chunked_ce_lm_head inspect.signature on
+  #     functools.partial 崩（[[trl-chunked-nll-functools-partial-bug]]）；
+  #     --loss_type=nll 绕开 chunked patch 但 device_map 必须去掉才能上 NPU
+  # (3) PiSSA niter=4 默认（变体 1）更慢；用 init_lora_weights="pissa" 单 iter
+  #     也卡
+  # 综合：翻案前置需 (a)NPU 镜像补 torch.linalg.svd 优化或 CPU 加速 fallback；
+  # (b)修 peft init_lora_weights="pissa" 路径支持 .to(device) 之后做 SVD（避免
+  #    一次性 init 全部层）；(c)trl 升级或 chunked_nll 修——任意一项都远超本组
+  # 简单翻案范围
   - examples/pissa_finetuning/pissa_finetuning.py
 
   # ===== C. 阻塞（架构/bnb/xformers/7B+FA/SD 时长/trl 版本） =====
@@ -452,8 +479,13 @@ unsupported:
   # 换小模型 + 覆盖进程数可跑 peft 侧路径
   - examples/sft/run_peft_deepspeed.sh
 
-  # Llama-2-70b：FSDP1 FULL_SHARD（config 写死 8 进程）；torch_npu 2.9 对 FSDP1
-  # 有适配，换小模型 + 覆盖进程数即可跑
+  # Llama-2-70b：FSDP1 FULL_SHARD（config 写死 8 进程）。实测（2026-09-17 coder
+  # npu-3）：`from accelerate import Accelerator` 在 venv 内 90s+ 仍未完成 import
+  # ——accelerate 1.15 在 torch_npu 2.9 镜像上的 plugin 探测可能死锁或拖慢
+  # 进程；无法单独验证 accelerate FSDP + NPU 后端基本通路。torch_npu 2.9 对
+  # FSDP1 适配存在（c10d + DeviceMesh），但 accelerate 1.15 的 FSDP plugin 是否
+  # 接入未确认；翻案前置需先验证 accelerate FSDP 在 NPU 上的 import/启动基本通
+  # 再考虑替换 70B + 8 进程
   - examples/sft/run_peft_fsdp.sh
 
   # GPTQ INT4 预量化模型（8B 非 70B，容量无忧）：GPTQ 内核 exllama/marlin 仅 CUDA

@@ -180,6 +180,47 @@ supported:
       - --save_dir ${CI_OUTPUT_DIR}/llava
     timeout_minutes: 120
 
+  # 多卡 launcher 验证：单进程 gather_for_metrics 返回本地 tensor（无 cross-rank 聚合），
+  # example 本意场景缺失。a2-2 实跑 torchrun --nproc-per-node 2 多卡全 3 epochs exit 0。
+  - path: examples/by_feature/multi_process_metrics.py
+    profile: accelerate-nlp
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 30
+
+  # 多卡 launcher 验证：LocalSGD step() 在 distributed_type==NO 下直接 no-op 静默退化为
+  # 普通训练 exit 0（accelerate/local_sgd.py:81 守卫），单进程验证不到 LocalSGD 行为。
+  # a2-2 实跑 torchrun --nproc-per-node 2 多卡全 3 epochs exit 0。
+  - path: examples/by_feature/local_sgd.py
+    profile: accelerate-nlp
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 30
+
+  # 多卡 launcher 验证：DDP wrap 条件 self.multi_device（accelerator.py:1883），单进程
+  # 不 wrap，DistributedDataParallelKwargs(comm_hook=...) 完全不生效。a2-2 实跑 torchrun
+  # --nproc-per-node 2 多卡全 3 epochs exit 0。
+  - path: examples/by_feature/ddp_comm_hook.py
+    profile: accelerate-nlp
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 30
+
+  # 多卡 launcher 验证：FSDP1 wrap / peak memory tracking 都需 launcher 触发
+  # distributed_type != NO；裸 python 退化为普通训练。a2-2 实跑 torchrun
+  # --nproc-per-node 2 --model_name_or_path bert-base-cased 全 3 epochs exit 0，
+  # peak mem 数值有效（1141MB 训练+1340MB eval/peak）。
+  - path: examples/by_feature/fsdp_with_peak_mem_tracking.py
+    profile: accelerate-nlp
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model_name_or_path bert-base-cased
+    timeout_minutes: 30
+
 unsupported:
   # [平台] TPU-only：torch_xla.runtime 无条件 import（finetune_lm_tpu.py:25），
   # torch_npu 栈没有 torch_xla，冷启即 ModuleNotFoundError
@@ -201,39 +242,8 @@ unsupported:
   # [不可解] deepspeed 整包不在 NPU 栈（ms-DeepSpeed 另立未 ship），特性激活的 ds config 路径封死
   - examples/by_feature/deepspeed_with_config_support.py
 
-  # [场景] FSDP1 + 峰值内存：FSDP wrap 仅在显式分布式类型（需 launcher）时发生
-  # （accelerator.py:1883 起 prepare 的 multi_device 条件）；裸 python 下
-  # fsdp_plugin 惰性，传 overlay args 会以普通 bert/mrpc 训练跑完 exit 0，
-  # 不验证 FSDP。旧注"单进程进 world_size>1 断言抛错"在裸 python 路径无法
-  # 复现（accelerate/torch 源码均无该断言分支）
-  # [场景] 单进程特性退化：FSDP1 wrap / peak memory tracking 都需 launcher
-  # 触发 distributed_type != NO；裸 python 以普通 bert/mrpc 训练跑完 exit 0，
-  # 验证不到 FSDP peak。NPU CI 验证 launcher 维度需多卡 runner（a2-2）。
-  # 本条未实跑，源码分析已够（accelerator.py prepare 路径 + fsdp_plugin
-  # 惰性设计明确）
-  - examples/by_feature/fsdp_with_peak_mem_tracking.py
-
-  # [场景] DDP comm hook：DDP wrap 条件是 self.multi_device（accelerator.py:1883），
-  # 单进程不 wrap，DistributedDataParallelKwargs(comm_hook=...) 完全不生效，
-  # example 以普通训练 exit 0；不会触发 no_sync RuntimeError（旧注有误）。
-  # 特性验证需要 ≥2 进程
-  # [场景] 单进程特性退化：DDP wrap 是 multi_device 守卫，单进程
-  # comm_hook 完全不生效；example 以普通 bert/mrpc 训练 exit 0。
-  # NPU CI 验证 comm_hook 需 ≥2 进程 launcher（a2-2 runner）。
-  # 本条未实跑，源码分析已够（accelerator.py:1883 multi_device 条件 +
-  # DDP plugin 惰性 + DDPKwargs(comm_hook=...) 仅在 DDP wrap 后挂上）。
-  - examples/by_feature/ddp_comm_hook.py
-
-  # [场景] LocalSGD：LocalSGD.enabled = enabled and distributed_type != NO
-  # （accelerate/local_sgd.py:81），单进程下 step() 直接 no-op，静默退化为普通
-  # 训练 exit 0，不会挂死（旧注"永远等不到 averaged grad"有误）；其支持列表
-  # 显式含 MULTI_NPU，多卡才有意义
-  # [场景] 单进程特性退化：LocalSGD step() 在 distributed_type==NO 下直接
-  # no-op 静默退化为普通训练 exit 0（accelerate/local_sgd.py:81 守卫）。
-  # 其支持列表显式含 MULTI_NPU，多卡才有意义。NPU CI 验证需 a2-2 runner。
-  # 本条未实跑，源码分析已够（local_sgd.py:81 守卫 + step() no-op 行为）。
-  - examples/by_feature/local_sgd.py
-
+  
+  
   # [平台/版本] Megatron-LM：立即死因是 transformers >=4.57 移除了
   # send_example_telemetry（megatron_lm_gpt_pretraining.py:50 的 import，任何
   # 平台同样炸，与 NPU 无关）；即使换旧版 transformers，脚本对 megatron plugin
@@ -243,16 +253,6 @@ unsupported:
   # 'transformers.utils'，rc=2）
   # [不可解] 上游 API 移除 + NPU 无 NVIDIA Megatron-LM mpu 后端（与 transformers 版本无关）
   - examples/by_feature/megatron_lm_gpt_pretraining.py
-
-  # [场景] 多进程 metric gather：单进程 gather_for_metrics 返回本地 tensor，
-  # exit 0 但无 cross-rank 验证，example 本意场景缺失
-  # （coder 实跑：DistributedType.NO 下 gather 返回本地 tensor）
-  # [场景] 单进程特性退化：gather_for_metrics 在 distributed_type==NO 下
-  # 返回本地 tensor，example 跑完 exit 0 但无 cross-rank metric 聚合
-  # （本意场景缺失）。NPU CI 验证 cross-rank 聚合需 ≥2 进程 launcher。
-  # 本条实跑确认 + 源码（accelerate/utils/operations.py gather_for_metrics
-  # 分支判断 distributed_type）双证。
-  - examples/by_feature/multi_process_metrics.py
 
   # [不支持] torch.profiler FunctionEventAvg 缺 self_npu_time_total：
   # example 自己拼 sort key f"self_{device.type}_time_total"

@@ -370,6 +370,23 @@ unsupported:
   #         modelscope 缓存。但 no-patch policy 下不动 setup 层；
   #         留给后续单独 PR。退役条件：setup 层 patch + modelscope
   #         pre-download 步骤，或 HF 镜像。
+  #         —— **2026-09-17 coder 二次实测**（post-asset-download，
+  #         hdc-stable-npu-1，torch 2.9.0+cpu + torch_npu 2.9.0.post2）：
+  #         ModelScope Qwen3-0.6B (1.4 GB) + Qwen3-1.7B (3.8 GB) 已
+  #         经 snapshot_download 到 ~/.cache/modelscope/Qwen/ 并
+  #         软链到 assets/hf/Qwen3-{0.6B,1.7B}。FileNotFoundError 解决，
+  #         但撞 spmd_types 0.2.3 import：
+  #           File ".../spmd_types/_mesh_axis.py", line 29
+  #             from torch.distributed._local_tensor._c10d import _indices_to_layout
+  #           ModuleNotFoundError: No module named 'torch.distributed._local_tensor'
+  #         —— coder 装的是 torch 2.9.0+cpu，早于 _local_tensor 进
+  #         torch.distributed 命名空间的版本（PyTorch 2.13+ 暴露的
+  #         DTensor / local tensor 重构 API）。CI 镜像（cann:9.1.0-py3.12
+  #         + torch 2.12.0+cpu + torch_npu 2.12.0）按 setup_example.sh
+  #         第 81-108 行 ensure_torch_stack 走的版本不同，应有
+  #         _local_tensor 可过 import。继续路径预期撞 trainer.py:505
+  #         c10d shim bug（`get_device_capability(None)[0]` NoneType）
+  #         —— 同 llama3_debugmodel 与 CI 35224441230 根因。
   #
   # (E) 量化条目 NVFP4 ImportError（同 llama3 量化的 B 类）：
   #     - qwen3_debugmodel_nvfp4
