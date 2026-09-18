@@ -108,12 +108,20 @@ is_available True
 
 ## 安装 ROLL
 
-**克隆仓库并安装依赖。** 从 GitHub 安装 ROLL，并按昇腾镜像的依赖清单安装 agentic 示例所需组件。
+**克隆仓库并安装依赖。** 使用最新正式 release 版本克隆 ROLL 源码，并按昇腾镜像的依赖清单安装 agentic 示例所需组件。
 
-```shell #test-setup id="install-roll"
-git clone https://github.com/alibaba/ROLL.git
+<!--
+```shell #test-setup store="upstream_ref"
+echo "${UPSTREAM_REF}"
+```
+-->
+
+```shell #test-setup id="install-roll" load="upstream_ref>>ref"
+set -e
+git clone --branch <ref> https://github.com/alibaba/ROLL.git
 cd ROLL
 grep -v '^gem-llm' requirements_common.txt > requirements_npu.txt
+sed -i 's/^decord /decord2 /' requirements_vision.txt
 pip install -r requirements_npu.txt
 pip install --ignore-requires-python gem-llm==0.0.4
 pip install "numpy==1.26.4"
@@ -122,6 +130,8 @@ pip install -e .
 rm requirements_npu.txt
 cd ..
 ```
+
+`<ref>` 为最新正式 release tag。
 
 **校验 ROLL 的 agentic 环境管理模块可导入。**
 
