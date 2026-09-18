@@ -184,6 +184,11 @@ class RollProjectTests(unittest.TestCase):
         self.assertEqual(rlvr['reference']['device_mapping'],
                          'list(range(3,4))')
         self.assertEqual(rlvr['rewards']['math_rule']['world_size'], 1)
+        self.assertNotIn('dataset_dir', rlvr['actor_train']['data_args'])
+        self.assertEqual(
+            rlvr['actor_train']['data_args']['file_name'],
+            ['${oc.env:FIXTURE_DIR}/ci_math_8.jsonl'],
+        )
         for section in ('actor_train', 'actor_infer', 'reference'):
             self.assertEqual(rlvr[section]['model_args']['flash_attn'],
                              'fa2', section)

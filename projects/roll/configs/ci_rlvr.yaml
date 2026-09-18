@@ -72,10 +72,12 @@ actor_train:
   data_args:
     template: qwen2_5
     file_name:
-      - ci_math_8.jsonl
+      # v0.3.0 DataArguments has no dataset_dir field (dacite drops the
+      # YAML key and get_dataset falls back to '.'), so embed the absolute
+      # fixture path directly in file_name.
+      - ${oc.env:FIXTURE_DIR}/ci_math_8.jsonl
     domain_interleave_probs:
       math_rule: 1
-    dataset_dir: ${oc.env:FIXTURE_DIR}
     messages: messages
     interleave_probs: "1.0"
     preprocessing_num_workers: 1
