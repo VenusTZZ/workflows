@@ -39,3 +39,14 @@ seeds:
     hf_id: nyu-mll/glue
     kind: dataset
     allow_patterns: ["mrpc/*", "cola/*"]
+  # (lora/oft/deft/hra/stable_diffusion)_dreambooth ×5 的 overlay
+  # --pretrained_model_name_or_path ${SD_MODEL_PATH}。与 accelerate 的
+  # seed 条目同资产（AI-ModelScope 镜像 + post-runwayml 改名 repo）——
+  # 共享缓存卷里 2026-09-17 已 plant，本条目在热缓存上走 [skip] fast
+  # path，作用是冷缓存时 peft 自己的 dispatch 也能补齐。
+  - ms_id: AI-ModelScope/stable-diffusion-v1-5
+    hf_id: stable-diffusion-v1-5/stable-diffusion-v1-5
+    kind: model
+    allow_patterns: ["model_index.json", "*/*.json", "*/model.safetensors",
+                     "*/diffusion_pytorch_model.safetensors", "tokenizer/*",
+                     "feature_extractor/*"]

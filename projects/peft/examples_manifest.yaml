@@ -264,70 +264,21 @@ supported:
 # "翻案前置 patch" = NPU 实测可通，但需要源码侧 patch 才能进 supported
 #  （如硬编码 fp16=True、pin_memory=True、network 依赖）；
 # 已迁移：corda / glora / hira / olora / waveft / adamss_image /
-# sft_(fsdp/multigpu/qlora_fsdp) / pissa / deft / delora / randlora /
-# dora_caching / (lora/oft/deft/hra/stable_diffusion)_dreambooth → supported，
-# 详见 entry 备注） =====
-  # SFT + FSDP1：t5-base + FSDP + 2 卡 NPU exit 0（loss 4.12, 11.5s）；
-  # overlay 关 bnb 4bit + flash-attn + gradient_checkpointing；
-  # FSDP config num_processes 写死 8，overlay 加 --num_processes 2 即可
-  - path: examples/sft/run_peft_fsdp.sh
-    profile: peft
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
-    overlay_args:
-      - --config_file configs/fsdp_config.yaml
-      - --num_processes 2
-      - --num_machines 1
-      - --use_4bit_quantization False
-      - --use_flash_attn False
-      - --gradient_checkpointing False
-      - --use_reentrant False
-      - --push_to_hub False
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-
-  # SFT + torchrun DDP：bloomz-7b1（默认）+ 2 卡 NPU exit 0（loss 4.11, 3.5s）
-  - path: examples/sft/run_peft_multigpu.sh
-    profile: peft
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
-    overlay_args:
-      - --nproc_per_node 2
-      - --nnodes 1
-      - --use_4bit_quantization False
-      - --use_nested_quant False
-      - --use_flash_attn False
-      - --push_to_hub False
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-
-  # SFT + QLoRA-FSDP：t5-base + FSDP1 + 2 卡 NPU exit 0（loss 4.12, 13.1s）；
-  # bnb 4bit 在 NPU 上无 kernel，overlay 关掉退化为 LoRA+FSDP
-  - path: examples/sft/run_peft_qlora_fsdp.sh
-    profile: peft
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
-    overlay_args:
-      - --config_file configs/fsdp_config_qlora.yaml
-      - --num_processes 2
-      - --num_machines 1
-      - --use_4bit_quantization False
-      - --use_nested_quant False
-      - --use_flash_attn False
-      - --gradient_checkpointing False
-      - --use_reentrant True
-      - --bnb_4bit_compute_dtype bfloat16
-      - --bnb_4bit_quant_storage_dtype bfloat16
-      - --push_to_hub False
-      - --output_dir ${CI_OUTPUT_DIR}
-    timeout_minutes: 60
-
-  # PiSSA：Qwen2.5-0.5B + ci_alpaca_10_dir fixture + trl 1.12 NLL loss，
+# pissa / deft / delora / randlora / dora_caching /
+# (lora/oft/deft/hra/stable_diffusion)_dreambooth → supported，
+# 详见 entry 备注；
+# sft_(fsdp/multigpu/qlora_fsdp) 曾误迁 supported（run 35303810367 实测
+# 12 失败例之三），已退回 unsupported C-多卡脚本段：launcher flag 无法经
+# 引擎 overlay 通道传递 + a2-1 单卡） =====
+  # PiSSA：Qwen2.5-0.5B + ci_alpaca_10 fixture + trl 1.12 NLL loss，
   # 1 epoch 5.17s exit 0（loss 5.33→1.59）。
   # 关键 overlay：--loss_type nll 绕开 [[trl-chunked-nll-functools-partial-bug]]
   # （pissa 用 device_map="auto" 触发 accelerate.add_hook_to_module 把 forward
   # 包成 functools.partial，trl chunked_nll inspect.signature(__func__) 崩）；
   # --bits bf16（脚本默认 fp32，省内存）
+  # data_path 复用 waveft 同款 ci_alpaca_10（目录 + train.jsonl，字段
+  # instruction/input/output——alpaca 标准格式）；run 35303810367 曾指向
+  # 不存在的 ci_alpaca_10_dir（fixture 从未提交），字段名本身没错。
   - path: examples/pissa_finetuning/pissa_finetuning.py
     profile: peft
     runner: linux-aarch64-a2-1
@@ -335,7 +286,7 @@ supported:
     overlay_args:
       - --base_model_name_or_path ${SFT_MODEL_PATH}
       - --bits bf16
-      - --data_path ${TARGET_ROOT}/fixtures/ci_alpaca_10_dir
+      - --data_path ${TARGET_ROOT}/fixtures/ci_alpaca_10
       - --dataset_field instruction output
       - --dataset_split 'train[:100%]'
       - --max_steps 5
@@ -428,8 +379,13 @@ supported:
   # --report_to tensorboard（accelerate 拒 "none"）
   # --center_crop 是 store_true flag，不传 =True
   # --mixed_precision no（peft SD 例无 grad_scaler，NPU bf16 需 explicit）
+  # CI 资产（run 35303810367 缺 diffusers 崩 import）：profile peft_dreambooth
+  # 在 setup_peft 之上装 diffusers + tensorboard 并从共享缓存解析
+  # ${SD_MODEL_PATH}（stable-diffusion-v1-5/stable-diffusion-v1-5，cache-seed
+  # 投递，见 cache-seed/peft/ms_seeds.yaml）；ci_dummy_image fixture =
+  # 2 张 256×256 PNG。
   - path: examples/lora_dreambooth/train_dreambooth.py
-    profile: peft
+    profile: peft_dreambooth
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     overlay_args:
@@ -447,7 +403,7 @@ supported:
 
   # SD dreambooth + OFT：同上配方，10 steps exit 0（loss 0.00172）
   - path: examples/oft_dreambooth/train_dreambooth.py
-    profile: peft
+    profile: peft_dreambooth
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     overlay_args:
@@ -465,7 +421,7 @@ supported:
 
   # SD dreambooth + DeFT：同上配方，10 steps exit 0（loss 0.00452）
   - path: examples/deft_dreambooth/train_dreambooth.py
-    profile: peft
+    profile: peft_dreambooth
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     overlay_args:
@@ -486,7 +442,7 @@ supported:
   # （父 args 在子 parser 之前生效，lora 子 parser 仅接收 --unet_r/--unet_alpha 等）
   # 10 steps exit 0（loss 0.0247，17s）
   - path: examples/stable_diffusion/train_dreambooth.py
-    profile: peft
+    profile: peft_dreambooth
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     overlay_args:
@@ -506,7 +462,7 @@ supported:
   # SD dreambooth + HRA：10 steps exit 0（loss 0.00313，17s）。
   # overlay 额外需要 --validation_prompt（脚本 :83 无条件访问）
   - path: examples/hra_dreambooth/train_dreambooth.py
-    profile: peft
+    profile: peft_dreambooth
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     overlay_args:
@@ -747,6 +703,28 @@ unsupported:
   # （2/4 卡须覆盖）；flash-attn 为可选开关（--use_flash_attn False 可关）——
   # 换小模型 + 覆盖进程数可跑 peft 侧路径
   - examples/sft/run_peft_deepspeed.sh
+
+  # run 35303810367 实测双阻塞（曾按 coder 2 卡验证结论误迁 supported）：
+  # (1) launcher flag 通道缺失：accelerate/torchrun 的启动器参数
+  #   （--num_processes/--config_file/--nproc_per_node/--nnodes）必须位于
+  #   train.py 之前，而引擎 ensure_passthrough 只把 overlay_args 追加到
+  #   .sh 最后一条命令的行尾（train.py 参数之后）→ HfArgumentParser 报
+  #   "Some specified arguments are not used"（各 rank 全崩）；env var
+  #   覆盖也不行（PET_NPROC_PER_NODE 是缺省值，CLI 写死 8 优先）。
+  #   不 patch 源 .sh / 不改引擎无法解。
+  # (2) runner：现配 a2-1 单卡（devices: 1），2 进程无卡可用；需 a2-2。
+  # 翻案条件：引擎增加启动器参数通道（EXEC 机制扩展）+ runner 换 a2-2，
+  #   coder 2 卡验证配方（见 git 历史本轮删除的 supported 条目）可直接复用。
+  # run_peft_fsdp.sh：t5-base + FSDP1 + 2 卡 exit 0（loss 4.12, 11.5s）
+  - examples/sft/run_peft_fsdp.sh
+
+  # run_peft_multigpu.sh：bloomz-7b1 torchrun DDP + 2 卡 exit 0（loss 4.11, 3.5s）
+  # （同上双阻塞：--nproc_per_node 8 写死在脚本第 1 行）
+  - examples/sft/run_peft_multigpu.sh
+
+  # run_peft_qlora_fsdp.sh：t5-base + QLoRA-FSDP 2 卡 exit 0（loss 4.12, 13.1s；
+  # bnb 4bit 无 NPU kernel，overlay 关掉退化 LoRA+FSDP）（同上双阻塞）
+  - examples/sft/run_peft_qlora_fsdp.sh
 
   # GPTQ INT4 预量化模型（8B 非 70B，容量无忧）：GPTQ 内核 exllama/marlin 仅 CUDA
   - examples/sft/run_peft_fsdp_gptq.sh

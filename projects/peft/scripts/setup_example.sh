@@ -180,6 +180,46 @@ for hf_id, var in TO_ENV:
 PY
 }
 
+setup_peft_dreambooth() {
+  # SD dreambooth 例（lora/oft/deft/hra/stable_diffusion ×5）：SFT 栈之外
+  # 还要 diffusers + tensorboard。run 35303810367 实测缺 diffusers 直接
+  # import 崩（train_dreambooth.py:14）；--report_to tensorboard 是
+  # accelerate log_with，需要 tensorboard 包。
+  # diffusers 不 pin：requirements 对 transformers>=4.x / hub>=0.30 的约束
+  # 均被 setup_peft 的 pinned 线满足，pip 不会动已装版本；具体版本线以
+  # 首轮 CI 绿后为准再固定。
+  setup_peft
+  echo "installing dreambooth stack (diffusers + tensorboard)"
+  python -m pip install diffusers tensorboard
+  python -c "import diffusers, tensorboard; print('diffusers', diffusers.__version__)"
+
+  # SD v1.5 由 cache-seed 投递（与 accelerate 共享同一缓存卷，2026-09-17
+  # 已 plant；peft 的 ms_seeds.yaml 同步声明，冷缓存时 peft 自己 dispatch
+  # 也能补）。resolve refs/main 得 ${SD_MODEL_PATH}，只影响本 profile——
+  # 非 SD 例的 setup 不做这个校验，缺资产不拦其它例。
+  python - <<'PY'
+import os
+from pathlib import Path
+
+HUB_ROOT = Path(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
+hf_id, var = "stable-diffusion-v1-5/stable-diffusion-v1-5", "SD_MODEL_PATH"
+
+repo_dir = HUB_ROOT / f"models--{hf_id.replace('/', '--')}"
+refs = repo_dir / "refs" / "main"
+if not refs.is_file():
+    raise SystemExit(
+        f"{hf_id} missing from shared cache root — dispatch the "
+        f"cache-seed workflow (spec: cache-seed/peft/ms_seeds.yaml)")
+sha = refs.read_text().strip()
+snap = repo_dir / "snapshots" / sha
+if not snap.is_dir() or not any(snap.iterdir()):
+    raise SystemExit(f"{hf_id}: refs/main -> {sha[:8]} has no snapshot files")
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"{var}={snap}\n")
+print(f"{var}={snap}", flush=True)
+PY
+}
+
 supported_profiles() {
   declare -F | awk '/^declare -f setup_/ { sub(/^declare -f setup_/, ""); print }' | paste -sd' ' -
 }
