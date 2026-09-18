@@ -117,6 +117,7 @@ echo "${UPSTREAM_REF}"
 -->
 
 ```shell #test-setup id="install-roll" load="upstream_ref>>ref"
+set -e
 git clone --branch <ref> https://github.com/alibaba/ROLL.git
 cd ROLL
 grep -v '^gem-llm' requirements_common.txt > requirements_npu.txt
