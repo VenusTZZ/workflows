@@ -18,10 +18,10 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # Enable release-only guarding after the domestic-image rollout smoke
-  # has passed its first manual run.
-  # schedule:
-  #   - cron: '45 */6 * * *'
+  # Release-only guarding: monitor the latest upstream release and rerun
+  # only when the release tag moves or the previous scheduled run failed.
+  schedule:
+    - cron: '45 */6 * * *'
   workflow_dispatch:
     inputs:
       target_ref:

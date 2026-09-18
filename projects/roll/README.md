@@ -40,7 +40,7 @@ release-only 监控、matrix 调度、结果校验与状态写回，本仓不修
 
 ## 运行与结果
 
-- schedule：阶段二仍保持注释关闭；三条全绿后再由你决定是否恢复 release-only 定时看护。
+- schedule：`45 */6 * * *`（release-only，仅在 release tag 变化或上一轮失败时重跑）；#20 已三条全绿，定时看护已恢复。
 - 手动触发：`target_ref` 留空测最新 release，或显式指定 `main` / tag / SHA。
 - 镜像：国内 `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12`；
   setup 固定安装 torch 2.10 + torch_npu 2.10.0.post4 + vLLM 0.23.0 +
