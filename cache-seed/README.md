@@ -101,9 +101,10 @@ files:
 
 不要手填 sha256 —— 必须由 `bundle_cache.py` 流式算才能与拷完后一致。
 
-## peft 的现状（实测 ModelScope API 后，2026-09-16；plant 迁入 workflow 2026-09-17）
+## peft 的现状（实测 ModelScope API 后，2026-09-16；plant 迁入 workflow 2026-09-17；
+## +2026-09-18 adamss_image 三资产）
 
-peft 9 个 supported 例的 model/dataset 来源，按例分别走哪条路：
+peft 10 个 supported 例的 model/dataset 来源，按例分别走哪条路：
 
 | 例 | model 路径来源 | dataset 路径来源 |
 |---|---|---|
@@ -114,6 +115,7 @@ peft 9 个 supported 例的 model/dataset 来源，按例分别走哪条路：
 | pvera | 硬编码 `facebook/dinov2-base`（ms_seeds plant） | 硬编码 `beans` → **cache-seed** |
 | sequence_classification | overlay `--model_name_or_path ${BERT_BASE_UNCASED_PATH}` | `glue/mrpc`（ms_seeds plant）|
 | adamss ×2 | overlay `--model_name_or_path ${ROBERTA_BASE_PATH}` | `glue/mrpc` 或 `glue/cola`（ms_seeds plant）|
+| adamss_image | 硬编码 `google/vit-base-patch16-224-in21k` → **cache-seed** | 硬编码 `Multimodal-Fatima/CIFAR10_train` + `CIFAR10_test` → **cache-seed** |
 
 **ms_seeds.yaml（`cache-seed/peft/ms_seeds.yaml`）装 ModelScope 有的**：
 - model ×5：Qwen2.5-0.5B / roberta-base（裸 id，adamss_manual 硬编码）/
@@ -125,10 +127,24 @@ TO_PLANT_DATASET），现统一迁入本 workflow；peft setup 只剩从 `refs/m
 解析 `${SFT_MODEL_PATH}` / `${ROBERTA_BASE_PATH}` / `${BERT_BASE_UNCASED_PATH}`
 三个 overlay 路径。
 
-**本目录装 ModelScope 没有 parquet 数据的 3 个**：
+**本目录装 ModelScope 没有 parquet 数据的 6 个**：
 - `stanfordnlp/imdb`（~80MB plain_text parquet ×3）— miss / mica 用 `train[:1%]`
 - `AI-Lab-Makerere/beans`（~137MB）— pvera 用
 - `gtfintechlab/financial_phrasebank_sentences_allagree` / 5768（~196KB）— beft 用
+- `google/vit-base-patch16-224-in21k`（safetensors ~330MB）— adamss_image 默认
+  `--model_name_or_path`；ModelScope 搜不到同名镜像（`AI-ModelScope/` 命名空间
+  无此 repo）
+- `Multimodal-Fatima/CIFAR10_train`（~114MB）/ `CIFAR10_test`（~23MB）—
+  adamss_image 的 `DATASET_CONFIGS["cifar10"]` 硬编码这两个用户 repo（不是
+  `uoft-cs/cifar10`！）；ModelScope 的 `huizyuan/cifar10` 是空 repo、`star07/cifar10`
+  是原始 python tar 包，均不可用（run 35222723526 实测 302 cas-bridge 超时）
+
+前 3 个（imdb / beans / financial_phrasebank）已投递后从仓库移除以减轻 checkout
+（同 accelerate 的做法；新 runner 缺数据时 `git checkout b260ad8 -- cache-seed/peft`
+恢复重建）。**manifest.yaml 只保留源文件在仓库里的条目**：9cc8282 rebase 删除
+bundle 文件时曾留下 12 条 stale 条目（源已不存在），会让 cache-seed dispatch
+对 peft 必然 exit 1（cache_seed.py 逐条校验源文件），2026-09-18 随 cifar10
+bundle 一并清理。后 3 个（vit + CIFAR10 ×2）为现役 bundle，投递完成后同样移除。
 
 `modelscope/imdb` 有 imdb.py script 但**没 parquet 数据**，所以 imdb 不走 modelscope。
 

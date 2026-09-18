@@ -224,6 +224,14 @@ supported:
   #   不 patch 永远 CPU SVD）；(2) stub evaluate.load("accuracy") 同 [[peft-monteclora-evaluate-load-hangs-offline]]；
   # (3) PYTHONPATH=/home/coder/work/peft-b-venv/stubs 提供 torchvision.transforms stub（pytorch.org/whl/cpu
   #   的 torchvision 0.22-0.29 与 torch 2.9.0+cpu ABI 不匹配，见 [[torchvision-v29-stable-abi]]）。
+  # 以上 3 patch 均为 coder 验证机本地补丁，CI 不需要：(1) 脚本不 .to()，get_peft_model
+  #   时权重在 CPU 上做 SVD（等价），Trainer 再搬 NPU；(2) evaluate.load 走 hf-mirror
+  #   小文件（glue_adamss_asa 同用法已过）；(3) CI 装 aarch64 torchvision 0.24.0 与
+  #   torch 2.9.0 ABI 匹配。
+  # CI 资产（run 35222723526 302 cas-bridge 超时根因）：脚本 DATASET_CONFIGS["cifar10"]
+  #   硬编码 Multimodal-Fatima/CIFAR10_train + CIFAR10_test（不是 uoft-cs/cifar10），
+  #   模型默认 google/vit-base-patch16-224-in21k —— ModelScope 均无镜像，走
+  #   cache-seed/peft bundle 投递（见 cache-seed/README.md peft 节）。
   # test eval 全量 10000 samples/1250 steps 长跑 ≈15min 是脚本默认行为（无 max_eval_samples 参数）；
   # 训练 + best eval 已经覆盖主要验证面，test eval 默认跑通但不开 overlay flag。
   - path: examples/adamss_finetuning/image_classification_adamss_asa.py
@@ -235,7 +243,9 @@ supported:
       - --num_epochs 1            # 默认 10：压训练
       - --batch_size 8            # 默认 32：910B4 单卡 32GB 够
       - --output_dir ${CI_OUTPUT_DIR}
-      - --cache_dir /home/coder/.hdc/cache/huggingface/datasets   # HF-Mirror + 持久化路径
+      # 不传 --cache_dir：coder 机的 /home/coder/.hdc/... 持久缓存路径在 CI 无意义；
+      # 数据文件命中 seed 的 hub cache（refs/main sha 对齐），arrow 处理走默认
+      # ~/.cache/huggingface/datasets（同 glue 例）。
     timeout_minutes: 30
 
 # ===== unsupported（每条附理由：coder npu-3 2026-09-14 逐例验证 / 静态分析；
