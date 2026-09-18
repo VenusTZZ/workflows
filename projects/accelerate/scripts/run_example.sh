@@ -187,6 +187,52 @@ PY
 
 prepare_dataset_shim
 
+# Launcher modes for python entry points. LAUNCHER comes from the
+# manifest entry (optional field, empty = default bare run):
+#   torchrun — torch.distributed.run with --nproc_per_node = visible
+#     NPU count; activates the multi-card paths (DDP wrap, comm hooks,
+#     gather_for_metrics cross-rank aggregation) that bare `python`
+#     silently skips on multi-card runners.
+#   accelerate-deepspeed — exercises the DeepSpeed config branch by
+#     launching via `accelerate launch --config_file` with a ZeRO-2
+#     bf16 DeepSpeed json materialized in the CI working copy (never
+#     committed). num_processes follows the visible NPU count so the
+#     same entry works on a2-1/a2-2 runners.
+count_npus() {
+  "$PYTHON" -c "import torch, torch_npu; print(torch.npu.device_count())"
+}
+
+prepare_deepspeed_configs() {
+  local cfg_dir="$GITHUB_WORKSPACE/ci_patch"
+  mkdir -p "$cfg_dir"
+  cat > "$cfg_dir/ds_zero2.json" <<'EOF'
+{
+  "bf16": {"enabled": true},
+  "zero_optimization": {"stage": 2},
+  "gradient_accumulation_steps": 1,
+  "train_batch_size": "auto",
+  "train_micro_batch_size_per_gpu": "auto"
+}
+EOF
+  local npus
+  npus=$(count_npus)
+  cat > "$cfg_dir/accelerate-deepspeed.yml" <<EOF
+compute_environment: LOCAL_MACHINE
+deepspeed_config:
+  deepspeed_config_file: $cfg_dir/ds_zero2.json
+  zero3_init_flag: false
+distributed_type: DEEPSPEED
+machine_rank: 0
+main_training_function: main
+num_machines: 1
+num_processes: $npus
+rdzv_backend: static
+same_network: true
+use_cpu: false
+EOF
+  echo "deepspeed launch config: $cfg_dir/accelerate-deepspeed.yml ($npus npu(s))"
+}
+
 # Shell examples that invoke `python train.py` with a path relative to
 # their own directory run with cwd = the example's directory; python
 # entry points run with cwd = the target root.
@@ -197,6 +243,27 @@ case "$LAUNCH_PATH" in
     ;;
   *)
     cd "$TARGET_ROOT"
-    python "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+    case "${LAUNCHER:-}" in
+      accelerate-deepspeed)
+        prepare_deepspeed_configs
+        "$PYTHON" -m accelerate.commands.launch \
+          --config_file "$GITHUB_WORKSPACE/ci_patch/accelerate-deepspeed.yml" \
+          "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+        ;;
+      torchrun)
+        npus=$(count_npus)
+        echo "torchrun launcher: --nproc_per_node $npus"
+        "$PYTHON" -m torch.distributed.run \
+          --nproc_per_node "$npus" \
+          "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+        ;;
+      "")
+        "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+        ;;
+      *)
+        echo "unknown LAUNCHER: $LAUNCHER (supported: torchrun, accelerate-deepspeed)" >&2
+        exit 2
+        ;;
+    esac
     ;;
 esac

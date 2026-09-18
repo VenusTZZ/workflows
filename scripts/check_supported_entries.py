@@ -56,10 +56,21 @@ def validate(supported: list[dict], target_root: Path
                 not isinstance(exec_path, str) or not exec_path.strip()):
             errors.append(f'{path}: exec must be a non-empty string')
             continue
+        # Optional launcher: names a multi-process launch mode the
+        # project's run_example.sh understands (e.g. accelerate-deepspeed
+        # wraps the bare `python` call in `accelerate launch --config_file`
+        # with a materialized DeepSpeed config). Empty/absent = bare run.
+        launcher = item.get('launcher')
+        if launcher is not None and (
+                not isinstance(launcher, str) or not launcher.strip()):
+            errors.append(f'{path}: launcher must be a non-empty string')
+            continue
         entry = dict(item)
         entry['overlay_args'] = overlay_args
         if exec_path is not None:
             entry['exec'] = exec_path.strip()
+        if launcher is not None:
+            entry['launcher'] = launcher.strip()
         # Display name for the run-example job label: basename of path
         # with extension stripped (e.g. examples/sft/run_peft.sh ->
         # run_peft). Workflow templates use this so the matrix leg label

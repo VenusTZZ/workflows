@@ -87,6 +87,23 @@ class CheckSupportedEntriesTests(unittest.TestCase):
         self.assertIn('overlay_args must be a list of non-empty strings',
                       stderr)
 
+    def test_launcher_field_passes_through(self) -> None:
+        manifest = VALID_MANIFEST.replace(
+            '    timeout_minutes: 90\n',
+            '    timeout_minutes: 90\n    launcher: accelerate-deepspeed\n')
+        code, outputs, _ = self._run(manifest)
+        self.assertEqual(code, 0)
+        matrix = outputs['supported_matrix']
+        self.assertEqual(matrix[0]['launcher'], 'accelerate-deepspeed')
+
+    def test_bad_launcher_fails(self) -> None:
+        manifest = VALID_MANIFEST.replace(
+            '    timeout_minutes: 90\n', '    timeout_minutes: 90\n'
+            '    launcher: 512\n')
+        code, _, stderr = self._run(manifest)
+        self.assertEqual(code, 1)
+        self.assertIn('launcher must be a non-empty string', stderr)
+
     def test_missing_required_field_fails(self) -> None:
         manifest = VALID_MANIFEST.replace('    image: img:tag\n', '')
         code, _, stderr = self._run(manifest)

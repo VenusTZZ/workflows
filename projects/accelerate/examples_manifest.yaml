@@ -25,6 +25,13 @@ supported:
   #   写进去的只有：
   #     - argparse required=True 必填（cv/complete_cv 的 --data_dir）
   #     - 显式 override 默认的（checkpointing_steps / output_dir / with_tracking / project_dir）
+  # launcher 约定（可选字段，透传到 run_example.sh 的 LAUNCHER env）：
+  #   torchrun → torch.distributed.run --nproc_per_node <可见 NPU 数>，激活
+  #   多卡路径（DDP wrap / comm hook / 跨 rank 聚合）；用于特性激活依赖
+  #   多进程、裸 python 会静默退化的 example（a2-2 条目）。
+  #   accelerate-deepspeed → run_example.sh 在 CI 工作副本物化 ZeRO-2 bf16
+  #   ds json + accelerate launch --config_file 启动（num_processes 跟随
+  #   可见 NPU 数）。用于特性激活依赖 launcher 的 example（deepspeed 分支）。
 
   - path: examples/nlp_example.py
     profile: accelerate-nlp
@@ -132,6 +139,36 @@ supported:
       - --gradient_accumulation_steps 4
     timeout_minutes: 60
 
+  # DeepSpeed config support：特性激活需要 accelerate launch + ds config，
+  # 由 launcher: accelerate-deepspeed 驱动。profile accelerate-ds 装 PyPI
+  # 原装 deepspeed——2026-09-18 coder npu-1 a2-2（2×910B4）实证：
+  # deepspeed 0.19.7 上游自带 NPU accelerator（real_accelerator 自动探测
+  # torch_npu → npu/hccl），ZeRO-2 bf16 2 卡全流程通过（6 步训练 + eval +
+  # best checkpoint + save_pretrained，SmolLM-360M + wikitext-2-v1，资产
+  # 复用 accelerate-nlp-ar 种子）。
+  # 已知瑕疵：example 末尾 `perplexity != best_metric` 浮点严格相等断言在
+  # NPU 上 flaky——同进程两次 eval 因 NPU kernel 非确定性差 ~1e-5，
+  # bf16/fp32 均实测约 1/2 通过率（fp32 不能规避）；CUDA kernel 确定性
+  # 所以上游 CI 不炸。训练/落盘本身完整，rc 只由该断言决定；属 example ×
+  # 工具链契约不齐，非 NPU 能力问题，等 upstream 换 math.isclose 后转稳。
+  # 无 CLI 参数可绕过（--load_best_model 同样两次 eval；空 eval set /
+  # 0 epoch 路径都以其它方式炸）。
+  - path: examples/by_feature/deepspeed_with_config_support.py
+    profile: accelerate-ds
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    launcher: accelerate-deepspeed
+    overlay_args:
+      - --model_name_or_path HuggingFaceTB/SmolLM-360M
+      - --dataset_name Salesforce/wikitext
+      - --dataset_config_name wikitext-2-v1
+      - --block_size 128
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --max_train_steps 6
+      - --per_device_train_batch_size 4
+      - --per_device_eval_batch_size 4
+    timeout_minutes: 60
+
   # schedulefree 是纯 Python 包（wheel 为 py3-none-any，无 native 扩展），
   # 装上后是普通张量运算。bert/mrpc 默认 3 epochs，同其他 by_feature 条目。
   - path: examples/by_feature/schedule_free.py
@@ -182,41 +219,48 @@ supported:
 
   # 多卡 launcher 验证：单进程 gather_for_metrics 返回本地 tensor（无 cross-rank 聚合），
   # example 本意场景缺失。a2-2 实跑 torchrun --nproc-per-node 2 多卡全 3 epochs exit 0。
+  # launcher: torchrun 让 CI 走同款多卡路径（nproc=可见 NPU 数），不再裸 python 退化。
   - path: examples/by_feature/multi_process_metrics.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-2
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    launcher: torchrun
     overlay_args: []
     timeout_minutes: 30
 
   # 多卡 launcher 验证：LocalSGD step() 在 distributed_type==NO 下直接 no-op 静默退化为
   # 普通训练 exit 0（accelerate/local_sgd.py:81 守卫），单进程验证不到 LocalSGD 行为。
-  # a2-2 实跑 torchrun --nproc-per-node 2 多卡全 3 epochs exit 0。
+  # a2-2 实跑 torchrun --nproc-per-node 2 多卡全 3 epochs exit 0。launcher: torchrun
+  # 让 CI 走同款多卡路径。
   - path: examples/by_feature/local_sgd.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-2
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    launcher: torchrun
     overlay_args: []
     timeout_minutes: 30
 
   # 多卡 launcher 验证：DDP wrap 条件 self.multi_device（accelerator.py:1883），单进程
   # 不 wrap，DistributedDataParallelKwargs(comm_hook=...) 完全不生效。a2-2 实跑 torchrun
-  # --nproc-per-node 2 多卡全 3 epochs exit 0。
+  # --nproc-per-node 2 多卡全 3 epochs exit 0。launcher: torchrun 让 CI 走同款多卡路径。
   - path: examples/by_feature/ddp_comm_hook.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-2
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    launcher: torchrun
     overlay_args: []
     timeout_minutes: 30
 
   # 多卡 launcher 验证：FSDP1 wrap / peak memory tracking 都需 launcher 触发
   # distributed_type != NO；裸 python 退化为普通训练。a2-2 实跑 torchrun
   # --nproc-per-node 2 --model_name_or_path bert-base-cased 全 3 epochs exit 0，
-  # peak mem 数值有效（1141MB 训练+1340MB eval/peak）。
+  # peak mem 数值有效（1141MB 训练+1340MB eval/peak）。launcher: torchrun
+  # 让 CI 走同款多卡路径。
   - path: examples/by_feature/fsdp_with_peak_mem_tracking.py
     profile: accelerate-nlp
     runner: linux-aarch64-a2-2
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    launcher: torchrun
     overlay_args:
       - --model_name_or_path bert-base-cased
     timeout_minutes: 30
@@ -234,17 +278,42 @@ unsupported:
   # （coder 实跑：ModuleNotFoundError: No module named 'runhouse'，rc=2）
   - examples/multigpu_remote_launcher.py
 
-  # [场景] DeepSpeed 配置支持：脚本不 import deepspeed，所有 deepspeed 分支
-  # 都有 `plugin is None` 守卫（deepspeed_with_config_support.py:508-531），
-  # 裸 python 下 plugin 为 None → 退化为普通训练跑完；特性激活需
-  # accelerate launch + ds config，而 deepspeed 不在 NPU 栈（ms-DeepSpeed 另立）。
-  # 旧注"import hang + DeepSpeedPlugin init 失败"与源码不符
-  # [不可解] deepspeed 整包不在 NPU 栈（ms-DeepSpeed 另立未 ship），特性激活的 ds config 路径封死
-  - examples/by_feature/deepspeed_with_config_support.py
+  # [依赖已解，example 自身待修] ALST + Ulysses 序列并行。
+  # 2026-09-18 源码复核 + coder npu-1 a2-2 实证推翻旧注两条：
+  #   ① "装上 deepspeed 也会撞 sp_backend ValueError" 判断错误——
+  #      sp_backend: Literal["deepspeed"]（parallelism_config.py:76/324）
+  #      校验的是包名字符串不是设备，example 传的就是 "deepspeed"，
+  #      深度依赖装好后此检查直接通过；
+  #   ② deepspeed 无需 Ascend fork：PyPI 原装 0.19.7 上游自带 NPU
+  #      accelerator（README "Contributed HW support"：Huawei Ascend NPU，
+  #      contributor validated），Ulysses SP 机制本身设备无关——核心注意力
+  #      取 transformers ALL_ATTENTION_FUNCTIONS["sdpa"]（NPU 走
+  #      npu attention），通信全是 all_to_all/all_gather/new_group（HCCL
+  #      标准集合通信）。
+  # 机制已在 NPU 三轮实证跑通（上游同路径测试脚本
+  # test_utils/scripts/external_deps/test_ds_alst_ulysses_sp.py，sp_size=2
+  # + sdpa）：ZeRO-2 flags / ZeRO-3 flags / 本 example 原版
+  # sp-alst.ds-config.json（ZeRO-3 + seq_parallel_communication_data_type
+  # bf16）全部 rc=0，loss 三轮逐位一致，ALST 可微 loss-gather 正常。
+  # 剩余两个 blocker（均非 NPU 能力问题）：
+  #   a) [资源] example 硬编 sp_size=4 且无 CLI 旋钮，需单机 4 卡（fleet
+  #      全是 2 卡 AscendA2；2 卡跑 4 进程会在 transformers 自动
+  #      deepspeed.zero.Init 的 set_device(local_rank=2) 炸 invalid
+  #      device——CUDA 同样炸，accelerate state.py:843 的 modulo 只保
+  #      accelerate 自己的设备选择，管不到 transformers/deepspeed 内部）；
+  #   b) [上游 bug] 当前 main sp-alst.py:116
+  #      accelerator.torch_device_mesh["sp"].get_group()——#3916 给
+  #      deepspeed SP 加 mesh-skip（build_device_mesh 返回 None）后 example
+  #      未同步，探针实证 mesh=None → TypeError（'NoneType' object is not
+  #      subscriptable），任何平台同样炸；上游 CI 只跑测试脚本不跑本
+  #      example。等 upstream 修（参照测试脚本用
+  #      deepspeed.utils.groups._get_sequence_parallel_group）或提
+  #      one-line PR 后，配 4 卡 runner 即可转正。
+  - examples/alst_ulysses_sequence_parallelism/sp-alst.py
+  - examples/alst_ulysses_sequence_parallelism/sp-alst.sh
 
-  
-  
-  # [平台/版本] Megatron-LM：立即死因是 transformers >=4.57 移除了
+  # [平台/版本] Megatron-LM：立即死因是
+  # transformers >=4.57 移除了
   # send_example_telemetry（megatron_lm_gpt_pretraining.py:50 的 import，任何
   # 平台同样炸，与 NPU 无关）；即使换旧版 transformers，脚本对 megatron plugin
   # 的访问也有 distributed_type 守卫（:546）退化普通 CLM，本意场景需要 NVIDIA
@@ -271,22 +340,8 @@ unsupported:
   # 属 example × 工具链契约不齐，非 NPU 能力问题
   # （coder 实跑：AttributeError: 'FunctionEventAvg' object has no attribute
   # 'self_npu_time_total'. Did you mean: 'self_cpu_time_total'?，rc=1）
-
-  # [不支持] ALST + Ulysses 序列并行：脚本同时依赖
-  #   ① 模块级 from deepspeed.runtime.utils import move_to_device（:16）
-  #   ② ParallelismConfig(sp_backend="deepspeed", ...) + DeepSpeedSequenceParallelConfig
-  # accelerate 整个 SP 后端契约就是 deepspeed-only：
-  #   parallelism_config.py:76  sp_backend: Literal["deepspeed"] = None
-  #   parallelism_config.py:324-326 valid_sp_backends = ["deepspeed"]，其它直接 ValueError
-  #   accelerator.py:2395-2398   sp_size>1 时非 "deepspeed" 直接报错
-  # 即 sp_backend="npu"/"hccl" 这类替代目前 accelerate 不支持；NPU 上 long-seq
-  # 训练走 Ascend 自家 ring-attention / MSAdaptor 等独立路径，不在 accelerate 体系内
-  # （coder 实跑：ModuleNotFoundError: No module named 'deepspeed'，rc=2；
-  #   即使绕过 deepspeed 装 sp-alst 也会撞 sp_backend ValueError）
-  # 不属于"不涉及"——长序列训练是 NPU 强需求场景；但本 example 走的具体
-  # 路径（deepspeed Ulysses + ALST loss-gather）在 NPU 栈没有等价实现
-  - examples/alst_ulysses_sequence_parallelism/sp-alst.py
-  - examples/alst_ulysses_sequence_parallelism/sp-alst.sh
+  # （2026-09-18 复核：注释在而文件行漏登，补上使分类完整）
+  - examples/by_feature/profiler.py
 
   # [不支持] PiPPy pipeline 推理：bert/gpt2 失败路径不同：
   #

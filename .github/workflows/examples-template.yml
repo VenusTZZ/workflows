@@ -302,6 +302,7 @@ jobs:
         env:
           EXAMPLE_PATH: ${{ matrix.example.path }}
           EXEC: ${{ matrix.example.exec }}
+          LAUNCHER: ${{ matrix.example.launcher || '' }}
           OVERLAY_ARGS: ${{ toJSON(matrix.example.overlay_args) }}
         run: |
           df -h /dev/shm

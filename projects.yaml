@@ -138,6 +138,7 @@ projects:
     runner: linux-aarch64-a2-2
     dir: projects/diffusers
     workflows:
+      examples: .github/workflows/diffusers-examples.yml
       quick_start: .github/workflows/diffusers-quick-start.yml
   # DGL quick-start guard scope: single-card LightGCN smoke on NPU,
   # backed by the Huawei×BUPT fork BUPT-GAMMA/dgl-ascend (dmlc/dgl

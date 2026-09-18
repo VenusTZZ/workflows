@@ -1,0 +1,502 @@
+version: 1
+scan:
+  root: examples
+  # .yaml is not scanned: the files under examples/ are deepspeed/accelerate
+  # run configs, not launchable examples. .md/.txt/.json are non-examples.
+  include_extensions: ['.py', '.sh']
+  # files-only 模型（docs/examples-guard-engine.md §2.7）。exclude 项为目录
+  # 路径（递归剪枝）或 glob（`**` 跨目录，匹配相对 target root 的路径），
+  # 排除"不是 example 的配套物"：上游自测、helper 模块、入口背后的实现文件。
+  # 扫描工具的 exclude 支持随发现 workflow 的 PR 落地；examples 引擎不扫描，
+  # 本段当前只是声明。
+  exclude:
+    - '**/test_*'                    # 上游自测（test_dreambooth*.py 等）
+    - '**/conftest.py'
+    - '**/__init__.py'
+    - '**/utils.py'                  # 单文件 helper
+    - '**/utils/**'                  # helper 模块目录
+    - '**/profiling_utils.py'
+    - '**/discriminator.py'          # train_vqgan.py 的判别器实现
+    - examples/research_projects/anytext/ocr_recog/**        # anytext 的 OCR 实现
+    - examples/research_projects/promptdiffusion/pipeline_prompt_diffusion.py
+    - examples/research_projects/promptdiffusion/promptdiffusioncontrolnet.py
+    - examples/research_projects/pixart/pipeline_pixart_alpha_controlnet.py
+    - examples/research_projects/gligen/dataset.py
+    - examples/research_projects/gligen/make_datasets.py
+    - examples/research_projects/rdm/retriever.py
+    - examples/research_projects/wuerstchen/text_to_image/modeling_efficient_net_encoder.py
+
+supported:
+  # ===== 已在昇腾单卡容器（CANN 9.1.0 / torch 2.9.0 / torch_npu 2.9.0.post2，
+  # 与 quick-start 同镜像）跑通 =====
+  #
+  # overlay 里的 ${...} 由 setup_example.sh 预下后写入 GITHUB_ENV：
+  #   ${SDXL_BASE_PATH} / ${THREE_D_ICON_PATH}  <- profile diffusers-sdxl
+  #   ${SD15_MODEL_PATH} / ${THREE_D_ICON_PATH} <- profile diffusers-sd15
+
+  # SDXL 高级 Dreambooth LoRA。上游命令见
+  # examples/advanced_diffusion_training/README.md「3D icon example」。
+  # 只保留最小可跑集，其余参数走脚本默认值（已实测可跑）。模型/数据集在
+  # setup 预下（ModelScope / hf-mirror），overlay 只引用本地路径。
+  - path: examples/advanced_diffusion_training/train_dreambooth_lora_sdxl_advanced.py
+    profile: diffusers-sdxl
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path ${SDXL_BASE_PATH}     # ModelScope: AI-ModelScope/stable-diffusion-xl-base-1.0
+      - --dataset_name ${THREE_D_ICON_PATH}                   # hf-mirror: linoyts/3d_icon（本地 imagefolder 目录）
+      - --instance_prompt "3d icon in the style of TOK"
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --caption_column prompt
+      - --mixed_precision bf16
+      - --resolution 128
+      - --train_batch_size 1
+      - --gradient_checkpointing
+      - --learning_rate 1.0
+      - --optimizer prodigy
+      - --max_train_steps 1
+    timeout_minutes: 90
+
+  # SD1.5 高级 Dreambooth LoRA。上游命令见
+  # examples/advanced_diffusion_training/README.md「3d icon example」的 SD1.5
+  # 变体。同样只保留最小可跑集，其余参数走脚本默认值。
+  #
+  # 训练-only smoke：有意不传 --validation_prompt。SD1.5 的 validation 会走
+  # StableDiffusionPipeline.from_pretrained(<本地模型>)，加载 safety_checker /
+  # feature_extractor；setup 的 allow_file_pattern 为省 ~2.4 GB 没下这两个
+  # 目录，而 diffusers 对缺失子目录没有兜底（pipeline_loading_utils.py
+  # load_sub_model 会退回根目录加载并抛错）。训练本身不需要它们。
+  # 2026-09-17 已在昇腾机验证 no-validation 路径跑完（rc=0）。
+  - path: examples/advanced_diffusion_training/train_dreambooth_lora_sd15_advanced.py
+    profile: diffusers-sd15
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path ${SD15_MODEL_PATH}    # ModelScope: AI-ModelScope/stable-diffusion-v1-5
+      - --dataset_name ${THREE_D_ICON_PATH}                   # hf-mirror: linoyts/3d_icon（本地 imagefolder 目录）
+      - --instance_prompt "3d icon in the style of TOK"
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --caption_column prompt
+      - --mixed_precision bf16
+      - --resolution 128
+      - --train_batch_size 1
+      - --gradient_checkpointing
+      - --learning_rate 1.0
+      - --optimizer prodigy
+      - --max_train_steps 1
+    timeout_minutes: 90
+
+  # Amused-256 微调（nouns 数据集）。上游命令见 examples/amused/README.md。
+  # ModelScope 既没有 amused/amused-256 也没有 m1guelpf/nouns（2026-09-17
+  # 查证），二者只能走 hf-mirror（引擎已设 HF_ENDPOINT + HF_HUB_DISABLE_XET），
+  # 所以 setup 不预下、由 example 运行时现取。
+  # --report_to 默认是 wandb，脚本在 wandb 缺失时直接 ImportError；CI 未装
+  # wandb，必须显式改成 tensorboard（栈里已装）。不传 --validation_prompts，
+  # 与训练-only smoke 策略一致。2026-09-17 昇腾机手动验证跑完（rc=0）。
+  - path: examples/amused/train_amused.py
+    profile: diffusers-amused
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path amused/amused-256     # hf-mirror（ModelScope 无）
+      - --instance_data_dataset m1guelpf/nouns                # hf-mirror（ModelScope 无）
+      - --image_key image
+      - --prompt_key text
+      - --resolution 256
+      - --mixed_precision fp16
+      - --train_batch_size 1
+      - --max_train_steps 1
+      - --checkpointing_steps 1
+      - --report_to tensorboard
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 60
+
+  # CogVideoX-2b LoRA 微调。上游命令见 examples/cogvideo/README.md。
+  # 模型从 ModelScope 预下（AI-ModelScope/CogVideoX-2b）；数据集用
+  # Wild-Heart/Disney-VideoGeneration-Dataset（69 个 6s 视频，~25 MB，本身就是
+  # README 的 prompt.txt + videos.txt + videos/ 格式），无 ModelScope 镜像，
+  # setup 走 hf-mirror 下载（视频是 Xet-backed，若 cas-bridge 不可达需改
+  # cache-seed）。--report_to 默认 None，无 wandb 问题。脚本末尾会加载完整
+  # pipeline 做 final inference（不传 --validation_prompt 时只加载、不生成）。
+  # 2026-09-17 昇腾机手动验证跑完（rc=0）。
+  - path: examples/cogvideo/train_cogvideox_lora.py
+    profile: diffusers-cogvideo
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path ${COGVIDEOX_MODEL_PATH}   # ModelScope: AI-ModelScope/CogVideoX-2b
+      - --instance_data_root ${COGVIDEOX_DATASET_DIR}             # hf-mirror: Wild-Heart/Disney-VideoGeneration-Dataset
+      - --caption_column prompt.txt
+      - --video_column videos.txt
+      - --train_batch_size 1
+      - --max_train_steps 1
+      - --checkpointing_steps 1
+      - --lr_warmup_steps 1
+      - --mixed_precision fp16
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 120
+
+  # LCM 一致性蒸馏（webdataset 流式）。上游命令见
+  # examples/consistency_distillation/。teacher 用 SD1.5（ModelScope 预下）；
+  # 训练分片用 ModelScope 镜像的 laion/conceptual-captions-12m-webdataset：
+  # hf-mirror 上该 tar 是 Xet-backed（302 到 cas-bridge，CI runner 可能不可达），
+  # ModelScope 走 cdn-lfs-cn-1（国内可达）。--max_train_samples 1 只取 1 个样本，
+  # 流式读一点即停。--report_to 默认 tensorboard，无 wandb 问题。
+  - path: examples/consistency_distillation/train_lcm_distill_sd_wds.py
+    profile: diffusers-lcm
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_teacher_model ${SD15_MODEL_PATH}      # ModelScope: AI-ModelScope/stable-diffusion-v1-5
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --mixed_precision fp16
+      - --resolution 256
+      - --max_train_steps 1
+      - --max_train_samples 1
+      - --dataloader_num_workers 1
+      - --train_shards_path_or_url "pipe:curl -L -s https://www.modelscope.cn/datasets/laion/conceptual-captions-12m-webdataset/resolve/master/data/{00000..00000}.tar"
+      - --train_batch_size 1
+      - --gradient_accumulation_steps 1
+      - --checkpointing_steps 1
+    timeout_minutes: 120
+
+  # LCM LoRA 一致性蒸馏（webdataset 流式，LoRA rank=4）。同 profile，teacher
+  # SD1.5；分片同样用 ModelScope 镜像（理由同上一条）。上游命令见
+  # examples/consistency_distillation/。
+  - path: examples/consistency_distillation/train_lcm_distill_lora_sd_wds.py
+    profile: diffusers-lcm
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_teacher_model ${SD15_MODEL_PATH}      # ModelScope: AI-ModelScope/stable-diffusion-v1-5
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --mixed_precision fp16
+      - --resolution 512
+      - --lora_rank 4
+      - --learning_rate 1e-4
+      - --max_train_steps 1
+      - --max_train_samples 1
+      - --dataloader_num_workers 1
+      - --train_shards_path_or_url "pipe:curl -L -s https://www.modelscope.cn/datasets/laion/conceptual-captions-12m-webdataset/resolve/master/data/{00000..00000}.tar"
+      - --train_batch_size 1
+      - --checkpointing_steps 1
+    timeout_minutes: 120
+
+  # LCM LoRA 一致性蒸馏（SDXL teacher + fp16-fix VAE，webdataset 流式）。
+  # 与 SD 版同配方，LoRA rank=4；teacher/VAE 从 ModelScope 预下，分片用
+  # ModelScope 镜像（理由同上）。全量 SDXL 版（train_lcm_distill_sdxl_wds.py）
+  # 在 64GB 卡上仍 OOM，故用 LoRA 版。2026-09-17 昇腾机验证可跑。
+  - path: examples/consistency_distillation/train_lcm_distill_lora_sdxl_wds.py
+    profile: diffusers-lcm-sdxl
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_teacher_model ${SDXL_BASE_PATH}           # ModelScope: AI-ModelScope/stable-diffusion-xl-base-1.0
+      - --pretrained_vae_model_name_or_path ${SDXL_VAE_PATH}   # ModelScope: AI-ModelScope/sdxl-vae-fp16-fix
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --mixed_precision fp16
+      - --resolution 512
+      - --lora_rank 4
+      - --learning_rate 1e-4
+      - --max_train_steps 1
+      - --max_train_samples 1
+      - --dataloader_num_workers 1
+      - --train_shards_path_or_url "pipe:curl -L -s https://www.modelscope.cn/datasets/laion/conceptual-captions-12m-webdataset/resolve/master/data/{00000..00000}.tar"
+      - --train_batch_size 1
+      - --checkpointing_steps 1
+    timeout_minutes: 120
+
+  # ControlNet 训练（SD1.5 base）。上游命令见 examples/controlnet/README.md。
+  # 数据集 fusing/fill50k 由 example 运行时经 hf-mirror 现取（引擎已设
+  # HF_ENDPOINT + HF_HUB_DISABLE_XET）。注意整个 diffusers 项目要求
+  # datasets<4.0.0（已 pin 在基座）。2026-09-17 昇腾机验证可跑。
+  - path: examples/controlnet/train_controlnet.py
+    profile: diffusers-controlnet
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path ${SD15_MODEL_PATH}   # ModelScope: AI-ModelScope/stable-diffusion-v1-5
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --dataset_name fusing/fill50k
+      - --resolution 512
+      - --train_batch_size 1
+      - --max_train_steps 1
+      - --checkpointing_steps 1
+    timeout_minutes: 120
+
+  # ControlNet 训练（SDXL base）。同样用 fill50k 脚本型数据集（datasets<4.0 +
+  # trust_remote_code，profile 已设 HF_DATASETS_TRUST_REMOTE_CODE=1）。
+  # 2026-09-17 昇腾机验证可跑。
+  - path: examples/controlnet/train_controlnet_sdxl.py
+    profile: diffusers-controlnet-sdxl
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path ${SDXL_BASE_PATH}   # ModelScope: AI-ModelScope/stable-diffusion-xl-base-1.0
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --dataset_name fusing/fill50k
+      - --resolution 512
+      - --train_batch_size 1
+      - --max_train_steps 1
+      - --checkpointing_steps 1
+    timeout_minutes: 120
+
+# ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
+unsupported:
+  # 模型下载需要令牌
+  - examples/advanced_diffusion_training/train_dreambooth_lora_flux_advanced.py
+  - examples/cogvideo/train_cogvideox_image_to_video_lora.py
+  # 数据集open_pose_controlnet 31GB，之后选一张图片验证
+  - examples/cogview4-control/train_control_cogview4.py
+  # 看护价值很低，且有些依赖cuda
+  - examples/community/adaptive_mask_inpainting.py
+  - examples/community/bit_diffusion.py
+  - examples/community/checkpoint_merger.py
+  - examples/community/clip_guided_images_mixing_stable_diffusion.py
+  - examples/community/clip_guided_stable_diffusion.py
+  - examples/community/clip_guided_stable_diffusion_img2img.py
+  - examples/community/cogvideox_ddim_inversion.py
+  - examples/community/composable_stable_diffusion.py
+  - examples/community/ddim_noise_comparative_analysis.py
+  - examples/community/dps_pipeline.py
+  - examples/community/edict_pipeline.py
+  - examples/community/fresco_v2v.py
+  - examples/community/gluegen.py
+  - examples/community/hd_painter.py
+  - examples/community/iadb.py
+  - examples/community/imagic_stable_diffusion.py
+  - examples/community/img2img_inpainting.py
+  - examples/community/instaflow_one_step.py
+  - examples/community/interpolate_stable_diffusion.py
+  - examples/community/ip_adapter_face_id.py
+  - examples/community/kohya_hires_fix.py
+  - examples/community/latent_consistency_img2img.py
+  - examples/community/latent_consistency_interpolate.py
+  - examples/community/latent_consistency_txt2img.py
+  - examples/community/llm_grounded_diffusion.py
+  - examples/community/lpw_stable_diffusion.py
+  - examples/community/lpw_stable_diffusion_onnx.py
+  - examples/community/lpw_stable_diffusion_xl.py
+  - examples/community/magic_mix.py
+  - examples/community/marigold_depth_estimation.py
+  - examples/community/masked_stable_diffusion_img2img.py
+  - examples/community/masked_stable_diffusion_xl_img2img.py
+  - examples/community/matryoshka.py
+  - examples/community/mixture_canvas.py
+  - examples/community/mixture_tiling.py
+  - examples/community/mixture_tiling_sdxl.py
+  - examples/community/mod_controlnet_tile_sr_sdxl.py
+  - examples/community/multilingual_stable_diffusion.py
+  - examples/community/one_step_unet.py
+  - examples/community/pipeline_animatediff_controlnet.py
+  - examples/community/pipeline_animatediff_img2video.py
+  - examples/community/pipeline_animatediff_ipex.py
+  - examples/community/pipeline_controlnet_xl_kolors.py
+  - examples/community/pipeline_controlnet_xl_kolors_img2img.py
+  - examples/community/pipeline_controlnet_xl_kolors_inpaint.py
+  - examples/community/pipeline_demofusion_sdxl.py
+  - examples/community/pipeline_fabric.py
+  - examples/community/pipeline_faithdiff_stable_diffusion_xl.py
+  - examples/community/pipeline_flux_differential_img2img.py
+  - examples/community/pipeline_flux_kontext_multiple_images.py
+  - examples/community/pipeline_flux_rf_inversion.py
+  - examples/community/pipeline_flux_semantic_guidance.py
+  - examples/community/pipeline_flux_with_cfg.py
+  - examples/community/pipeline_hunyuandit_differential_img2img.py
+  - examples/community/pipeline_kolors_differential_img2img.py
+  - examples/community/pipeline_kolors_inpainting.py
+  - examples/community/pipeline_null_text_inversion.py
+  - examples/community/pipeline_prompt2prompt.py
+  - examples/community/pipeline_sdxl_style_aligned.py
+  - examples/community/pipeline_stable_diffusion_3_differential_img2img.py
+  - examples/community/pipeline_stable_diffusion_3_instruct_pix2pix.py
+  - examples/community/pipeline_stable_diffusion_boxdiff.py
+  - examples/community/pipeline_stable_diffusion_pag.py
+  - examples/community/pipeline_stable_diffusion_upscale_ldm3d.py
+  - examples/community/pipeline_stable_diffusion_xl_attentive_eraser.py
+  - examples/community/pipeline_stable_diffusion_xl_controlnet_adapter.py
+  - examples/community/pipeline_stable_diffusion_xl_controlnet_adapter_inpaint.py
+  - examples/community/pipeline_stable_diffusion_xl_differential_img2img.py
+  - examples/community/pipeline_stable_diffusion_xl_instandid_img2img.py
+  - examples/community/pipeline_stable_diffusion_xl_instantid.py
+  - examples/community/pipeline_stable_diffusion_xl_ipex.py
+  - examples/community/pipeline_stable_diffusion_xl_t5.py
+  - examples/community/pipeline_stg_cogvideox.py
+  - examples/community/pipeline_stg_hunyuan_video.py
+  - examples/community/pipeline_stg_ltx.py
+  - examples/community/pipeline_stg_ltx_image2video.py
+  - examples/community/pipeline_stg_mochi.py
+  - examples/community/pipeline_stg_wan.py
+  - examples/community/pipeline_z_image_differential_img2img.py
+  - examples/community/pipeline_zero1to3.py
+  - examples/community/pipline_flux_fill_controlnet_Inpaint.py
+  - examples/community/regional_prompting_stable_diffusion.py
+  - examples/community/rerender_a_video.py
+  - examples/community/run_onnx_controlnet.py
+  - examples/community/run_tensorrt_controlnet.py
+  - examples/community/scheduling_ufogen.py
+  - examples/community/sd_text2img_k_diffusion.py
+  - examples/community/sde_drag.py
+  - examples/community/seed_resize_stable_diffusion.py
+  - examples/community/speech_to_image_diffusion.py
+  - examples/community/stable_diffusion_comparison.py
+  - examples/community/stable_diffusion_controlnet_img2img.py
+  - examples/community/stable_diffusion_controlnet_inpaint.py
+  - examples/community/stable_diffusion_controlnet_inpaint_img2img.py
+  - examples/community/stable_diffusion_controlnet_reference.py
+  - examples/community/stable_diffusion_ipex.py
+  - examples/community/stable_diffusion_mega.py
+  - examples/community/stable_diffusion_reference.py
+  - examples/community/stable_diffusion_repaint.py
+  - examples/community/stable_diffusion_tensorrt_img2img.py
+  - examples/community/stable_diffusion_tensorrt_inpaint.py
+  - examples/community/stable_diffusion_tensorrt_txt2img.py
+  - examples/community/stable_diffusion_xl_controlnet_reference.py
+  - examples/community/stable_diffusion_xl_reference.py
+  - examples/community/stable_unclip.py
+  - examples/community/text_inpainting.py
+  - examples/community/tiled_upscaling.py
+  - examples/community/unclip_image_interpolation.py
+  - examples/community/unclip_text_interpolation.py
+  - examples/community/wildcard_stable_diffusion.py
+  # 上游 bug：line 1358 直接访问 unet.dtype，但 unet 已被 DDP 包装（未
+  # unwrap_model），accelerate launch 下必炸；CUDA 多卡同样。
+  - examples/consistency_distillation/train_lcm_distill_lora_sdxl.py
+  # 全量 SDXL LCM 蒸馏：teacher+student 双 UNet + 全量 Adam 状态，64GB 卡仍 OOM
+  # （optimizer.step 分配 exp_avg_sq 时爆），改看 LoRA 变体
+  - examples/consistency_distillation/train_lcm_distill_sdxl_wds.py
+  # Flax：transformers 5.x 已移除 FlaxCLIPTextModel（diffusers >=0.40 也移除了
+  # Flax），import 阶段即 ImportError
+  - examples/controlnet/train_controlnet_flax.py
+  # FLUX.1-dev gated + 爆显存
+  - examples/controlnet/train_controlnet_flux.py
+  # SD3 gated + 爆显存（README 要求 ≥80GB）
+  - examples/controlnet/train_controlnet_sd3.py
+  - examples/cosmos/create_prompts_for_gr1_dataset.py
+  - examples/cosmos/download_and_preprocess_datasets.sh
+  - examples/cosmos/eval_cosmos_predict25_lora.py
+  - examples/cosmos/eval_lora.sh
+  - examples/cosmos/train_cosmos_predict25_lora.py
+  - examples/cosmos/train_lora.sh
+  - examples/cosmos3/cosmos_parallel.py
+  - examples/cosmos3/inference_cosmos3.py
+  - examples/custom_diffusion/retrieve.py
+  - examples/custom_diffusion/train_custom_diffusion.py
+  - examples/discrete_diffusion/sample_llada2.py
+  - examples/discrete_diffusion/train_llada2.py
+  - examples/dreambooth/convert_to_imagefolder.py
+  - examples/dreambooth/train_dreambooth.py
+  - examples/dreambooth/train_dreambooth_flax.py
+  - examples/dreambooth/train_dreambooth_flux.py
+  - examples/dreambooth/train_dreambooth_lora.py
+  - examples/dreambooth/train_dreambooth_lora_flux.py
+  - examples/dreambooth/train_dreambooth_lora_flux_kontext.py
+  - examples/dreambooth/train_dreambooth_lora_flux2.py
+  - examples/dreambooth/train_dreambooth_lora_flux2_img2img.py
+  - examples/dreambooth/train_dreambooth_lora_flux2_klein.py
+  - examples/dreambooth/train_dreambooth_lora_flux2_klein_img2img.py
+  - examples/dreambooth/train_dreambooth_lora_hidream.py
+  - examples/dreambooth/train_dreambooth_lora_ideogram4.py
+  - examples/dreambooth/train_dreambooth_lora_krea2.py
+  - examples/dreambooth/train_dreambooth_lora_lumina2.py
+  - examples/dreambooth/train_dreambooth_lora_qwen_image.py
+  - examples/dreambooth/train_dreambooth_lora_sana.py
+  - examples/dreambooth/train_dreambooth_lora_sd3.py
+  - examples/dreambooth/train_dreambooth_lora_sdxl.py
+  - examples/dreambooth/train_dreambooth_lora_z_image.py
+  - examples/dreambooth/train_dreambooth_sd3.py
+  - examples/flux-control/train_control_flux.py
+  - examples/flux-control/train_control_lora_flux.py
+  - examples/inference/image_to_image.py
+  - examples/inference/inpainting.py
+  - examples/instruct_pix2pix/train_instruct_pix2pix.py
+  - examples/instruct_pix2pix/train_instruct_pix2pix_sdxl.py
+  - examples/kandinsky2_2/text_to_image/train_text_to_image_decoder.py
+  - examples/kandinsky2_2/text_to_image/train_text_to_image_lora_decoder.py
+  - examples/kandinsky2_2/text_to_image/train_text_to_image_lora_prior.py
+  - examples/kandinsky2_2/text_to_image/train_text_to_image_prior.py
+  - examples/model_search/pipeline_easy.py
+  - examples/profiling/profiling_pipelines.py
+  - examples/profiling/run_profiling.sh
+  - examples/reinforcement_learning/diffusion_policy.py
+  - examples/reinforcement_learning/run_diffuser_locomotion.py
+  - examples/research_projects/anytext/anytext.py
+  - examples/research_projects/anytext/anytext_controlnet.py
+  - examples/research_projects/autoencoder_rae/train_autoencoder_rae.py
+  - examples/research_projects/autoencoderkl/train_autoencoderkl.py
+  - examples/research_projects/colossalai/inference.py
+  - examples/research_projects/colossalai/train_dreambooth_colossalai.py
+  - examples/research_projects/consistency_training/train_cm_ct_unconditional.py
+  - examples/research_projects/control_lora/control_lora.py
+  - examples/research_projects/controlnet/train_controlnet_webdataset.py
+  - examples/research_projects/diffusion_dpo/train_diffusion_dpo.py
+  - examples/research_projects/diffusion_dpo/train_diffusion_dpo_sdxl.py
+  - examples/research_projects/diffusion_orpo/train_diffusion_orpo_sdxl_lora.py
+  - examples/research_projects/diffusion_orpo/train_diffusion_orpo_sdxl_lora_wds.py
+  - examples/research_projects/dreambooth_inpaint/train_dreambooth_inpaint.py
+  - examples/research_projects/dreambooth_inpaint/train_dreambooth_inpaint_lora.py
+  - examples/research_projects/flux_lora_quantization/compute_embeddings.py
+  - examples/research_projects/flux_lora_quantization/train_dreambooth_lora_flux_miniature.py
+  - examples/research_projects/gligen/train_gligen_text.py
+  - examples/research_projects/instructpix2pix_lora/train_instruct_pix2pix_lora.py
+  - examples/research_projects/intel_opts/inference_bf16.py
+  - examples/research_projects/intel_opts/textual_inversion/textual_inversion_bf16.py
+  - examples/research_projects/intel_opts/textual_inversion_dfq/text2images.py
+  - examples/research_projects/intel_opts/textual_inversion_dfq/textual_inversion.py
+  - examples/research_projects/ip_adapter/tutorial_train_faceid.py
+  - examples/research_projects/ip_adapter/tutorial_train_ip-adapter.py
+  - examples/research_projects/ip_adapter/tutorial_train_plus.py
+  - examples/research_projects/ip_adapter/tutorial_train_sdxl.py
+  - examples/research_projects/lora/train_text_to_image_lora.py
+  - examples/research_projects/lpl/lpl_loss.py
+  - examples/research_projects/lpl/train_sdxl_lpl.py
+  - examples/research_projects/multi_subject_dreambooth/train_multi_subject_dreambooth.py
+  - examples/research_projects/multi_subject_dreambooth_inpainting/train_multi_subject_dreambooth_inpainting.py
+  - examples/research_projects/multi_token_textual_inversion/multi_token_clip.py
+  - examples/research_projects/multi_token_textual_inversion/textual_inversion.py
+  - examples/research_projects/multi_token_textual_inversion/textual_inversion_flax.py
+  - examples/research_projects/onnxruntime/text_to_image/train_text_to_image.py
+  - examples/research_projects/onnxruntime/textual_inversion/textual_inversion.py
+  - examples/research_projects/onnxruntime/unconditional_image_generation/train_unconditional.py
+  - examples/research_projects/pixart/controlnet_pixart_alpha.py
+  - examples/research_projects/pixart/run_pixart_alpha_controlnet_pipeline.py
+  - examples/research_projects/pixart/train_controlnet_hf_diffusers.sh
+  - examples/research_projects/pixart/train_pixart_controlnet_hf.py
+  - examples/research_projects/promptdiffusion/convert_original_promptdiffusion_to_diffusers.py
+  - examples/research_projects/pytorch_xla/inference/flux/flux_inference.py
+  - examples/research_projects/pytorch_xla/inference/flux/flux_inference_spmd.py
+  - examples/research_projects/pytorch_xla/training/text_to_image/train_text_to_image_xla.py
+  - examples/research_projects/rdm/pipeline_rdm.py
+  - examples/research_projects/realfill/infer.py
+  - examples/research_projects/realfill/train_realfill.py
+  - examples/research_projects/sana/train_sana_sprint_diffusers.py
+  - examples/research_projects/sana/train_sana_sprint_diffusers.sh
+  - examples/research_projects/scheduled_huber_loss_training/dreambooth/train_dreambooth.py
+  - examples/research_projects/scheduled_huber_loss_training/dreambooth/train_dreambooth_lora.py
+  - examples/research_projects/scheduled_huber_loss_training/dreambooth/train_dreambooth_lora_sdxl.py
+  - examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image.py
+  - examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image_lora.py
+  - examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image_lora_sdxl.py
+  - examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image_sdxl.py
+  - examples/research_projects/sd3_lora_colab/compute_embeddings.py
+  - examples/research_projects/sd3_lora_colab/train_dreambooth_lora_sd3_miniature.py
+  - examples/research_projects/sdxl_flax/sdxl_single.py
+  - examples/research_projects/sdxl_flax/sdxl_single_aot.py
+  - examples/research_projects/vae/vae_roundtrip.py
+  - examples/research_projects/wuerstchen/text_to_image/train_text_to_image_lora_prior.py
+  - examples/research_projects/wuerstchen/text_to_image/train_text_to_image_prior.py
+  - examples/server/server.py
+  - examples/server-async/Pipelines.py
+  - examples/server-async/serverasync.py
+  - examples/server-async/test.py
+  - examples/t2i_adapter/train_t2i_adapter_sdxl.py
+  - examples/text_to_image/train_text_to_image.py
+  - examples/text_to_image/train_text_to_image_flax.py
+  - examples/text_to_image/train_text_to_image_lora.py
+  - examples/text_to_image/train_text_to_image_lora_sdxl.py
+  - examples/text_to_image/train_text_to_image_sdxl.py
+  - examples/textual_inversion/textual_inversion.py
+  - examples/textual_inversion/textual_inversion_flax.py
+  - examples/textual_inversion/textual_inversion_sdxl.py
+  - examples/unconditional_image_generation/train_unconditional.py
+  - examples/vqgan/train_vqgan.py
