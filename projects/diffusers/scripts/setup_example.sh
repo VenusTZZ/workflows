@@ -17,9 +17,9 @@ PROFILE="$1"
 
 # Validate the profile before installing anything (contract: unknown
 # profile must exit non-zero before any install).
-SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-amused diffusers-cogvideo diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl"
+SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-amused diffusers-cogvideo diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2"
 case "$PROFILE" in
-  diffusers-sdxl|diffusers-sd15|diffusers-amused|diffusers-cogvideo|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl) ;;
+  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-amused|diffusers-cogvideo|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2) ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -204,6 +204,20 @@ if "sd15" in WANT:
         ignore_file_pattern=["*.fp16.*", "*.bin"],
     )
 
+# SD 1.4 (the dreambooth examples' README base model). Same component-only
+# filter as SD1.5.
+if "sd14" in WANT:
+    snapshot(
+        "SD14_MODEL_PATH",
+        "AI-ModelScope/stable-diffusion-v1-4",
+        allow_file_pattern=[
+            "*.json", "*.txt", "*.model",
+            "unet/*", "vae/*",
+            "text_encoder/*", "tokenizer/*", "scheduler/*",
+        ],
+        ignore_file_pattern=["*.fp16.*", "*.bin"],
+    )
+
 # CogVideoX-2b (transformer + T5 text_encoder + VAE). The ModelScope repo
 # layout is already clean (component dirs only, no single-file/fp16 dupes).
 if "cogvideo" in WANT:
@@ -304,6 +318,27 @@ setup_diffusers_sd15() {
   download_assets sd15,3d-icon
 }
 
+# diffusers-dreambooth: SD1.4 dreambooth / dreambooth-LoRA training examples.
+# The dataset is the repo's own docs/source/en/imgs, so no dataset download.
+setup_diffusers_dreambooth() {
+  install_example_stack
+  download_assets sd14
+}
+
+# diffusers-instruct-pix2pix: SD1.5 InstructPix2Pix. The dataset
+# (fusing/instructpix2pix-1000-samples) is fetched by the example at run time.
+setup_diffusers_instruct_pix2pix() {
+  install_example_stack
+  download_assets sd15
+}
+
+# diffusers-kandinsky: Kandinsky 2.2 decoder training. Base only; the model
+# (kandinsky-community/kandinsky-2-2-decoder, no ModelScope mirror) and the
+# dataset are fetched by the example at run time.
+setup_diffusers_kandinsky() {
+  install_example_stack
+}
+
 # diffusers-amused: Amused-256 finetuning. ModelScope has neither
 # amused/amused-256 nor the m1guelpf/nouns dataset, so nothing is
 # pre-downloaded: the example fetches both via hf-mirror at run time
@@ -360,6 +395,13 @@ setup_diffusers_cogvideo() {
   # imageio-ffmpeg are the example's own requirements (video export).
   python -m pip install decord2 imageio imageio-ffmpeg
   download_assets cogvideo
+}
+
+# diffusers-llada2: LLaDA2 block-refinement training smoke. Base stack is
+# enough (datasets is already pinned there); Qwen2.5-0.5B is fetched at run
+# time and --use_dummy_data avoids any dataset download.
+setup_diffusers_llada2() {
+  install_example_stack
 }
 
 if [[ -z "${TARGET_ROOT:-}" || -z "${GITHUB_WORKSPACE:-}" || -z "${GITHUB_ENV:-}" ]]; then
