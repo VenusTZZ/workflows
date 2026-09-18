@@ -22,6 +22,8 @@ HAVE_UPSTREAM = UPSTREAM_EXAMPLES.is_dir()
 
 SUPPORTED = {
     'examples/qwen2.5-0.5B-agentic/agentic_rollout_sokoban.yaml',
+    'examples/qwen2.5-0.5B-agentic/agentic_val_sokoban.yaml',
+    'examples/ascend_examples/qwen3_8b_rlvr_fsdp2.yaml',
 }
 CHECKOUT_EXCLUDED = {
     'examples/qwen2.5-0.5B-agentic/agentic_val_webshop.yaml',
@@ -58,8 +60,8 @@ class RollProjectTests(unittest.TestCase):
         self.assertEqual(set(unsupported) - candidates, set())
         self.assertEqual(candidates - set(supported) - set(unsupported), set())
         self.assertEqual(candidates, set(supported) | set(unsupported))
-        self.assertEqual(len(supported), 1)
-        self.assertEqual(len(unsupported), 106)
+        self.assertEqual(len(supported), 3)
+        self.assertEqual(len(unsupported), 104)
 
     def test_manifest_scan_reflects_ledger_semantics(self) -> None:
         manifest = load_manifest()
@@ -96,7 +98,7 @@ class RollProjectTests(unittest.TestCase):
         self.assertEqual(
             result.returncode, 0,
             f'engine check failed: {result.stderr}')
-        self.assertIn('manifest ok: 1 supported entry(ies)', result.stdout)
+        self.assertIn('manifest ok: 3 supported entry(ies)', result.stdout)
 
     def test_fixture_schema(self) -> None:
         rows = [
@@ -141,6 +143,50 @@ class RollProjectTests(unittest.TestCase):
         self.assertNotIn('actor_train', rollout)
         self.assertEqual(rollout['actor_infer']['strategy_args']
                          ['strategy_name'], 'vllm')
+        self.assertEqual(rollout['actor_infer']['device_mapping'],
+                         'list(range(0,1))')
+
+        train = yaml.safe_load(
+            (PROJECT / 'configs/ci_agentic_train.yaml').read_text(
+                encoding='utf-8'))
+        self.assertEqual(train['max_steps'], 1)
+        self.assertEqual(train['eval_steps'], 1000)
+        self.assertEqual(train['num_gpus_per_node'], 2)
+        self.assertEqual(train['actor_train']['strategy_args']
+                         ['strategy_name'], 'fsdp2_train')
+        self.assertEqual(train['actor_train']['device_mapping'],
+                         'list(range(0,1))')
+        self.assertEqual(train['actor_infer']['strategy_args']
+                         ['strategy_name'], 'vllm')
+        self.assertEqual(train['actor_infer']['device_mapping'],
+                         'list(range(1,2))')
+        self.assertEqual(train['reference']['strategy_args']
+                         ['strategy_name'], 'hf_infer')
+        self.assertEqual(train['reference']['device_mapping'],
+                         'list(range(0,1))')
+
+        rlvr = yaml.safe_load(
+            (PROJECT / 'configs/ci_rlvr.yaml').read_text(
+                encoding='utf-8'))
+        self.assertEqual(rlvr['num_gpus_per_node'], 4)
+        self.assertEqual(rlvr['max_steps'], 1)
+        self.assertEqual(rlvr['eval_steps'], 1000)
+        self.assertEqual(rlvr['actor_train']['strategy_args']
+                         ['strategy_name'], 'fsdp2_train')
+        self.assertEqual(rlvr['actor_train']['device_mapping'],
+                         'list(range(0,2))')
+        self.assertEqual(rlvr['actor_infer']['strategy_args']
+                         ['strategy_name'], 'vllm')
+        self.assertEqual(rlvr['actor_infer']['device_mapping'],
+                         'list(range(2,3))')
+        self.assertEqual(rlvr['reference']['strategy_args']
+                         ['strategy_name'], 'hf_infer')
+        self.assertEqual(rlvr['reference']['device_mapping'],
+                         'list(range(3,4))')
+        self.assertEqual(rlvr['rewards']['math_rule']['world_size'], 1)
+        for section in ('actor_train', 'actor_infer', 'reference'):
+            self.assertEqual(rlvr[section]['model_args']['flash_attn'],
+                             'fa2', section)
 
     def test_phase_one_setup_uses_domestic_runtime_sources(self) -> None:
         text = (PROJECT / 'scripts/setup_example.sh').read_text(
@@ -164,6 +210,30 @@ class RollProjectTests(unittest.TestCase):
         text = (PROJECT / 'scripts/run_example.sh').read_text(
             encoding='utf-8')
         self.assertIn('unset PYTORCH_NPU_ALLOC_CONF', text)
+
+    def test_setup_injects_device_lists_per_profile(self) -> None:
+        text = (PROJECT / 'scripts/setup_example.sh').read_text(
+            encoding='utf-8')
+        self.assertIn('agentic_train_npu', text)
+        self.assertIn('rlvr_npu', text)
+        self.assertIn('ASCEND_RT_VISIBLE_DEVICES="0,1"', text)
+        self.assertIn('ASCEND_RT_VISIBLE_DEVICES="0,1,2,3"', text)
+        self.assertIn(
+            'echo "ASCEND_RT_VISIBLE_DEVICES=', text)
+
+    def test_actionlint_registers_four_card_runner(self) -> None:
+        text = (REPO / '.github' / 'actionlint.yaml').read_text(
+            encoding='utf-8')
+        self.assertIn('linux-aarch64-a2-4', text)
+
+    def test_projects_registry_has_examples_workflow(self) -> None:
+        data = yaml.safe_load(
+            (REPO / 'projects.yaml').read_text(encoding='utf-8'))
+        roll = next(p for p in data['projects'] if p['name'] == 'roll')
+        self.assertEqual(
+            roll['workflows']['examples'],
+            '.github/workflows/roll-examples.yml',
+        )
 
 
 if __name__ == '__main__':

@@ -45,4 +45,4 @@ jobs:
       project: roll
       upstream_repo: alibaba/ROLL
       target_ref: ${{ inputs.target_ref }}
-      max_parallel: 1
+      max_parallel: 2

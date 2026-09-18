@@ -201,9 +201,12 @@ PY
 prepare_ci_configs() {
   local src="${PROJECT_ROOT:?PROJECT_ROOT is required}/configs"
   local dst="$TARGET_ROOT/examples/ci_roll"
-  echo "preparing phase-one rollout config: $src -> $dst"
+  echo "preparing phase-two CI configs: $src -> $dst"
   mkdir -p "$dst"
-  cp "$src"/ci_agentic_rollout.yaml "$dst/"
+  cp "$src"/ci_agentic_rollout.yaml \
+    "$src"/ci_agentic_train.yaml \
+    "$src"/ci_rlvr.yaml \
+    "$dst/"
   ls -la "$dst/"
 }
 
@@ -234,11 +237,24 @@ case "$PROFILE" in
   agentic_rollout_npu)
     echo "profile: agentic_rollout_npu (1 NPU: vLLM rollouts only)"
     check_npu_devices 1
+    export ASCEND_RT_VISIBLE_DEVICES="0"
+    ;;
+  agentic_train_npu)
+    echo "profile: agentic_train_npu (2 NPUs: FSDP2 train + vLLM rollout)"
+    check_npu_devices 2
+    export ASCEND_RT_VISIBLE_DEVICES="0,1"
+    ;;
+  rlvr_npu)
+    echo "profile: rlvr_npu (4 NPUs: FSDP2 train x2 + vLLM + reference)"
+    check_npu_devices 4
+    export ASCEND_RT_VISIBLE_DEVICES="0,1,2,3"
     ;;
   *)
     echo "FATAL: unknown profile '$PROFILE'" >&2
     exit 2
     ;;
 esac
+
+echo "ASCEND_RT_VISIBLE_DEVICES=${ASCEND_RT_VISIBLE_DEVICES}" >> "$GITHUB_ENV"
 
 echo "setup complete for profile $PROFILE"

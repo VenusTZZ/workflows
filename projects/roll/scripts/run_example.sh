@@ -75,14 +75,16 @@ source_vendor_env /usr/local/Ascend/nnal/atb/set_env.sh
 # PYTORCH_NPU_ALLOC_CONF=expandable_segments:True (v0.3.0 camem.py,
 # tracked upstream at pytorch#147851).  ROLL clears it for vLLM workers,
 # but the EngineCore child inherits the job-level value exported during
-# setup, so clear it for the vLLM-only rollout.
+# setup, so clear it for every profile: vLLM requires the empty value,
+# and the one-step FSDP2 smokes do not depend on expandable segments.
 unset PYTORCH_NPU_ALLOC_CONF
 
 # Single-node Ray contract for the thin engine. ROLL starts Ray itself and
 # derives HCCL ranks from the per-worker ASCEND_RT_VISIBLE_DEVICES.  The
 # domestic CANN base image does not pre-set that variable the way the
-# upstream quay image does, so pin device 0 before Ray starts; its workers
-# inherit the value.
+# upstream quay image does, so pin device 0 before Ray starts; setup
+# already exported the multi-card list for train/rlvr profiles, so only
+# fill the single-card default when nothing was injected.
 # RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=1 follows the v0.3.0
 # Ascend env guide to keep Ray from rewriting the visibility list.
 export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
