@@ -604,8 +604,16 @@ supported:
       - lora
     timeout_minutes: 30
 
-  # SD dreambooth + HRA：10 steps exit 0（loss 0.00313，17s）。
-  # overlay 额外需要 --validation_prompt（脚本 :83 无条件访问）
+  # SD dreambooth + HRA：10 steps exit 0（loss 0.00388，1m10s，npu-5 复验）。
+  # v0.21.0 脚本两个坑（均 overlay/setup 绕过，0 patch）：
+  # (1) :89 Accelerator(project_dir=ProjectConfiguration(...)) 传错 kwarg
+  #     （应为 project_config=）→ accelerate 1.15 init_trackers 在
+  #     os.path.join(ProjectConfiguration, run_name) 上 TypeError。
+  #     绕过：--report_to none → 脚本 :91 log_with=None → trackers 为空，
+  #     init_trackers 变 no-op（wandb 分支同崩溃路径，无关 tensorboard）。
+  # (2) :316-319 cwd/data/dreambooth 不存在时无条件 git clone
+  #     github.com/google/dreambooth（runner 网络不通；该路径在脚本里只用于
+  #     clone 自身，纯死代码）。绕过：setup_peft_dreambooth 预 mkdir。
   - path: examples/hra_dreambooth/train_dreambooth.py
     profile: peft_dreambooth
     runner: linux-aarch64-a2-1
@@ -614,10 +622,11 @@ supported:
       - --pretrained_model_name_or_path ${SD_MODEL_PATH}
       - --instance_data_dir ${TARGET_ROOT}/fixtures/ci_dummy_image
       - --instance_prompt 'a photo of sks dog'
-      - --validation_prompt 'a photo of sks dog'
+      - --validation_prompt 'a photo of sks dog'   # 脚本 :83 无条件访问
       - --max_train_steps 10
       - --train_batch_size 1
-      - --report_to tensorboard
+      - --report_to none              # 见上 (1)：躲 ProjectConfiguration init_trackers 崩
+      - --push_to_hub False           # 默认 True 会走 Repository hub 流程
       - --output_dir ${CI_OUTPUT_DIR}
       - --mixed_precision no
       - --resolution 256
