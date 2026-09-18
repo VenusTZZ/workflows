@@ -112,9 +112,8 @@ PY
 install_rollout_stack() {
   local target_root="${TARGET_ROOT:?TARGET_ROOT is required}"
   local requirements_file
-  # Keep the filtered file beside requirements_common.txt: its relative
-  # ./mcore_adapter and -r requirements_vision.txt references are resolved
-  # relative to the requirements file location by pip.
+  # Keep the filtered file beside requirements_common.txt: pip resolves
+  # its relative references from the file location.
   requirements_file="$target_root/.ci-requirements-common.txt"
 
   echo "=> installing matched torch 2.10 / torch_npu 2.10 runtime"
@@ -141,10 +140,16 @@ install_rollout_stack() {
   pip_ascend -q --no-deps "torch-npu==2.10.0.post4"
 
   echo "=> installing ROLL common + Sokoban dependencies"
-  # Run from the target checkout: the requirements file uses ROLL-root-
-  # relative paths (./mcore_adapter, -r requirements_vision.txt).
+  # Text-only Sokoban rollout needs only requirements_common. Skip:
+  #   - requirements_vision.txt: pycocotools / qwen_vl_utils / decord /
+  #     rouge_score are video / detection-only; decord has no py3.12
+  #     aarch64 wheel.
+  #   - ./mcore_adapter / Megatron adapter: never exercises on the
+  #     FSDP2/vLLM rollout path.
   grep -vE '^[[:space:]]*gem-llm' \
-    "$target_root/requirements_common.txt" > "$requirements_file"
+    "$target_root/requirements_common.txt" \
+    | grep -vE '\./mcore_adapter|requirements_vision\.txt' \
+    > "$requirements_file"
   (cd "$target_root" && python -m pip install -q -r "$requirements_file")
   # gem-llm metadata pulls an antlr runtime incompatible with Hydra's pin;
   # quick-start proved the package itself works with ROLL's 4.9.3 runtime.
