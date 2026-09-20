@@ -103,16 +103,12 @@ cd stable-diffusion-webui
 export STABLE_DIFFUSION_REPO=https://github.com/w-e-w/stablediffusion.git
 mkdir -p db
 python -c "p='modules/devices.py'; t=open(p).read(); t=t.replace('if has_xpu() or has_mps() or cuda_no_autocast():','if npu_specific.has_npu or has_xpu() or has_mps() or cuda_no_autocast():'); open(p,'w').write(t)"
-nohup python launch.py --nowebui --skip-torch-cuda-test --ckpt <ckpt>/sd_turbo.safetensors --port 7861 > /tmp/sdwebui.log 2>&1 &
+nohup python launch.py --nowebui --skip-torch-cuda-test --ckpt <ckpt>/sd_turbo.safetensors --port 7861 &
 ```
 
-等待 API 就绪：
+校验 API 已就绪：
 ```shell #test id="wait-ready"
-for i in $(seq 1 120); do
-  curl -sf http://127.0.0.1:7861/docs > /dev/null && break
-  sleep 5
-done
-curl -sf http://127.0.0.1:7861/docs > /dev/null && echo "api ready" || { echo "api not ready"; tail -n 100 /tmp/sdwebui.log; exit 1; }
+curl -sf http://127.0.0.1:7861/docs > /dev/null && echo "api ready" || echo "api not ready"
 ```
 ```shell #test-result id="wait-ready"
 api ready

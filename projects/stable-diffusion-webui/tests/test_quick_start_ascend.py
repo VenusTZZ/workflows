@@ -8,10 +8,17 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
 
-from workflows.markdown_doc_test_base import MarkdownDocTestBase
+from workflows.markdown_doc_test_base import (
+    MarkdownDocTestBase,
+    SetupCommand,
+    TestCommand,
+)
 from workflows.model_cache import (
     ensure_safetensors,
     purge_modelscope_corrupt,
@@ -83,6 +90,63 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _CLUSTER_INDEX = "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple"
     _ASCEND_EXTRA = "https://repo.huaweicloud.com/ascend/repos/pypi"
     _CANN_SET_ENV = "/usr/local/Ascend/ascend-toolkit/set_env.sh"
+    _API_READY_ENDPOINT = "http://127.0.0.1:7861/docs"
+    _API_READY_ATTEMPTS = 120
+    _API_READY_INTERVAL_S = 5
+
+    def _wait_for_api(self):
+        """Poll the --nowebui docs endpoint until it answers.
+
+        The pending check runs here (CI-side concern) instead of in the doc,
+        so the visible ""wait-ready"" step only asserts readiness via curl.
+        """
+        for attempt in range(1, self._API_READY_ATTEMPTS + 1):
+            try:
+                with urllib.request.urlopen(
+                    self._API_READY_ENDPOINT, timeout=10
+                ) as resp:
+                    if resp.status == 200:
+                        return
+            except (urllib.error.URLError, TimeoutError, OSError):
+                pass
+            self.log(
+                "waiting for api: "
+                f"attempt {attempt}/{self._API_READY_ATTEMPTS}"
+            )
+            time.sleep(self._API_READY_INTERVAL_S)
+        log = Path("/tmp/sdwebui.log")
+        tail = ""
+        if log.is_file():
+            try:
+                tail = "\n".join(
+                    log.read_text(
+                        encoding="utf-8", errors="replace"
+                    ).splitlines()[-100:]
+                )
+            except OSError:
+                tail = ""
+        self.log("--- tail /tmp/sdwebui.log ---")
+        self.log(tail or "(log file missing or empty)")
+        raise RuntimeError(
+            f"api not ready after {self._API_READY_ATTEMPTS} attempts"
+        )
+
+    def _run_one(self, cmd, results, env, cwd, timeout, idx):
+        if isinstance(cmd, SetupCommand) and "nohup python launch.py" in cmd.cmd and "sdwebui.log" not in cmd.cmd:
+            actual_cmd = self.substitute_placeholders(cmd.cmd, cmd.load, self._captures)
+            launch_cmd = actual_cmd.rstrip()
+            if launch_cmd.endswith("&"):
+                launch_cmd = launch_cmd[:-1].rstrip()
+            rc, out, err = self.run_command(launch_cmd + " > /tmp/sdwebui.log 2>&1 &", env, cwd, timeout)
+            if rc != 0:
+                raise AssertionError(f"setup command failed (rc={rc}); CMD stderr:\n{err.rstrip() or '(empty)'}")
+            return
+        if (
+            isinstance(cmd, TestCommand)
+            and getattr(cmd, "id", None) == "wait-ready"
+        ):
+            self._wait_for_api()
+        return super()._run_one(cmd, results, env, cwd, timeout, idx)
 
     def pre_process(self):
         doc_path = (
