@@ -778,6 +778,9 @@ supported:
   # (2) :316-319 cwd/data/dreambooth 不存在时无条件 git clone
   #     github.com/google/dreambooth（runner 网络不通；该路径在脚本里只用于
   #     clone 自身，纯死代码）。绕过：setup_peft_dreambooth 预 mkdir。
+  # 注意：args_loader 的开关类参数（--push_to_hub/--center_crop 等）是
+  # store_true 无值开关，overlay 不能带值（run 35482204039 曾因
+  # `--push_to_hub False` 报 unrecognized arguments: False）。
   - path: examples/hra_dreambooth/train_dreambooth.py
     profile: peft_dreambooth
     runner: linux-aarch64-a2-1
@@ -790,7 +793,6 @@ supported:
       - --max_train_steps 10
       - --train_batch_size 1
       - --report_to none              # 见上 (1)：躲 ProjectConfiguration init_trackers 崩
-      - --push_to_hub False           # 默认 True 会走 Repository hub 流程
       - --output_dir ${CI_OUTPUT_DIR}
       - --mixed_precision no
       - --resolution 256
