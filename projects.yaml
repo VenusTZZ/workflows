@@ -673,4 +673,20 @@ projects:
     dir: projects/roll
     workflows:
       quick_start: .github/workflows/roll-quick-start.yml
+  # TGI quickstart guards a full source build (Rust launcher/router +
+  # Python server) and a real /generate inference on a 2-card 910B
+  # runner: single-card baseline + dual-card HCCL tensor parallelism
+  # (--num-shard 2). NPU support lives in the VenusTZZ fork
+  # (feat/ascend-npu, cut as releases); official upstream releases do
+  # not contain it yet, so upstream_repo points at the fork and the
+  # guard follows the fork's latest release + doc hash.
+  - name: tgi
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: VenusTZZ/text-generation-inference
+    phase: A
+    runner: linux-aarch64-a2-2
+    dir: projects/tgi
+    workflows:
+      quick_start: .github/workflows/tgi-quick-start.yml
       examples: .github/workflows/roll-examples.yml

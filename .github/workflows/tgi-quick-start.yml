@@ -1,0 +1,79 @@
+# tgi quick start guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/quick-start-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, runner, container image + options, upstream repo,
+# monitored doc, and the test entry command. The guard loop, cache
+# I/O, state relay and publishing all live in the engine. See the
+# engine's `workflow_call.inputs` block for the full input contract.
+#
+# The doc under guard builds TGI from source (cargo release-opt of
+# launcher + router on aarch64) before serving real /generate requests
+# (single-card baseline + dual-card HCCL tensor parallelism), so the
+# test job budget is larger than pure-Python projects.
+
+name: tgi-quick-start
+
+concurrency:
+  # format() is load-bearing: a '||' between 'manual-' and
+  # github.run_id would short-circuit on the truthy literal and
+  # every dispatch would share one 'manual-' group.
+  group: ${{ github.event_name == 'schedule' && 'tgi-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  # cancel-in-progress: false because (1) a schedule run cancelled
+  # mid-way loses its outcome writeback - the outcome is what makes
+  # the retry mechanism work, and the 'if: always()' guard isn't
+  # enough when the container is being torn down; (2) dispatch runs
+  # already live in unique groups so there's nothing to cancel.
+  cancel-in-progress: false
+
+on:
+  # Enable after the first successful workflow_dispatch runs.
+  # schedule:
+  #   - cron: '30 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tgi-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      # Namespaces cache keys (quick-start-monitor-state-tgi_*), artifacts
+      # (tgi-quick-start-<run_id>) and the test working dir
+      # (workflows/projects/tgi).
+      project: tgi
+      # Self-hosted NPU runner for the test job only; the engine pins
+      # the cache I/O jobs (restore-cache / publish-and-persist) to
+      # GitHub-hosted ubuntu-latest. 2-card label: the doc verifies
+      # both single-card baseline and dual-card HCCL tensor parallelism
+      # (--num-shard 2) on the same machine.
+      test_runner: '["linux-aarch64-a2-2"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      # Explicit device mounts (mooncake-style; the cluster device-plugin
+      # may also auto-pass /dev/davinci*, but HCCL needs the manager /
+      # hisi_hdc / devmm_svm companions) + ModelScope cache volume: the
+      # runner machines' shared host cache at /data/ci-cache/modelscope/tgi
+      # (populated by earlier test runs) so the doc's snapshot_download
+      # hits local disk and only cold machines touch the network.
+      container_options: >-
+        --shm-size=64g
+        --device=/dev/davinci0
+        --device=/dev/davinci1
+        --device=/dev/davinci_manager
+        --device=/dev/devmm_svm
+        --device=/dev/hisi_hdc
+        --volume=/data/ci-cache/modelscope/tgi:/root/.cache/modelscope
+      timeout_minutes: 180
+      # NPU support lives in this fork (feat/ascend-npu, published as
+      # releases); the engine follows the fork's latest release + doc
+      # hash. New upstream changes must be merged + validated + released
+      # on the fork to become guardable refs.
+      upstream_repo: VenusTZZ/text-generation-inference
+      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/tgi/docs/Quick-start-Ascend.md
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/tgi/docs/Quick-start-Ascend.md
+      # cwd is workflows/projects/tgi; env contract (MONITORED_DOC_URL /
+      # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
+      # env prep and installs live in the test subclass's
+      # prepare_environment hook.
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1
