@@ -100,11 +100,21 @@ def matrix_entries(supported: list[dict]) -> list[dict]:
         entry['overlay_args'] = overlay_args
         if exec_path is not None:
             entry['exec'] = exec_path.strip()
-        # Display name for the run-example job label: basename of path
-        # with extension stripped (e.g. examples/sft/run_peft.sh ->
-        # run_peft). Workflow templates use this so the matrix leg label
-        # is the script name rather than its full relative path.
-        entry['name'] = PurePosixPath(path).stem
+        # Display name for the run-example job label: parent dir + stem
+        # when the file sits below the scan root (3+ path components) -
+        # same-named scripts in different directories must get distinct
+        # labels (peft's five */train_dreambooth.py all collapsed to
+        # "train_dreambooth" and were indistinguishable in the Actions
+        # UI). Collapses to the bare stem when the parent dir equals the
+        # stem (examples/foo/foo.py) or the file sits directly under the
+        # scan root (examples/foo.py). Keep in sync with
+        # check_supported_entries.py.
+        parts = PurePosixPath(path).parts
+        stem = PurePosixPath(path).stem
+        if len(parts) >= 3 and parts[-2] != stem:
+            entry['name'] = f'{parts[-2]}/{stem}'
+        else:
+            entry['name'] = stem
         entries.append(entry)
     if errors:
         for message in errors:
