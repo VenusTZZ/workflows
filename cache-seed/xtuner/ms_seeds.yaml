@@ -1,0 +1,17 @@
+# xtuner 例程资产的 ModelScope plant spec（由 cache-seed workflow 的
+# scripts/ms_seed.py 执行）。2026-09-20 起数据集迁入 cache-seed，替掉
+# 原来的 8 行 fixture + load_dataset shim（见 projects/xtuner/scripts/
+# run_example.sh 历史）。
+#
+# train_hf.py 的 --dataset_name_or_path 现传 tatsu-lab/alpaca，运行时
+# load_dataset("tatsu-lab/alpaca") 命中本 seed。
+version: 1
+seeds:
+  # tatsu-lab/alpaca（HF，~52k 行，data/train-*.parquet）。ModelScope 原 id
+  # 下镜像（angelala00/tatsu-lab-alpaca）把 parquet 放仓库根、缺 data/ 前缀，
+  # 与 HF 布局不符；OmniData/alpaca 布局一致（data/train-*.parquet +
+  # README.md 前元数据），load_dataset 可命中。其 dataset_infos.json 为陈旧
+  # 副本（features 缺 dtype），由 ms_seed.py 统一丢弃。
+  - ms_id: OmniData/alpaca
+    hf_id: tatsu-lab/alpaca
+    kind: dataset

@@ -203,3 +203,19 @@ git add cache-seed/accelerate && git commit -m "accelerate: re-seed datasets" &&
 ```
 
 历史 bundle 也可从 git 直接恢复：`git checkout 0242ba8 -- cache-seed/accelerate`。
+
+## xtuner 的现状（2026-09-20 数据集迁入）
+
+之前 train_hf.py 的 `--dataset_name_or_path` 用仓内 8 行 fixture + sitecustomize
+shim（run_example.sh 里 monkey-patch `datasets.load_dataset` 把单文件路径改成
+`load_dataset("json", data_files=...)`）。现改为 seed `tatsu-lab/alpaca`
+（HF，~52k 行），load_dataset 原生命中本地缓存，fixture 与 shim 均删。
+
+| 资产 | `ms_id`（ModelScope） | `hf_id`（例里硬编码/overlay 传） | 备注 |
+|---|---|---|---|
+| alpaca 数据集 | `OmniData/alpaca` | `tatsu-lab/alpaca` | 原 id 镜像 `angelala00/tatsu-lab-alpaca` 把 parquet 放仓库根、缺 `data/` 前缀；OmniData 布局与 HF 一致。其陈旧 `dataset_infos.json`（features 缺 `dtype`，datasets 3.x 解析崩）由 ms_seed.py 统一丢弃 |
+
+注意：xtuner 的模型（Qwen2.5-0.5B）暂仍由 setup 直接 ModelScope 下载（老模式），
+未走 seed——与 peft/accelerate 的 `models--Qwen--Qwen2.5-0.5B` 是同一资产，共享
+缓存卷里已 plant，若后续要统一可再加条目并让 setup 改从 refs/main 解析
+`${LLM_MODEL_PATH}`。
