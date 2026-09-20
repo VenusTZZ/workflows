@@ -1,315 +1,250 @@
 """Quick-start-Ascend documentation test: end-to-end case built on top
-of the ``MarkdownDocTestBase`` contract.
+of the MarkdownDocTestBase contract.
 
-Document under test: ``projects/stable-diffusion-webui/docs/Quick-start-Ascend.md``
-(follows the ``docs/markdown_doc_test_label.md`` contract: every
-``shell`` code block carries one of the ``#test`` / ``#test-setup`` /
-``#test-result`` labels plus ``id=`` / ``store=`` / ``load='x>>y'`` /
-``fuzzy='xxx'`` parameters).
-
-Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
-
-Environment variables (injected by GitHub workflow
-``stable-diffusion-webui-quick-start.yml``):
-    ``MONITORED_DOC_URL``         Used by the engine's monitor step (ubuntu,
-                                  not the NPU runner) for doc hash checking.
-                                  The test's ``pre_process`` reads the doc
-                                  from the local checkout instead, because
-                                  ``raw.githubusercontent.com`` is not
-                                  reachable from the NPU runner's cluster.
-    ``NPU_READY=true``            Required, otherwise the class is skipped.
-                                  End-to-end tests only run on the NPU runner:
-                                  local dev machines / normal ubuntu runners
-                                  have no ``/dev/davinci*`` device, and the
-                                  hard run would fail on ``import torch_npu``.
+Document under test: projects/stable-diffusion-webui/docs/Quick-start-Ascend.md
 """
 
 from __future__ import annotations
 
 import os
 import subprocess
+import time
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
 
-from workflows.markdown_doc_test_base import MarkdownDocTestBase
-from workflows.modelscope_cache import (
+from workflows.markdown_doc_test_base import (
+    MarkdownDocTestBase,
+    SetupCommand,
+    TestCommand,
+)
+from workflows.model_cache import (
     ensure_safetensors,
-    purge_corrupt_models,
+    purge_modelscope_corrupt,
     resolve_modelscope_cache,
 )
 
 
-def _is_truthy(value: str | None) -> bool:
-    """``'true'`` -> True (case-insensitive); anything else (including unset) -> False."""
+def _is_truthy(value):
     if not value:
         return False
-    return value.strip().lower() == 'true'
+    return value.strip().lower() == "true"
 
 
-def _e2e_enabled() -> bool:
-    """Return True when ``NPU_READY=true`` is set, releasing the skip."""
-    return _is_truthy(os.environ.get('NPU_READY'))
+def _e2e_enabled():
+    return _is_truthy(os.environ.get("NPU_READY"))
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
-    """``Quick-start-Ascend.md`` end-to-end test: fetch doc -> validate
-    contract -> run ``#test-setup`` / ``#test`` in order -> compare against
-    ``#test-result``.
+    DEFAULT_COMMAND_TIMEOUT = 1800
+    USER_AGENT = "cosdt-ci-test/quick-start"
 
-    Scope: env check + deps install + ModelScope download of sd-turbo +
-    a headless single-card NPU txt2img call via the ``--nowebui`` API
-    server (``AI-ModelScope/sd-turbo`` weights downloaded via ModelScope
-    on the first run).
-    """
-
-    # 60 min per command: long enough for the ~3.4 GB SD-Turbo
-    # snapshot_download on the first run (1-step inference is fast; first
-    # launch installs deps and loads the model), which needs longer than
-    # the 20 min default of the smaller projects.
-    DEFAULT_COMMAND_TIMEOUT = 3600
-
-    # Monitored source is the cosdt-ci-test/workflows fork (this repo):
-    # the doc lives at projects/stable-diffusion-webui/docs/Quick-start-Ascend.md
-    # and the engine sets MONITORED_DOC_URL to the raw.githubusercontent.com
-    # URL for the same path.
-    USER_AGENT = 'cosdt-ci-test/quick-start'
-
-    # Extend the base ERROR_MARKERS with CANN's typo + sentinel so a CANN
-    # failure surfaces a full stderr dump (head/tail by default would hide
-    # the line that names the failure).
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,
-        'applicaiton exception',  # CANN toolkit emits this typo (sic)
-        'ERR99999',  # CANN sentinel for unrecoverable runtime failure
+        "applicaiton exception",
+        "ERR99999",
     )
 
-    # Process-level CUDA exclusion list. Same rationale as the other
-    # projects' tests: write to /tmp and export, so subprocesses
-    # (subprocess.run inherits parent env by default) see it.
-    # stable-diffusion-webui's own dep tree (torch / transformers /
-    # gradio / ...) shouldn't pull CUDA, but installing its
-    # ``requirements.txt`` resolves pins that could drag nvidia-* in
-    # via transitive deps.
     _CUDA_CONSTRAINTS = (
-        'cuda-toolkit<0',
-        'cuda-python<0',
-        'cuda-bindings<0',
-        'cuda-core<0',
-        'cuda-pathfinder<0',
-        'flashinfer-python<0',
-        'nvidia-cublas<0',
-        'nvidia-cuda-runtime<0',
-        'nvidia-cuda-nvrtc<0',
-        'nvidia-cuda-cupti<0',
-        'nvidia-cudnn<0',
-        'nvidia-cudnn-frontend<0',
-        'nvidia-cufft<0',
-        'nvidia-curand<0',
-        'nvidia-cusolver<0',
-        'nvidia-cusparse<0',
-        'nvidia-cutlass-dsl<0',
-        'nvidia-cutlass-dsl-libs-base<0',
-        'nvidia-cutlass-dsl-libs-core<0',
-        'nvidia-cutlass-dsl-libs-cu12<0',
-        'nvidia-ml-py<0',
-        'nvidia-nccl<0',
-        'nvidia-nvjitlink<0',
-        'nvidia-nvtx<0',
-        'nvidia-cublas-cu12<0',
-        'nvidia-cuda-nvdisasm<0',
-        'nvidia-cuda-runtime-cu12<0',
-        'nvidia-cuda-nvrtc-cu12<0',
-        'nvidia-cuda-cupti-cu12<0',
-        'nvidia-cudnn-cu12<0',
-        'nvidia-cufft-cu12<0',
-        'nvidia-curand-cu12<0',
-        'nvidia-cusolver-cu12<0',
-        'nvidia-cusparse-cu12<0',
-        'nvidia-cusparselt-cu12<0',
-        'nvidia-nccl-cu12<0',
-        'nvidia-nvjitlink-cu12<0',
-        'nvidia-nvtx-cu12<0',
+        "cuda-toolkit<0",
+        "cuda-python<0",
+        "cuda-bindings<0",
+        "cuda-core<0",
+        "cuda-pathfinder<0",
+        "flashinfer-python<0",
+        "nvidia-cublas<0",
+        "nvidia-cuda-runtime<0",
+        "nvidia-cuda-nvrtc<0",
+        "nvidia-cuda-cupti<0",
+        "nvidia-cudnn<0",
+        "nvidia-cudnn-frontend<0",
+        "nvidia-cufft<0",
+        "nvidia-curand<0",
+        "nvidia-cusolver<0",
+        "nvidia-cusparse<0",
+        "nvidia-cutlass-dsl<0",
+        "nvidia-cutlass-dsl-libs-base<0",
+        "nvidia-cutlass-dsl-libs-core<0",
+        "nvidia-cutlass-dsl-libs-cu12<0",
+        "nvidia-ml-py<0",
+        "nvidia-nccl<0",
+        "nvidia-nvjitlink<0",
+        "nvidia-nvtx<0",
+        "nvidia-cublas-cu12<0",
+        "nvidia-cuda-nvdisasm<0",
+        "nvidia-cuda-runtime-cu12<0",
+        "nvidia-cuda-nvrtc-cu12<0",
+        "nvidia-cuda-cupti-cu12<0",
+        "nvidia-cudnn-cu12<0",
+        "nvidia-cufft-cu12<0",
+        "nvidia-curand-cu12<0",
+        "nvidia-cusolver-cu12<0",
+        "nvidia-cusparse-cu12<0",
+        "nvidia-cusparselt-cu12<0",
+        "nvidia-nccl-cu12<0",
+        "nvidia-nvjitlink-cu12<0",
+        "nvidia-nvtx-cu12<0",
     )
-    _CONSTRAINTS_FILE = '/tmp/sd-webui_npu_constraints.txt'
+    _CONSTRAINTS_FILE = "/tmp/sd-webui_npu_constraints.txt"
+    _CLUSTER_INDEX = "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple"
+    _ASCEND_EXTRA = "https://repo.huaweicloud.com/ascend/repos/pypi"
+    _CANN_SET_ENV = "/usr/local/Ascend/ascend-toolkit/set_env.sh"
+    _API_READY_ENDPOINT = "http://127.0.0.1:7861/docs"
+    _API_READY_ATTEMPTS = 120
+    _API_READY_INTERVAL_S = 5
 
-    # Cluster-internal nginx PyPI cache + Huawei Cloud ascend dual-source.
-    _CLUSTER_INDEX = 'http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple'
-    _ASCEND_EXTRA = 'https://repo.huaweicloud.com/ascend/repos/pypi'
+    def _wait_for_api(self):
+        """Poll the --nowebui docs endpoint until it answers.
 
-    # CANN toolkit: source once to get ASCEND_HOME / LD_LIBRARY_PATH etc.
-    # Path is hard-coded, tied to the container image pinned by the
-    # ``image:`` input of ``stable-diffusion-webui-quick-start.yml``.
-    _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
-
-    # ----------------------------------------------------------
-    # pre_process: read doc from local checkout instead of fetching
-    # raw.githubusercontent.com — the NPU runner sits behind a cluster
-    # firewall that cannot reach it (known limitation, see
-    # quick-start-template.yml). The checkout step always has the
-    # latest doc for the branch under test, so there is no stale drift.
-    # ----------------------------------------------------------
-
-    def pre_process(self) -> str:
-        """Read ``Quick-start-Ascend.md`` from the local checkout.
-
-        Overrides the base ``MarkdownDocTestBase.pre_process`` which
-        fetches ``MONITORED_DOC_URL`` via ``urllib`` — that endpoint
-        (``raw.githubusercontent.com``) is not reachable from the NPU
-        runner's cluster network. The workflow checkout already places
-        the doc at ``projects/stable-diffusion-webui/docs/Quick-start-Ascend.md``
-        relative to this file, so reading it locally is both reliable
-        and always in sync with the branch under test.
+        The pending check runs here (CI-side concern) instead of in the doc,
+        so the visible ""wait-ready"" step only asserts readiness via curl.
         """
+        for attempt in range(1, self._API_READY_ATTEMPTS + 1):
+            try:
+                with urllib.request.urlopen(
+                    self._API_READY_ENDPOINT, timeout=10
+                ) as resp:
+                    if resp.status == 200:
+                        return
+            except (urllib.error.URLError, TimeoutError, OSError):
+                pass
+            self.log(
+                "waiting for api: "
+                f"attempt {attempt}/{self._API_READY_ATTEMPTS}"
+            )
+            time.sleep(self._API_READY_INTERVAL_S)
+        log = Path("/tmp/sdwebui.log")
+        tail = ""
+        if log.is_file():
+            try:
+                tail = "\n".join(
+                    log.read_text(
+                        encoding="utf-8", errors="replace"
+                    ).splitlines()[-100:]
+                )
+            except OSError:
+                tail = ""
+        self.log("--- tail /tmp/sdwebui.log ---")
+        self.log(tail or "(log file missing or empty)")
+        raise RuntimeError(
+            f"api not ready after {self._API_READY_ATTEMPTS} attempts"
+        )
+
+    def _run_one(self, cmd, results, env, cwd, timeout, idx):
+        if isinstance(cmd, SetupCommand) and "nohup python launch.py" in cmd.cmd and "sdwebui.log" not in cmd.cmd:
+            actual_cmd = self.substitute_placeholders(cmd.cmd, cmd.load, self._captures)
+            launch_cmd = actual_cmd.rstrip()
+            if launch_cmd.endswith("&"):
+                launch_cmd = launch_cmd[:-1].rstrip()
+            rc, out, err = self.run_command(launch_cmd + " > /tmp/sdwebui.log 2>&1 &", env, cwd, timeout)
+            if rc != 0:
+                raise AssertionError(f"setup command failed (rc={rc}); CMD stderr:\n{err.rstrip() or '(empty)'}")
+            return
+        if (
+            isinstance(cmd, TestCommand)
+            and getattr(cmd, "id", None) == "wait-ready"
+        ):
+            self._wait_for_api()
+        return super()._run_one(cmd, results, env, cwd, timeout, idx)
+
+    def pre_process(self):
         doc_path = (
             Path(__file__).resolve().parent.parent
-            / 'docs'
-            / 'Quick-start-Ascend.md'
+            / "docs"
+            / "Quick-start-Ascend.md"
         )
         if not doc_path.is_file():
             raise RuntimeError(
-                f'doc not found in local checkout: {doc_path}'
+                f"doc not found in local checkout: {doc_path}"
             )
-        return doc_path.read_text(encoding='utf-8')
-
-    # ----------------------------------------------------------
-    # prepare_environment: CANN env + CUDA constraints + uv + torch stack
-    # probe + safetensors + modelscope cache validation
-    # ----------------------------------------------------------
+        return doc_path.read_text(encoding="utf-8")
 
     @classmethod
-    def prepare_environment(cls) -> None:
-        """Source CANN env + write CUDA exclusion list + install uv + torch
-        stack probe + safetensors + modelscope cache validation.
-
-        The doc's ``## 安装依赖`` block is the single source of truth
-        for which stable-diffusion-webui deps get installed; this class
-        only handles ``torch`` / ``torch_npu`` here (via the cluster
-        cache + Huawei ascend dual-source). The webui requirements
-        install themselves in document order via the ``#test``
-        machinery (``install-deps``).
-
-        Class-level setup: run once per test class, triggered by
-        ``setUpClass``. Not the same as ``unittest.TestCase.setUp`` —
-        that lifecycle hook fires before every test method, which is
-        wrong for a one-shot install.
-        """
-        # 0) CANN env: source set_env.sh and merge the env stream into
-        # os.environ
+    def prepare_environment(cls):
         if os.path.isfile(cls._CANN_SET_ENV):
             merged = subprocess.run(
-                ['bash', '-c', f'source {cls._CANN_SET_ENV} >/dev/null 2>&1; env'],
+                ["bash", "-c", "source " + cls._CANN_SET_ENV + " >/dev/null 2>&1; env"],
                 capture_output=True, text=True, check=True,
             )
             for line in merged.stdout.splitlines():
-                if '=' not in line:
+                if "=" not in line:
                     continue
-                key, _, value = line.partition('=')
-                # Don't overwrite envs explicitly injected by the
-                # workflow (jobs.env / steps.env); only fill in CANN
-                # keys that are missing, to avoid conflicts.
+                key, _, value = line.partition("=")
                 os.environ.setdefault(key, value)
-            print('setup: sourced CANN env from set_env.sh')
+            print("setup: sourced CANN env from set_env.sh")
         else:
-            print(
-                f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
-            )
+            print("setup: skipping CANN env source")
 
-        # 1) CUDA exclusion list + process-level env
-        with open(cls._CONSTRAINTS_FILE, 'w', encoding='utf-8') as fh:
-            fh.write('\n'.join(cls._CUDA_CONSTRAINTS) + '\n')
-        os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
-        os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
+        with open(cls._CONSTRAINTS_FILE, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(cls._CUDA_CONSTRAINTS) + "\n")
+        os.environ["PIP_CONSTRAINT"] = cls._CONSTRAINTS_FILE
+        os.environ["UV_CONSTRAINT"] = cls._CONSTRAINTS_FILE
 
-        # 2) uv: the doc's ``install-deps`` block calls ``pip``, but keep
-        # uv for parity with the other projects' setup (the workflow may
-        # later switch the install block to ``uv pip install``). Inherit
-        # ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST`` from the yml job-level
-        # env (cluster cache path + trusted-host).
+        os.environ.setdefault("ASCEND_RT_VISIBLE_DEVICES", "0")
+
+        subprocess.run(["apt-get", "update", "-qq"], check=True)
         subprocess.run(
-            ['python', '-m', 'pip', 'install', 'uv'],
+            [
+                "apt-get", "install", "-y", "-qq", "--no-install-recommends",
+                "libgl1", "libglib2.0-0",
+            ],
             check=True,
         )
+        print("setup: installed libgl1 libglib2.0-0")
 
-        # 3) torch stack probe: when version matches the image's
-        # pre-installed wheels, reuse them to avoid the cluster cache
-        # triggering ``+cpu`` resolution.
-        _PROBE_SCRIPT = (
-            'import torch, torch_npu\n'
-            "raise SystemExit(0 if "
-            "torch.__version__.startswith('2.9.0') "
-            "and torch_npu.__version__.startswith('2.9.0') "
-            "else 1)"
+        _PROBE = (
+            "import torch, torch_npu\n"
+            + 'raise SystemExit(0 if torch.__version__.startswith("2.9.0") and torch_npu.__version__.startswith("2.9.0") else 1)'
         )
         probe = subprocess.run(
-            ['python', '-c', _PROBE_SCRIPT],
+            ["python", "-c", _PROBE],
             capture_output=True,
-            check=False,  # probe's success/failure is the branch signal — don't raise
+            check=False,
         )
         if probe.returncode == 0:
-            _VERSIONS_SCRIPT = (
-                'import torch, torch_npu; '
-                'print(torch.__version__, torch_npu.__version__)'
-            )
-            versions = subprocess.run(
-                ['python', '-c', _VERSIONS_SCRIPT],
+            v = subprocess.run(
+                ["python", "-c",
+                 "import torch, torch_npu; "
+                 "print(torch.__version__, torch_npu.__version__)"],
                 capture_output=True, text=True, check=True,
             )
-            print(f'setup: reusing image torch stack ({versions.stdout.strip()})')
+            print(f"setup: reusing image torch stack ({v.stdout.strip()})")
         else:
-            print('setup: installing torch==2.9.0 torch_npu==2.9.0.post2')
+            print("setup: installing torch==2.9.0 torch_npu==2.9.0.post2")
             subprocess.run(
                 [
-                    'python', '-m', 'pip', 'install',
-                    '--index-url', cls._CLUSTER_INDEX,
-                    '--extra-index-url', cls._ASCEND_EXTRA,
-                    'torch==2.9.0', 'torch_npu==2.9.0.post2',
+                    "python", "-m", "pip", "install",
+                    "--index-url", cls._CLUSTER_INDEX,
+                    "--extra-index-url", cls._ASCEND_EXTRA,
+                    "torch==2.9.0", "torch_npu==2.9.0.post2",
                 ],
                 check=True,
             )
 
-        # 4) safetensors: native loader used by the cache validation
-        # step below. Pulled in transitively by torch on most images;
-        # install defensively in case the CANN base ships without it.
         ensure_safetensors()
-
-        # 5) Cache validation: the doc downloads AI-ModelScope/sd-turbo
-        # via ModelScope on the first run. A persistent host-side bind mount
-        # can hold truncated safetensors from interrupted runs; walk every
-        # shard under each model dir and purge it on failure. modelscope
-        # will re-download cleanly on next access. Implementation lives in
-        # workflows.modelscope_cache; see that module's docstring for the
-        # full rationale.
-        purge_corrupt_models(resolve_modelscope_cache())
-
-    # ----------------------------------------------------------
-    # test entry
-    # ----------------------------------------------------------
+        purge_modelscope_corrupt(resolve_modelscope_cache())
 
     @classmethod
-    def setUpClass(cls) -> None:
-        """Run env setup once per test class: CANN env + CUDA constraints +
-        uv + torch stack + safetensors + modelscope cache validation.
-
-        ``@unittest.skipIf`` only skips the test *method* — ``setUpClass``
-        itself always runs. The ``if _e2e_enabled()`` body guard below is
-        what actually keeps heavy setup from firing when ``NPU_READY`` is
-        unset.
-        """
+    def setUpClass(cls):
         if _e2e_enabled():
             cls.prepare_environment()
 
     @unittest.skipIf(
         not _e2e_enabled(),
-        'end-to-end requires NPU runner; set NPU_READY=true',
+        "end-to-end requires NPU runner; set NPU_READY=true",
     )
-    def test_runs_doc(self) -> None:
-        """Template-method entry point. The base class
-        ``run_template()`` runs the full ``pre_process`` -> ``parse`` ->
-        ``execute`` -> ``post_process`` flow. ``prepare_environment`` is
-        triggered by ``setUpClass`` once, not from ``run_template``."""
+    def test_runs_doc(self):
+        self._kill_webui()
+        try:
+            self.run_template()
+        finally:
+            self._kill_webui()
 
-        self.run_template()
+    @staticmethod
+    def _kill_webui():
+        subprocess.run(["pkill", "-f", "launch.py --nowebui"], capture_output=True, timeout=10)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
