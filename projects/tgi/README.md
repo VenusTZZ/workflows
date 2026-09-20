@@ -7,13 +7,13 @@ Qwen3-0.6B 做端到端 `/generate` 验证——**单卡基线 + 双卡 HCCL 张
 
 ## 看护对象与前提
 
-- **上游仓库**：`VenusTZZ/text-generation-inference`（TGI 官方仓库的 fork）。
-  官方 release 尚未包含 Ascend NPU 支持，NPU 适配以 **release** 形式发布在
-  该 fork 上（从 `feat/ascend-npu` 分支打 tag）。
+- **上游仓库**：`cosdt-ci-test/text-generation-inference`（TGI 官方仓库的
+  fork，Ascend 适配在 `feat/ascend-npu` 分支开发、已合入 fork 的 `main`）。
 - **看护信号**：quick-start 引擎轮询 fork 的最新 release + 本目录
-  `docs/Quick-start-Ascend.md` 的 hash。**因此每次把官方上游的新改动合入
-  `feat/ascend-npu` 并验证通过后，必须在 fork 上打一个新 release**，
-  否则流水线没有可测的新 ref。
+  `docs/Quick-start-Ascend.md` 的 hash。fork 上暂未打 release，引擎按
+  fallback 链（releases → tags → HEAD）跟随 `main` HEAD——**把官方上游的
+  新改动合入 fork 的 `main` 并验证通过后，看护自动跟随新 HEAD**；后续在
+  fork 上打 release 则改用 tag 作为被测 ref（更精确可溯）。
 - **看护范围**：文档第 1（环境检查）、2（依赖与工具链）、4（构建安装）、
   5（启动服务并验证推理：单卡基线 + 双卡张量并行）节，以及第 3 节的模型
   下载与缓存命中。**不看护**：`npu-smi info` 的机器相关数值输出（版本号、功耗、
@@ -47,11 +47,11 @@ Qwen3-0.6B 做端到端 `/generate` 验证——**单卡基线 + 双卡 HCCL 张
 | 模型 | Qwen/Qwen3-0.6B（约 1.2 GB） | 走 runner 共享 ModelScope 缓存卷，冷机自动从 ModelScope 下载 |
 
 runner 为 `linux-aarch64-a2-2`（两张 910B4）：单卡基线与双卡 HCCL 张量
-并行同机验证。双卡的硬前提是**被测 tag 包含 launcher 的 LOCAL_RANK 注入**
-（transformers 原生 TP 读取 `LOCAL_RANK`；官方上游没有这段代码，因此
-release 必须从 fork 的 `feat/ascend-npu` 分支打）。四卡（`--num-shard 4`）
-本地已验证（见 TGI fork 的 `docs/npu/hccl-multicard-design.md`），暂不在
-quick-start 看护范围。
+并行同机验证。双卡的硬前提是**被测 ref 包含 launcher 的 LOCAL_RANK 注入**
+（transformers 原生 TP 读取 `LOCAL_RANK`；官方上游没有这段代码，
+`feat/ascend-npu` 已合入 fork 的 `main`，被测 ref 必须来自该 fork）。
+四卡（`--num-shard 4`）本地已验证（见 TGI fork 的
+`docs/npu/hccl-multicard-design.md`），暂不在 quick-start 看护范围。
 
 ## 触发契约
 

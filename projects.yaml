@@ -677,14 +677,15 @@ projects:
   # TGI quickstart guards a full source build (Rust launcher/router +
   # Python server) and a real /generate inference on a 2-card 910B
   # runner: single-card baseline + dual-card HCCL tensor parallelism
-  # (--num-shard 2). NPU support lives in the VenusTZZ fork
-  # (feat/ascend-npu, cut as releases); official upstream releases do
+  # (--num-shard 2). NPU support lives in the cosdt-ci-test fork
+  # (feat/ascend-npu merged to main); official upstream releases do
   # not contain it yet, so upstream_repo points at the fork and the
-  # guard follows the fork's latest release + doc hash.
+  # guard follows the fork's latest release + doc hash (no release cut
+  # yet, so the engine's fallback chain resolves main HEAD).
   - name: tgi
     category: 推理加速
     support_level: 新兴适配
-    upstream_repo: VenusTZZ/text-generation-inference
+    upstream_repo: cosdt-ci-test/text-generation-inference
     phase: A
     runner: linux-aarch64-a2-2
     dir: projects/tgi

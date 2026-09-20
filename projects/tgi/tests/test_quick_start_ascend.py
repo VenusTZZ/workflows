@@ -60,7 +60,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     # on aarch64), which dominates the wall clock; every subprocess shares
     # this timeout. 60 min is the ceiling for the build block.
     DEFAULT_COMMAND_TIMEOUT = 3600
-    USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the VenusTZZ fork
+    USER_AGENT = 'cosdt-ci-test/quick-start'  # monitored source is the cosdt-ci-test fork
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback
         'applicaiton exception',  # CANN toolkit emits this typo (sic) in its Python driver
