@@ -356,6 +356,118 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     timeout_minutes: 120
 
+  # ===== 2026-09-20 npu-1 第二批翻案 ×7（标准 CI 环境：sitecustomize 三
+  # patch shim + HF_ENDPOINT=hf-mirror + 0.5B/seed 资产；上一批"归因待
+  # 复跑"的 backward 崩与 evaluate/pin_memory 挂在标准环境下全部证伪） =====
+
+  # MonteCLoRA 序列分类：原判 evaluate.load("glue","mrpc") import 时挂
+  # （:33）——那是 npu-3 裸跑离线环境；CI 环境下 evaluate metric 走
+  # hf-mirror 小文件正常（与 adamss_image 同路径）。npu-1 实跑 1 epoch
+  # 173s exit 0，eval_accuracy 0.74 / eval_f1 0.83（glue 真 metric）。
+  # glue/mrpc 数据与 roberta-base 均在 seed 缓存
+  - path: examples/monteclora_finetuning/sequence_classification_finetune_monteclora.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --base_model ${ROBERTA_BASE_PATH}   # 默认 roberta-base：seed 已种，显式注入本地路径
+      - --num_epochs 1
+      - --batch_size 16
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 30
+
+  # 语义检索 LoRA：原判两坑（pin_memory+accelerator.prepare 挂 do_sys_poll、
+  # evaluate.load("roc_auc") 离线挂）均为 npu-3 裸跑环境假象——npu-1 标准
+  # shim 下原样通过：pin_memory 不挂、roc_auc 走 hf-mirror 真值 0.767。
+  # sanity_test 走 smangrul/amazon_esci 前 1024 行（运行时 mirror 下载）。
+  # 注意 --sanity_test/--use_peft 是 store_true 裸开关（hra 教训：不能带值）
+  - path: examples/feature_extraction/peft_lora_embedding_semantic_search.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --model_name_or_path sentence-transformers/all-MiniLM-L6-v2   # seed 已种（bare id 走 hub cache 解析）
+      - --sanity_test
+      - --use_peft
+      - --num_train_epochs 1
+      - --per_device_train_batch_size 16
+      - --per_device_eval_batch_size 16
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 30
+
+  # KaSA（SVD 正则 LoRA）：原"backward ERR00100 归因待复跑"是 npu-3 裸跑
+  # 环境假象。与 miss/mica 同构（SFTConfig 子类 + device_map="auto" +
+  # imdb 1%），同配方 --loss_type nll 绕 chunked_nll；a2-1 单卡下
+  # device_map 全落 npu:0。npu-1 实跑 5 步 exit 0（loss 6.83 含 kasa 正则项）
+  - path: examples/kasa_finetuning/kasa_finetuning.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --base_model_name_or_path ${SFT_MODEL_PATH}
+      - --loss_type nll   # device_map="auto" 触发 functools.partial forward，trl 1.12 chunked_nll 崩（同 miss/mica）
+      - --max_steps 5
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 30
+
+  # UniLoRA：同 kasa 配方（原 backward 崩同为环境假象），npu-1 5 步 exit 0
+  # （loss 3.31）
+  - path: examples/unilora_finetuning/unilora_finetuning.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --base_model_name_or_path ${SFT_MODEL_PATH}
+      - --loss_type nll
+      - --max_steps 5
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 30
+
+  # PSoft：原判"trl 1.10 可跑、1.12 backward 崩"版本敏感——1.12 崩点实为
+  # chunked_nll 与 device_map="auto" 的组合（同 miss/mica），--loss_type nll
+  # 后通过。npu-1 5 步 exit 0（loss 3.31）
+  - path: examples/psoft_finetuning/psoft_finetuning.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --base_model_name_or_path ${SFT_MODEL_PATH}
+      - --loss_type nll
+      - --max_steps 5
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 30
+
+  # Shadow：原判"8B fp32 主机 RAM OOM"——换 0.5B 即解；:59 设备分支
+  # torch.device("cuda" if ...) 在 shim 下直通 NPU。内置 3 条 toy texts
+  # 无数据依赖，默认 5 步。npu-1 exit 0（loss 10.3→7.3，adapter 落盘，
+  # 末段 reloaded_base 复现加载）
+  - path: examples/shadow_finetuning/shadow_finetuning.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --base_model_name_or_path ${SFT_MODEL_PATH}   # 默认 Qwen/Qwen3-8B（fp32 32GB 必 OOM）：换 0.5B
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 30
+
+  # LoRA-FA：原判":52-60 设备分支无 npu → device_map='cpu' 主机内存"——
+  # shim 下 torch.cuda.is_available()→True → cuda 分支 → device_map="cuda"
+  # 映射 NPU，bf16 探测同路径通过。数据 query/response 字段走新 fixture
+  # ci_query_response_8（单文件，shim 映射 train/test，:118 自切 val）。
+  # npu-1 1 epoch exit 0（loss 2.68）
+  - path: examples/lorafa_finetune/lorafa_finetuning.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --base_model_name_or_path ${SFT_MODEL_PATH}   # 默认 gated Meta-Llama-3-8B：换 0.5B
+      - --dataset_name_or_path ${TARGET_ROOT}/fixtures/ci_query_response_8.jsonl   # 默认 meta-math/MetaMathQA-40K：换 fixture
+      - --num_epochs 1
+      - --batch_size 1
+      - --cutoff_len 256
+      - --output_dir ${CI_OUTPUT_DIR}
+    timeout_minutes: 30
+
   # BEFT：mt0-small + financial_phrasebank，原样跑通（两套环境均 exit 0）
   - path: examples/beft_finetuning/beft_finetuning.py
     profile: peft
@@ -806,27 +918,9 @@ unsupported:
   # 2026-09-18 已迁出 4 条（gralora/lily/peanut/lora_ga → supported）：
   # fp16=True 硬编码由 sitecustomize 中性化、lora_ga 设备分支由
   # transfer_to_npu 覆盖，均不再需要源码 patch（见 supported 段）。
-
-  # 训练循环 NPU 实跑通（coder npu-3 2026-09-17，MiniLM-L6-v2 + --sanity_test
-  # + 5 步，3.57 it/s exit 0，adapter 落盘）。**翻案前置 2 处源码 patch**：
-  # (a) :311/:319 DataLoader pin_memory=True → False（accelerator.prepare 在 NPU
-  #     上挂 do_sys_poll，须改 False）；
-  # (b) :374 evaluate.load("roc_auc") 须 offline 等价（HF_HUB_OFFLINE 必挂），
-  #     选项：(b1) stub 成 {"roc_auc": 0.0} 哑类；(b2) 换 sklearn.metrics.roc_auc_score；
-  #     (b3) pre-cache evaluate-metric--roc_auc 到 HF hub cache
-  # 待 (a)(b) 都改后才能进 supported
-  - examples/feature_extraction/peft_lora_embedding_semantic_search.py
-
-  # NPU 实测**死在 evaluate.load("glue", "mrpc")**（:33，import 时同步触发）：
-  # HF_HUB_OFFLINE=1 下 evaluate.builder.get_dataset_config_name_async 在 coder
-  # 上无网络直接 SIGKILL；HF_HUB_OFFLINE=0 走网络又不通；离线缓存的 metric
-  # modules/evaluate_modules/metrics/evaluate-metric--glue/* 实际只 import 不重
-  # 现 evaluate 路径，hang 出现在 builder 拿 inference config 阶段。训练循环本
-  # 身可通（roberta-base + glue/mrpc cache 已在 coder + infer_device 含 npu）。
-  # **翻案前置 1 处源码 patch**：:33 删 `metric = evaluate.load("glue", "mrpc")`
-  # （或 stub 成 always-0 哑 metric，并在 :compute_metric 处短路返回）；
-  # 训练流程不依赖 metric 真值，只在 epoch 末尾打 accuracy，可直接砍
-  - examples/monteclora_finetuning/sequence_classification_finetune_monteclora.py
+  # 2026-09-20 又迁出 2 条（feature_extraction / monteclora → supported）：
+  # 原判的 pin_memory+accelerator.prepare 挂与 evaluate.load 离线挂均为
+  # npu-3 裸跑环境假象，标准 CI 环境（shim + hf-mirror）下原样通过。
 
   # ===== B. 翻案候选（无后端硬编码，换模型/数据/多卡 runner 即可） =====
   # 不在 simple 翻案范围；B 组内按换模型难度低 → 多卡 runner 排序。
@@ -981,38 +1075,24 @@ unsupported:
 
 
   # ---- C-架构级硬阻塞（peft 源码 / 数据路径 / 设备分支） ----
-  # NPU 阻塞在 peft frod/layer.py：每次 forward :259 构造 sparse COO + coalesce，
-  # fp32 默认路径 :269 torch.sparse.mm；--bf16/--fp16 true 走 :265-268 dense mm
-  # 分支可绕过 mm（coalesce 仍在，须实测）
+  # 2026-09-20 复测定案（npu-1 标准 CI 环境 + --bf16 True 走 layer.py:265-268
+  # dense 分支）：forward 的 torch.sparse.mm 绕过了，但 backward 仍死在
+  # aten::mul.out（torch_npu 2.9.0.post2 无该 kernel）——frod 的 sparse COO
+  # 参数化在反向传播必经，属 kernel 级缺口，overlay/shim/runner 均无解
   - examples/frod_finetuning/frod_image_classification.py
 
-  # 同上（同一 layer 实现）；原"aten::addmm 无 NPU 后端"归因为运行时推测
+  # 同上（同一 layer 实现；npu-1 实测 bf16 dense 分支 forward 通过、
+  # backward aten::mul.out 崩，cola + bert-base 复现）
   - examples/frod_finetuning/frod_text_classification.py
 
   # NPU 硬阻塞：shira/layer.py:222-226 每次 forward 构造 sparse COO，:245/:255
-  # dense += sparse 混合布局加法——无 dtype 绕过分支（比 frod 更硬）
+  # dense += sparse 混合布局加法——无 dtype 绕过分支（比 frod 更硬；frod 的
+  # backward mul.out 缺口同判死）
   - examples/shira_finetuning/shira_finetuning.py
 
-  # coder 实测 backward acl ERR00100；源码层 KaSA 无 CUDA/sparse 私有 API（SVD
-  # 截断在 init detach 后、forward 仅 linear+广播乘，variants.py:1567-1594）——
-  # 归因待复跑取证（疑 bf16 nll 反向或环境问题）。
-  # 注：upstream peft HEAD（a5526d2）已删除该目录，归类归到 archived（无法
-  # 复测），详见底部三处
-
-  # coder 实测 backward 崩；源码无 nll 特有路径（nll 为 SFT 共有 loss，trl patch
-  # 不在本仓）——UniLoRA 特有的是共享 theta_d 高级索引 backward（unilora/layer.py:
-  # 216-217），归因待复跑取证
-  - examples/unilora_finetuning/unilora_finetuning.py
-
-  # coder 实测 backward ERR00100 归因待复跑取证；脚本直接调 variants 路径
-  # variants.py:1567-1594 linear+广播乘，疑 bf16 nll 反向或环境问题。
-  # 注：2026-09-18 复审时误归类为「upstream 已删」是错的——v0.21.0 / main HEAD
-  # 该目录仍存在；现恢复至此作为 unsupported 真 training example。
-  - examples/kasa_finetuning/kasa_finetuning.py
-
-  # 版本敏感：trl 1.10 可跑（exit 0）、1.12 backward 崩，与 mica/miss 配方冲突
-  # （脚本自身无 NPU 特有路径，断裂点在 trl 内部，待复跑取证）
-  - examples/psoft_finetuning/psoft_finetuning.py
+  # 2026-09-20 已迁 supported（kasa/unilora/psoft/shadow/lorafa ×5）：原
+  # "backward ERR00100 归因待复跑"在标准 CI 环境（shim + hf-mirror +
+  # --loss_type nll + 0.5B）下全部证伪，npu-1 逐条 exit 0，见 supported 段。
 
   # GPTQ 现场量化必经（:86-98，无关闭开关；exllama/marlin 仅 CUDA，torch 内核慢）
   - examples/qalora_finetuning/qalora_gptq_finetuning.py
@@ -1025,22 +1105,12 @@ unsupported:
   # → :94-95 .to(-1) + DDP(device_ids=[-1]) 必崩；另叠加 7B + MetaMathQA 全量
   - examples/eva_finetuning/eva_finetuning_multi_accelerator.py
 
-  # :52-60 设备分支 cuda/xpu/else→cpu，无 npu → device_map="cpu" 先落主机内存
-  # （原"8B HBM 溢出"不成立：fp16/bf16 8B≈16G）；README 提供 accelerate launch 用法
-  - examples/lorafa_finetune/lorafa_finetuning.py
+  # lorafa / shadow 已迁 supported（2026-09-20 npu-1 实测：shim 下 cuda 分支
+  # 直通 NPU + 0.5B 换掉 8B，见 supported 段）。原"落 CPU / 主机 RAM OOM"
+  # 归因是裸跑无 shim + 默认 8B 模型的组合。
 
-  # :59 device = "cuda" if torch.cuda.is_available() else "cpu"——NPU 上落 CPU、
-  # 单设备硬编码多卡无效（属实）；但实测 SIGKILL 是主机 RAM OOM（fp32 8B≈32GB）
-  # 而非"HBM"；默认模型 Qwen3-8B（非 llama 系）。
-  # 注：2026-09-18 复审时误归类为「upstream 已删」是错的——v0.21.0 / main HEAD
-  # 该目录仍存在；现恢复至此作为 unsupported 真 training example。
-  - examples/shadow_finetuning/shadow_finetuning.py
-
-  # :59 device = "cuda" if torch.cuda.is_available() else "cpu"——NPU 上落 CPU、
-  # 单设备硬编码多卡无效（属实）；但实测 SIGKILL 是主机 RAM OOM（fp32 8B≈32GB）
-  # 而非"HBM"；默认模型 Qwen3-8B（非 llama 系）。
-  # 注：upstream peft HEAD（a5526d2）已删除该目录，归类归到 archived（无法
-  # 复测），详见底部三处
+  # （历史条目：upstream peft HEAD a5526d2 曾删除 shadow 目录后恢复，详见
+  # 底部 A2 段归档记录）
 
 
   # ---- C-产物/服务依赖（外部 checkpoint + HTTP 服务） ----

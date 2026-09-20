@@ -82,7 +82,11 @@ raise SystemExit(
       || pip_ascend -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
   fi
   if [[ -f "$XTUNER_WHEEL_DIR/torch-2.11.0+cpu-cp312-cp312-manylinux_2_28_aarch64.whl" ]]; then
-    pip_ascend --no-index --find-links "$XTUNER_WHEEL_DIR" torch==2.11.0 || \
+    # --no-deps so pip doesn't try to also pull filelock/networkx/jinja2
+    # from --no-index (the local dir only has torch). Those deps come
+    # along via the runtime-deps pip install below, which goes back to
+    # the aliyun / cluster indexes.
+    pip_ascend --no-deps --no-index --find-links "$XTUNER_WHEEL_DIR" torch==2.11.0 || \
       pip_ascend -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
   fi
   pip_ascend torch_npu==2.11.0
@@ -137,7 +141,9 @@ setup_xtuner-llm() {
   # block (applies on top of xtuner==0.2.0 too; matches verified stack).
   # torch / torch_npu already installed by ensure_torch_stack; do not
   # re-list them here, or pip would redownload the 148 MB torch wheel.
-  python -m pip install --find-links "${XTUNER_WHEEL_DIR:-}" -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
+  # Use PIP_CONSTRAINT (set above) to keep mmengine from pulling a
+  # fresh torch==2.x range marker and re-downloading torch.
+  python -m pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
       'mmengine==0.10.6' 'transformers==4.48.0' 'peft>=0.14.0' \
       'datasets>=3.2.0,<4.0.0' einops loguru openpyxl 'scikit-image' scipy \
       SentencePiece tiktoken transformers_stream_generator cyclopts \
