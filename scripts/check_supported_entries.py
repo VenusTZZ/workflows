@@ -71,20 +71,13 @@ def validate(supported: list[dict], target_root: Path
             entry['exec'] = exec_path.strip()
         if launcher is not None:
             entry['launcher'] = launcher.strip()
-        # Display name for the run-example job label: parent dir + stem
-        # when the file sits below the scan root (3+ path components) -
-        # same-named scripts in different directories must get distinct
-        # labels (peft's five */train_dreambooth.py all collapsed to
-        # "train_dreambooth" and were indistinguishable in the Actions
-        # UI). Collapses to the bare stem when the parent dir equals the
-        # stem (examples/foo/foo.py) or the file sits directly under the
-        # scan root (examples/foo.py).
-        parts = PurePosixPath(path).parts
-        stem = PurePosixPath(path).stem
-        if len(parts) >= 3 and parts[-2] != stem:
-            entry['name'] = f'{parts[-2]}/{stem}'
-        else:
-            entry['name'] = stem
+        # Display name for the run-example job label: full relative path
+        # with the extension stripped (examples/sft/run_peft.sh ->
+        # examples/sft/run_peft; a bare foo.py -> foo). Uniform and
+        # unique - same-named scripts in different directories get
+        # distinct labels (peft's five */train_dreambooth.py used to
+        # collapse to a single "train_dreambooth").
+        entry['name'] = str(PurePosixPath(path).with_suffix(''))
         entries.append(entry)
     return entries, errors
 
