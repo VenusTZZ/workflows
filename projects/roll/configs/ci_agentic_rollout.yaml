@@ -6,16 +6,15 @@ hydra:
 
 exp_name: roll-ci-agentic-rollout
 seed: 42
-logging_dir: ${CI_OUTPUT_DIR}/logs
-output_dir: ${CI_OUTPUT_DIR}/output
-render_save_dir: ~
+logging_dir: ${oc.env:CI_OUTPUT_DIR}/logs
+output_dir: ${oc.env:CI_OUTPUT_DIR}/output
 system_envs:
   USE_MODELSCOPE: "1"
   MODEL_DOWNLOAD_TYPE: MODELSCOPE
 
 checkpoint_config:
   type: file_system
-  output_dir: ${CI_OUTPUT_DIR}/ckpt
+  output_dir: ${oc.env:CI_OUTPUT_DIR}/ckpt
 
 num_gpus_per_node: 1
 max_steps: 1
@@ -50,7 +49,9 @@ actor_infer:
       load_format: auto
       max_model_len: 256
       enforce_eager: true
-  device_mapping: [0]
+  # v0.3.0 worker_config evals device_mapping; it must stay a string
+  # expression, matching the upstream config's list(range(...)) style.
+  device_mapping: list(range(0,1))
 
 train_env_manager:
   format_penalty: -0.15

@@ -18,8 +18,8 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # Release-only guarding. Offset from PEFT (minute 30) so the shared NPU
-  # pool does not take every new project at once.
+  # Release-only guarding: monitor the latest upstream release and rerun
+  # only when the release tag moves or the previous scheduled run failed.
   schedule:
     - cron: '45 */6 * * *'
   workflow_dispatch:

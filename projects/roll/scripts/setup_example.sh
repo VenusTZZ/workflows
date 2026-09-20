@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Prepare the CI environment for one supported ROLL example.
 # $1 is the manifest profile. Unknown profiles fail before any install.
-# ROLL itself is installed from TARGET_ROOT (the upstream checkout under test),
-# replacing the image's preinstalled copy without touching the pinned
-# torch / torch_npu / vLLM / vLLM-Ascend / triton-ascend stack.
+# The manifest uses a domestic CANN base image.  This script installs the
+# version-matched torch_npu / vLLM-Ascend stack following the v0.3.0
+# Ascend environment guide,
+# then installs ROLL itself from TARGET_ROOT (the upstream checkout under
+# test).  ModelScope keeps using the runner's existing persistent cache.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -15,6 +17,7 @@ PROFILE="$1"
 
 ASCEND_PIP_INDEX=https://repo.huaweicloud.com/ascend/repos/pypi
 FALLBACK_PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+HUAWEICLOUD_PIP_INDEX=https://repo.huaweicloud.com/repository/pypi/simple
 CLUSTER_PIP_HOST=cache-service.nginx-pypi-cache.svc.cluster.local
 export CLUSTER_PIP_INDEX="http://${CLUSTER_PIP_HOST}/pypi/simple"
 
@@ -40,18 +43,28 @@ except urllib.error.HTTPError:
   echo "pip index: $PIP_INDEX_URL"
 }
 
+# Vendor CANN/ATB env scripts assume a login shell and reference optional
+# variables (e.g. $ZSH_VERSION) without ${VAR:-} guards. Under this
+# project's `set -u` they die with "unbound variable"; relax strict mode
+# only while sourcing vendor code, then restore it.
+source_vendor_env() {
+  local vendor_file="$1"
+  if [[ ! -f "$vendor_file" ]]; then
+    echo "vendor env script not found, skipping: $vendor_file"
+    return 0
+  fi
+  set +eu
+  # shellcheck disable=SC1090
+  source "$vendor_file"
+  set -eu
+}
+
 # The engine no longer sources CANN for project jobs; bring it into this
 # step and persist the runtime variables that ROLL's system_envs does not
 # cover so the Run step inherits them.
 prepare_ascend_env() {
-  if [[ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]]; then
-    # shellcheck disable=SC1091
-    source /usr/local/Ascend/ascend-toolkit/set_env.sh
-  fi
-  if [[ -f /usr/local/Ascend/nnal/atb/set_env.sh ]]; then
-    # shellcheck disable=SC1091
-    source /usr/local/Ascend/nnal/atb/set_env.sh
-  fi
+  source_vendor_env /usr/local/Ascend/ascend-toolkit/set_env.sh
+  source_vendor_env /usr/local/Ascend/nnal/atb/set_env.sh
   # Canonical ROLL NPU knobs (ascend_npu_env_config.md), tightened to smoke
   # timeouts. VLLM_ASCEND_ENABLE_NZ stays off for vLLM stability.
   export HCCL_NPU_SOCKET_PORT_RANGE="auto"
@@ -97,14 +110,70 @@ print(f"roll import path ok: {source}")
 PY
 }
 
-ensure_agentic_deps() {
-  if python -c "import gym, gymnasium, gem, gym_sokoban" 2>/dev/null; then
-    echo "reusing image agentic env deps"
-    return
-  fi
-  echo "=> installing agentic env deps (gem-llm / gym_sokoban / gymnasium)"
-  python -m pip install "gem-llm==0.0.4" "gym_sokoban" "gymnasium[toy-text]"
-  python -c "import gym, gymnasium, gem, gym_sokoban; print('agentic env deps ok')"
+install_rollout_stack() {
+  local target_root="${TARGET_ROOT:?TARGET_ROOT is required}"
+  local requirements_file
+  # Keep the filtered file beside requirements_common.txt: pip resolves
+  # its relative references from the file location.
+  requirements_file="$target_root/.ci-requirements-common.txt"
+
+  echo "=> installing matched torch 2.10 / torch_npu 2.10 runtime"
+  python -m pip install -q \
+    "torch==2.10.0" "torchvision==0.25.0" "torchaudio==2.10.0" \
+    "numpy==1.26.4"
+  pip_ascend -q --no-deps "torch-npu==2.10.0.post4"
+
+  echo "=> installing vLLM 0.23.0 / vLLM-Ascend 0.23.0rc1 from domestic indexes"
+  python -m pip install -q --index-url "$HUAWEICLOUD_PIP_INDEX" \
+    "vllm==0.23.0"
+  python -m pip uninstall -y -q triton triton-ascend || true
+  python -m pip install -q --index-url "$HUAWEICLOUD_PIP_INDEX" \
+    "triton==3.5.0"
+  python -m pip install -q --no-deps --index-url "$ASCEND_PIP_INDEX" \
+    "triton-ascend==3.2.1"
+  python -m pip install -q --index-url "$HUAWEICLOUD_PIP_INDEX" \
+    "vllm-ascend==0.23.0rc1"
+
+  # Generic vLLM metadata can select a CUDA torch build.  Restore the exact
+  # NPU pair after installing vLLM, exactly as the v0.3.0 Ascend guide
+  # requires.
+  python -m pip install -q \
+    "torch==2.10.0" "torchvision==0.25.0" "torchaudio==2.10.0"
+  pip_ascend -q --no-deps "torch-npu==2.10.0.post4"
+
+  echo "=> installing ROLL common + Sokoban dependencies"
+  # Text-only Sokoban rollout needs only requirements_common. Skip:
+  #   - requirements_vision.txt: pycocotools / qwen_vl_utils / decord /
+  #     rouge_score are video / detection-only; decord has no py3.12
+  #     aarch64 wheel.
+  #   - ./mcore_adapter / Megatron adapter: never exercises on the
+  #     FSDP2/vLLM rollout path.
+  grep -vE '^[[:space:]]*gem-llm' \
+    "$target_root/requirements_common.txt" \
+    | grep -vE '\./mcore_adapter|requirements_vision\.txt' \
+    > "$requirements_file"
+  (cd "$target_root" && python -m pip install -q -r "$requirements_file")
+  # gem-llm metadata pulls an antlr runtime incompatible with Hydra's pin;
+  # v0.3.0 requirements pin antlr4-python3-runtime 4.9.x, which gem works
+  # with.
+  (cd "$target_root" && python -m pip install -q \
+    --ignore-requires-python --no-deps "gem-llm==0.0.4")
+  # gem-llm 0.0.4 hard-requires reasoning-gym==0.1.23, which
+  # --no-deps drops; the agentic env import chain breaks without it.
+  python -m pip install -q \
+    "numpy==1.26.4" "transformers==4.57.6" "tensorboard==2.20.0" \
+    "antlr4-python3-runtime==4.9.3" "modelscope==1.37.0" \
+    "reasoning-gym==0.1.23" "gym_sokoban" "gymnasium[toy-text]"
+
+  python - <<'PY'
+import torch, torch_npu, vllm, vllm_ascend, triton
+print("torch", torch.__version__)
+print("torch_npu", torch_npu.__version__)
+print("vllm", vllm.__version__)
+print("triton", triton.__version__)
+print("NPU available", torch.npu.is_available(), "count", torch.npu.device_count())
+PY
+  rm -f "$requirements_file"
 }
 
 ms_download_model() {
@@ -124,8 +193,7 @@ model_id = os.environ["MODEL_ID"]
 cache = os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
 local = snapshot_download(model_id, cache_dir=cache)
 with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
-    handle.write(f"ROLL_MODEL_PATH={local}
-")
+    handle.write(f"ROLL_MODEL_PATH={local}\n")
 print(f"ROLL_MODEL_PATH={local}")
 PY
 }
@@ -133,9 +201,12 @@ PY
 prepare_ci_configs() {
   local src="${PROJECT_ROOT:?PROJECT_ROOT is required}/configs"
   local dst="$TARGET_ROOT/examples/ci_roll"
-  echo "preparing CI configs: $src -> $dst"
+  echo "preparing phase-two CI configs: $src -> $dst"
   mkdir -p "$dst"
-  cp "$src"/ci_agentic_train.yaml "$src"/ci_agentic_rollout.yaml "$src"/ci_rlvr.yaml "$dst/"
+  cp "$src"/ci_agentic_rollout.yaml \
+    "$src"/ci_agentic_train.yaml \
+    "$src"/ci_rlvr.yaml \
+    "$dst/"
   ls -la "$dst/"
 }
 
@@ -156,32 +227,34 @@ PY
 
 prepare_ascend_env
 select_pip_index
-
-python -c "import torch, torch_npu, vllm, vllm_ascend; print('torch', torch.__version__, 'torch_npu', torch_npu.__version__, 'vllm', vllm.__version__)"
-
+export PYTHONNOUSERSITE=1
+install_rollout_stack
 ensure_roll_installed
 ms_download_model "Qwen/Qwen2.5-0.5B-Instruct"
 prepare_ci_configs
 
 case "$PROFILE" in
-  agentic_train_npu)
-    echo "profile: agentic_train_npu (2 NPUs: FSDP2 train + vLLM rollouts)"
-    ensure_agentic_deps
-    check_npu_devices 2
-    ;;
   agentic_rollout_npu)
     echo "profile: agentic_rollout_npu (1 NPU: vLLM rollouts only)"
-    ensure_agentic_deps
     check_npu_devices 1
+    export ASCEND_RT_VISIBLE_DEVICES="0"
+    ;;
+  agentic_train_npu)
+    echo "profile: agentic_train_npu (2 NPUs: FSDP2 train + vLLM rollout)"
+    check_npu_devices 2
+    export ASCEND_RT_VISIBLE_DEVICES="0,1"
     ;;
   rlvr_npu)
-    echo "profile: rlvr_npu (4 NPUs: FSDP2 train(2) + vLLM(1) + reference(1))"
+    echo "profile: rlvr_npu (4 NPUs: FSDP2 train x2 + vLLM + reference)"
     check_npu_devices 4
+    export ASCEND_RT_VISIBLE_DEVICES="0,1,2,3"
     ;;
   *)
     echo "FATAL: unknown profile '$PROFILE'" >&2
     exit 2
     ;;
 esac
+
+echo "ASCEND_RT_VISIBLE_DEVICES=${ASCEND_RT_VISIBLE_DEVICES}" >> "$GITHUB_ENV"
 
 echo "setup complete for profile $PROFILE"

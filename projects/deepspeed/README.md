@@ -16,24 +16,36 @@
 
 [examples_manifest.yaml](examples_manifest.yaml) 的 `scan.root` 为 DeepSpeedExamples 仓根，`include_extensions` 为 `.sh` / `.py`。`files-only` 扫描模型的对账单位是入口文件；被 import 的库、模型定义、测试等"不是 example 的配套物"全部登记在 `unsupported` 段（带说明性注释），扫描引擎不再有独立的 exclude 字段。
 
-当前 supported 共 10 条单卡（`linux-aarch64-a2-1`）小规模 example，统一用 CANN 9.1.0 镜像，模型走 ModelScope、数据集用仓内本地 fixture，全部用 `overlay_args` 压到 CI 规模：
+第一阶段 supported 共 10 条，按 example 的最小有效拓扑使用 1/2/4 卡 runner，统一用 CANN 9.1.0 镜像。模型走 ModelScope（`ms_download_models` 下载后经 `GITHUB_ENV` 传本地路径），数据集优先使用仓内 fixture，并用 `overlay_args` 压到 CI 规模：
 
 | path（相对 examples 仓） | profile | 看护点 | 模型 / 数据 | 压规模 |
 |---|---|---|---|---|
-| `training/HelloDeepSpeed/run_ds.sh` | deepspeed | Roberta MLM（ZeRO-1 + CPU offload + BF16） | wikitext（setup patch 为 Salesforce/wikitext，ModelScope）+ roberta-base tokenizer | 2 层 10 步 |
-| `applications/DeepSpeed-Chat/training/step1_supervised_finetuning/main.py` | ds_chat_sft | SFT（NPU-aware） | opt-125m（ModelScope）+ 8 行 local/jsonfile fixture | 1 epoch |
-| `applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/main.py` | ds_chat_rw | Reward Model | 同上 | 1 epoch |
-| `applications/DeepSpeed-Chat/training/step2_dpo_finetuning/main.py` | ds_chat_dpo | DPO（ref model 内存翻倍） | 同上 | 1 epoch |
-| `applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/main.py` | ds_chat_rlhf | RLHF（官方 `--enable_test_mode`） | opt-125m ×2（ModelScope）+ fixture | test mode 5 步 |
+| `training/HelloDeepSpeed/run_ds.sh` | deepspeed / 1 卡 | Roberta MLM（ZeRO-1 + CPU offload + BF16） | wikitext 运行时重定向到 Salesforce/wikitext + roberta-base tokenizer | 2 层 10 步 |
+| `applications/DeepSpeed-Chat/training/step1_supervised_finetuning`（exec: `main.py`） | ds_chat_sft | SFT（NPU-aware） | opt-125m（ModelScope）+ 8 行 local/jsonfile fixture | 1 epoch |
+| `applications/DeepSpeed-Chat/training/step2_reward_model_finetuning`（exec: `main.py`） | ds_chat_rw | Reward Model | 同上 | 1 epoch |
+| `applications/DeepSpeed-Chat/training/step2_dpo_finetuning`（exec: `main.py`） | ds_chat_dpo | DPO（ref model 内存翻倍） | 同上 | 1 epoch |
+| `applications/DeepSpeed-Chat/training/step3_rlhf_finetuning`（exec: `main.py`） | ds_chat_rlhf | RLHF（官方 `--enable_test_mode`） | opt-125m ×2（ModelScope）+ fixture | test mode 5 步 |
 | `inference/huggingface/text-generation/inference-test.py` | ds_infer | 推理（`--hf_baseline` 跳过 DS kernel） | opt-125m（ModelScope） | 8 token |
-| `training/bf16_master_weight/train.py` | deepspeed | bf16 master-weight 对比 | 内置 SimpleTransformer + 合成数据 | 5 步 |
-| `training/cifar/cifar10_deepspeed.py` | deepspeed | CIFAR10 分类（ZeRO-0 + BF16） | torchvision CIFAR-10 | 1 epoch |
-| `training/pipeline_parallelism/train.py` | deepspeed | Pipeline parallelism（单卡 p=1） | torchvision CIFAR-10 | 10 步 |
-| `training/offload_states/offload_states.py` | deepspeed | ZeRO offload_states | 随机合成数据 | 小规模 |
+| `training/cifar`（exec: `run_ds.sh`） | ds_cifar | CIFAR10 分类（ZeRO-0 + BF16） | ModelScope 预置并校验的 CIFAR-10 | 1 epoch |
+| `training/offload_states/offload_states.py` | deepspeed / 1 卡 | ZeRO offload_states | 随机合成数据 | 小规模 |
+| `training/cifar/run_ds_moe.sh` | ds_cifar / 2 卡 | CIFAR10 MoE expert parallel（EP=2） | ModelScope 预置并校验的 CIFAR-10 | 1 epoch |
+| `training/autotp_equivalence`（exec: `train.py`） | ds_autotp_equivalence / 4 卡 | AutoTP=1/3/4 loss 等价性 | Qwen3-0.6B（ModelScope）+ 随机 token | 每组 5 步 |
 
-DeepSpeed-Chat 的 `--data_path local/jsonfile` 从 `applications/DeepSpeed-Chat/data/{train,eval}.json` 读取（JSON Lines，字段 `prompt`/`chosen`/`rejected`）；`scripts/setup_example.sh` 在对应 profile 下把 [fixtures/](fixtures/) 里的 8 行 fixture 拷到该目录。模型经 `modelscope.snapshot_download` 下载并 plant 到 HF hub cache，使 example 里硬编码的 `facebook/opt-125m` 离线可解析。
+**启动方式的选择**：`cifar10_deepspeed.py` 的 main() 无条件读 launcher 注入的 `LOCAL_RANK` 并调 `init_distributed()`，因此普通 CIFAR 经支持 `$@` 的上游 `run_ds.sh` 启动。CIFAR MoE 的上游脚本不透传 `$@`，项目 runner 按原配方复刻两卡 launcher、EP=2 和 MoE 参数，再追加 CI overlay。DS-Chat 官方 training_scripts 硬编码 1.3B～66B 模型且不透传任意参数，项目 runner 等价执行 `deepspeed --num_gpus 1 main.py <overlay_args>`。AutoTP equivalence 同样复刻上游 `run_gpu.sh` 的 1/3/4 卡三次启动与 loss 比较，但显式传入 ModelScope 本地模型。offload_states 与 `--hf_baseline` inference 不依赖 launcher，直接运行 `.py`。
 
-其余约 388 条列入 unsupported 并按族群加注释（多机多卡 mpi/NCCL、需 ImageNet/大模型、绑 CUDA 算子、NVMe 硬件、性能基准、compression 需 patch 等），见 manifest。清单与磁盘的差异只打印路径，不使 job 失败；例外：`supported` 条目的 path 已不在磁盘上时 manifest-check 立即判红。
+多卡条目启动前会检查 `ASCEND_RT_VISIBLE_DEVICES`：MoE 至少需要 2 卡，AutoTP equivalence 至少需要 4 卡；runner 未注入时分别使用 `0,1` 和 `0,1,2,3`。这个变量只过滤子进程可见的物理 NPU 并把它们重新映射为进程内的逻辑设备，不负责创建 worker；实际 rank 数仍由 `deepspeed --num_gpus` 决定。AutoTP 三次子运行使用独立 master port，避免进程组端口复用。
+
+bf16_master_weight 与 pipeline_parallelism 曾进 supported，CI 实测其源码硬绑 CUDA（`torch.cuda.set_device` / `autocast(device_type="cuda")` / `--backend nccl`），装包无法解决，已移回 unsupported（需 patch，次轮候选）。
+
+DeepSpeed-Chat 的 `--data_path local/jsonfile` 从 `applications/DeepSpeed-Chat/data/{train,eval}.json` 读取（JSON Lines，字段 `prompt`/`chosen`/`rejected`）；`scripts/setup_example.sh` 在对应 profile 下把 [fixtures/](fixtures/) 里的 8 行 fixture 拷到该目录。上游 `setup.py` 的 `find_packages(include=['dschat'])` 无法安装缺少根 `__init__.py` 的 namespace package，因此 setup 不依赖其空 editable wheel，而是把 `applications/DeepSpeed-Chat` 源码根目录写入 `PYTHONPATH` 并立即执行 `import dschat` 验证。上游 [issue #813](https://github.com/deepspeedai/DeepSpeedExamples/issues/813) 也记录了 DeepSpeed-Chat 在切换执行/缓存上下文后发生模块解析错误，但不是本次完全相同的报错。模型经 `ms_download_models` 从 ModelScope 下载到本地，路径写入 `GITHUB_ENV`（`OPT_125M_PATH` / `QWEN3_06B_PATH`），overlay_args 引用本地目录。setup 按上游 requirements/setup.py 显式安装依赖，但不会从 PyPI 覆盖镜像的 `torch + torch_npu` 或 `$TARGET_ROOT` 中的 DeepSpeed 源码；安装后会校验 `deepspeed.__file__` 位于目标源码树。
+
+CIFAR 单卡和两卡 MoE 共用 `ds_cifar` profile。setup 从固定 revision 的 ModelScope 镜像下载 CIFAR-10 zip，先校验 SHA-256，再解压到上游脚本使用的 `training/cifar/data`，最后调用 torchvision 自带的官方逐文件 MD5 清单复核。这样保留 example 的 `download=True` 原始逻辑，但完整数据已存在时不会访问 CI 中超时的 Toronto 源；其余 `deepspeed` profile 不承担这次约 170 MB 的下载。
+
+Run #22 中 10 条已有 9 条通过；两卡 MoE 已完成两个 rank 的 HCCL 初始化并创建 EP=2 group，首次 forward 才在 DeepSpeed `sharded_moe._capacity()` 触发 `torch.compile`，随后因镜像没有 Triton 后端而报 `ModuleNotFoundError: triton`。这是 DeepSpeed 0.19.7 将 MoE helper 从 TorchScript 改为 `torch.compile` 后产生的可选编译路径（[issue #7835](https://github.com/deepspeedai/DeepSpeed/issues/7835)、[PR #7840](https://github.com/deepspeedai/DeepSpeed/pull/7840)）；后续 [PR #7875](https://github.com/deepspeedai/DeepSpeed/pull/7875) 的 fallback 无法捕获 `torch.compile` 在首次调用时才发生的懒编译失败。项目 runner 因此仅对 CIFAR MoE 命令设置 `TORCH_COMPILE_DISABLE=1`，让该 helper 走 eager；两卡 launcher、HCCL、MoE 和 EP=2 训练语义均保留，也不要求为一个未由 example 声明的可选优化安装版本敏感的 Triton-Ascend。
+
+其余约 224 条列入 unsupported：同一逻辑 example 的 `.sh` 启动包装已并入对应 `.py` 条目，每一条都带一行内联中文注释，注明具体不支持原因（多机多卡 mpi/NCCL、需 ImageNet/大模型、绑 CUDA 算子、NVMe 硬件、性能基准、compression 需 patch、依赖远程 HF 数据集等），见 manifest。清单与磁盘的差异只打印路径，不使 job 失败；例外：`supported` 条目的 path 已不在磁盘上时 manifest-check 立即判红。
+
+第二阶段以第一阶段 10/10 远程全绿为门槛；届时再评估加入 `linux-aarch64-a2-8` 的 HF AutoTP=8 和两卡 ZenFlow 单配置 smoke，未验收前不进入 supported，也不启用 schedule。
 
 ## 触发
 
@@ -44,7 +56,7 @@ DeepSpeed-Chat 的 `--data_path local/jsonfile` 从 `applications/DeepSpeed-Chat
 
 ## 模型缓存边界
 
-薄触发器不向公共引擎传宿主缓存卷，模型在各 matrix job 的容器内准备；同一 job 的 setup 与 run 步骤可复用该容器内文件，但不保证跨 job 或跨 workflow run 复用。本看护所需模型（opt-125m 等）与数据集（fixture / CIFAR-10）均可经 ModelScope 或直接下载得到，正常路径不使用 [cache-seed](../../cache-seed/README.md)；仅当某 example 硬编码了 ModelScope 也无镜像的资产时才按 cache-seed 流程兜底投递。
+薄触发器不向公共引擎传宿主缓存卷，模型和 CIFAR-10 在各 matrix job 的容器内准备；同一 job 的 setup 与 run 步骤可复用该容器内文件，但不保证跨 job 或跨 workflow run 复用。本看护所需模型（opt-125m 等）和 CIFAR-10 均有 ModelScope 来源，正常路径不使用 [cache-seed](../../cache-seed/README.md)；仅当 ModelScope 资产变得不可用时才按 cache-seed 流程兜底投递。
 
 ## Quick Start
 

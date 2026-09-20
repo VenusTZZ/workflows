@@ -6,9 +6,8 @@
 # and the test entry command. The guard loop, cache I/O, state relay
 # and publishing all live in the engine.
 #
-# The doc clones vLLM/vLLM-Ascend/ROLL from GitHub and builds
-# vLLM-Ascend from source (SOC_VERSION=ascend910b1), so the shared
-# CANN devel image must carry gcc/cmake - it does (9.1.0-910b).
+# The doc installs the NPU torch stack, pre-built vLLM-Ascend runtime,
+# and ROLL's agentic dependencies in the shared CANN 9.1.0 image.
 # The example auto-downloads Qwen2.5-0.5B-Instruct (~1 GB) into the
 # default modelscope cache; a shared cache volume is mounted for CI
 # persistence (same convention as trl / peft / openrlhf).
@@ -20,9 +19,8 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # Enable after the first successful workflow_dispatch run.
-  # schedule:
-  #   - cron: '35 */6 * * *'
+  schedule:
+    - cron: '35 */6 * * *'
   workflow_dispatch:
 
 permissions:
@@ -38,8 +36,8 @@ jobs:
       container_options: >-
         --shm-size=32g
         --volume=/data/ci-cache/modelscope/roll:/root/.cache/modelscope
-      # Two vLLM source builds (~20-40 min) + requirements_common +
-      # ~1 GB model download + a 2-step agentic train run on one card.
+      # NPU runtime wheels + requirements_common + ~1 GB model download
+      # + a 1-step agentic train run on one card.
       timeout_minutes: 240
       upstream_repo: alibaba/ROLL
       doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/roll/docs/Quick-start-Ascend.md?ref=${{ github.sha }}

@@ -21,8 +21,8 @@ UPSTREAM_EXAMPLES = pathlib.Path('F:/work/tmp/ROLL-plan-2/examples')
 HAVE_UPSTREAM = UPSTREAM_EXAMPLES.is_dir()
 
 SUPPORTED = {
-    'examples/qwen2.5-0.5B-agentic/agentic_val_sokoban.yaml',
     'examples/qwen2.5-0.5B-agentic/agentic_rollout_sokoban.yaml',
+    'examples/qwen2.5-0.5B-agentic/agentic_val_sokoban.yaml',
     'examples/ascend_examples/qwen3_8b_rlvr_fsdp2.yaml',
 }
 CHECKOUT_EXCLUDED = {
@@ -80,7 +80,9 @@ class RollProjectTests(unittest.TestCase):
                           'overlay_args', 'timeout_minutes'):
                 self.assertTrue(entry.get(field), (entry['path'], field))
             self.assertEqual(
-                entry['image'].split('@')[0], 'quay.io/ascend/roll',
+                entry['image'],
+                'swr.cn-south-1.myhuaweicloud.com/ascendhub/'
+                'cann:9.1.0-910b-ubuntu22.04-py3.12',
                 entry['path'])
             self.assertIn('.yaml', entry['path'])
 
@@ -120,9 +122,11 @@ class RollProjectTests(unittest.TestCase):
             self.assertIn('\\boxed{}', messages[0]['content'])
 
     def test_ci_config_constraints(self) -> None:
-        for name in ('ci_agentic_train', 'ci_agentic_rollout', 'ci_rlvr'):
+        for name in ('ci_agentic_rollout',):
             path = PROJECT / 'configs' / f'{name}.yaml'
             text = path.read_text(encoding='utf-8')
+            self.assertNotIn('${CI_OUTPUT_DIR}', text, name)
+            self.assertNotIn('${FIXTURE_DIR}', text, name)
             cfg = yaml.safe_load(text)
             self.assertEqual(cfg['max_steps'], 1, name)
             lowered = text.lower()
@@ -130,37 +134,111 @@ class RollProjectTests(unittest.TestCase):
                 self.assertNotIn(token, lowered, (name, token))
             self.assertIn('vllm', lowered, name)
             self.assertIn('ROLL_MODEL_PATH', text, name)
-
-        train = yaml.safe_load(
-            (PROJECT / 'configs/ci_agentic_train.yaml').read_text(
-                encoding='utf-8'))
-        self.assertEqual(set(train['actor_train']['device_mapping']), {0})
-        self.assertEqual(set(train['actor_infer']['device_mapping']), {1})
-        self.assertEqual(train['actor_train']['strategy_args']
-                         ['strategy_name'], 'fsdp2_train')
-        self.assertEqual(train['actor_infer']['strategy_args']
-                         ['strategy_name'], 'vllm')
-        self.assertEqual(train['reference']['strategy_args']
-                         ['strategy_name'], 'hf_infer')
+            self.assertIn('${oc.env:CI_OUTPUT_DIR}', text, name)
 
         rollout = yaml.safe_load(
             (PROJECT / 'configs/ci_agentic_rollout.yaml').read_text(
                 encoding='utf-8'))
         self.assertEqual(rollout['num_gpus_per_node'], 1)
         self.assertNotIn('actor_train', rollout)
+        self.assertEqual(rollout['actor_infer']['strategy_args']
+                         ['strategy_name'], 'vllm')
+        self.assertEqual(rollout['actor_infer']['device_mapping'],
+                         'list(range(0,1))')
+
+        train = yaml.safe_load(
+            (PROJECT / 'configs/ci_agentic_train.yaml').read_text(
+                encoding='utf-8'))
+        self.assertEqual(train['max_steps'], 1)
+        self.assertEqual(train['eval_steps'], 1000)
+        self.assertEqual(train['num_gpus_per_node'], 2)
+        self.assertEqual(train['actor_train']['strategy_args']
+                         ['strategy_name'], 'fsdp2_train')
+        self.assertEqual(train['actor_train']['device_mapping'],
+                         'list(range(0,1))')
+        self.assertEqual(train['actor_infer']['strategy_args']
+                         ['strategy_name'], 'vllm')
+        self.assertEqual(train['actor_infer']['device_mapping'],
+                         'list(range(1,2))')
+        self.assertEqual(train['reference']['strategy_args']
+                         ['strategy_name'], 'hf_infer')
+        self.assertEqual(train['reference']['device_mapping'],
+                         'list(range(0,1))')
 
         rlvr = yaml.safe_load(
-            (PROJECT / 'configs/ci_rlvr.yaml').read_text(encoding='utf-8'))
+            (PROJECT / 'configs/ci_rlvr.yaml').read_text(
+                encoding='utf-8'))
         self.assertEqual(rlvr['num_gpus_per_node'], 4)
-        self.assertEqual(set(rlvr['actor_train']['device_mapping']), {0, 1})
-        self.assertEqual(set(rlvr['actor_infer']['device_mapping']), {2})
-        self.assertEqual(set(rlvr['reference']['device_mapping']), {3})
+        self.assertEqual(rlvr['max_steps'], 1)
+        self.assertEqual(rlvr['eval_steps'], 1000)
         self.assertEqual(rlvr['actor_train']['strategy_args']
                          ['strategy_name'], 'fsdp2_train')
+        self.assertEqual(rlvr['actor_train']['device_mapping'],
+                         'list(range(0,2))')
         self.assertEqual(rlvr['actor_infer']['strategy_args']
                          ['strategy_name'], 'vllm')
-        self.assertEqual(rlvr['rewards']['math_rule']
-                         ['tag_included'], ['ci_math'])
+        self.assertEqual(rlvr['actor_infer']['device_mapping'],
+                         'list(range(2,3))')
+        self.assertEqual(rlvr['reference']['strategy_args']
+                         ['strategy_name'], 'hf_infer')
+        self.assertEqual(rlvr['reference']['device_mapping'],
+                         'list(range(3,4))')
+        self.assertEqual(rlvr['rewards']['math_rule']['world_size'], 1)
+        self.assertNotIn('dataset_dir', rlvr['actor_train']['data_args'])
+        self.assertEqual(
+            rlvr['actor_train']['data_args']['file_name'],
+            ['${oc.env:FIXTURE_DIR}/ci_math_8.jsonl'],
+        )
+        for section in ('actor_train', 'actor_infer', 'reference'):
+            self.assertEqual(rlvr[section]['model_args']['flash_attn'],
+                             'fa2', section)
+
+    def test_phase_one_setup_uses_domestic_runtime_sources(self) -> None:
+        text = (PROJECT / 'scripts/setup_example.sh').read_text(
+            encoding='utf-8')
+        for token in (
+            'torch==2.10.0',
+            'torch-npu==2.10.0.post4',
+            'vllm==0.23.0',
+            'vllm-ascend==0.23.0rc1',
+            'triton-ascend==3.2.1',
+            'modelscope==1.37.0',
+            'reasoning-gym==0.1.23',
+            'repo.huaweicloud.com/repository/pypi/simple',
+        ):
+            self.assertIn(token, text)
+        self.assertIn(
+            'ms_download_model "Qwen/Qwen2.5-0.5B-Instruct"', text)
+        self.assertNotIn('quay.io', text)
+
+    def test_run_entry_clears_vllm_incompatible_allocator(self) -> None:
+        text = (PROJECT / 'scripts/run_example.sh').read_text(
+            encoding='utf-8')
+        self.assertIn('unset PYTORCH_NPU_ALLOC_CONF', text)
+
+    def test_setup_injects_device_lists_per_profile(self) -> None:
+        text = (PROJECT / 'scripts/setup_example.sh').read_text(
+            encoding='utf-8')
+        self.assertIn('agentic_train_npu', text)
+        self.assertIn('rlvr_npu', text)
+        self.assertIn('ASCEND_RT_VISIBLE_DEVICES="0,1"', text)
+        self.assertIn('ASCEND_RT_VISIBLE_DEVICES="0,1,2,3"', text)
+        self.assertIn(
+            'echo "ASCEND_RT_VISIBLE_DEVICES=', text)
+
+    def test_actionlint_registers_four_card_runner(self) -> None:
+        text = (REPO / '.github' / 'actionlint.yaml').read_text(
+            encoding='utf-8')
+        self.assertIn('linux-aarch64-a2-4', text)
+
+    def test_projects_registry_has_examples_workflow(self) -> None:
+        data = yaml.safe_load(
+            (REPO / 'projects.yaml').read_text(encoding='utf-8'))
+        roll = next(p for p in data['projects'] if p['name'] == 'roll')
+        self.assertEqual(
+            roll['workflows']['examples'],
+            '.github/workflows/roll-examples.yml',
+        )
 
 
 if __name__ == '__main__':
