@@ -6,32 +6,11 @@ version: 1
 # default branch master); paths in this manifest are relative to that repo root.
 # files-only scan model (docs/examples-guard-engine.md): the reconciliation unit
 # is the entry file (.sh/.py).
-# scan.exclude declares non-example companions (imported libs, model defs, tests),
-# pruned recursively, and kept out of supported/unsupported.
 # "unsupported" means "this guard does not run it now", NOT "Ascend cannot run it";
 # comments separate CUDA/multi-node/big-data hard-blocks from promotable items.
 scan:
   root: ''
   include_extensions: ['.sh', '.py']
-  exclude:
-    - applications/DeepSpeed-Chat/dschat
-    - applications/DeepSpeed-VisualChat/utils
-    - training/bing_bert/pytorch_pretrained_bert
-    - training/bing_bert/nvidia
-    - training/bing_bert/turing
-    - training/BingBertGlue/nvidia
-    - training/BingBertGlue/pytorch_pretrained_bert
-    - training/BingBertGlue/turing
-    - training/BingBertSquad/pytorch_pretrained_bert
-    - training/BingBertSquad/turing
-    - compression/bert/huggingface_transformer
-    - compression/reasoning_aware_compression/rac
-    - compression/reasoning_aware_compression/tests
-    - training/data_efficiency/vit_finetuning/models
-    - training/data_efficiency/vit_finetuning/utils
-    - training/HelloDeepSpeed/tests
-    - training/pipeline_parallelism/alexnet.py
-    - training/offload_states/output_table.py
 supported:
   # HelloDeepSpeed: Roberta MLM from scratch (ZeRO-1 + CPU offload + BF16). wikitext patched to Salesforce/wikitext (ModelScope) in setup; script passes through $@.
   - path: training/HelloDeepSpeed/run_ds.sh
@@ -577,3 +556,29 @@ unsupported:
   - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/single_node/sweep/run_step3_sweep.sh
   # repo maintenance tool (license check), not a training example.
   - scripts/check-license.py
+
+  # ===== 原 scan.exclude 项迁移（2026-09-20）：deepspeed 的 exclude 是「第三方
+  # 代码子树 + 模型定义 + 测试 + utility 模块」剪枝。扫描引擎
+  # （load_scan / discover）从未实现 exclude，下列目录项下的 .py / .sh 子文件
+  # 此前每天 audit 都作为 + new_paths 报红；迁移后这里作为单一事实源。
+  # 具体子文件清单以上游 deepspeedai/DeepSpeed HEAD 为准，本段覆盖 exclude 原意。
+  #
+  # ---- 第三方代码 + utility + 模型定义子树 ----
+  - applications/DeepSpeed-Chat/dschat                 # DeepSpeed-Chat 工具库
+  - applications/DeepSpeed-VisualChat/utils            # VisualChat 工具
+  - training/bing_bert/pytorch_pretrained_bert         # 第三方 BERT 实现
+  - training/bing_bert/nvidia                          # NVIDIA 适配层
+  - training/bing_bert/turing                          # Turing 平台代码
+  - training/BingBertGlue/nvidia                       # 同上（GLUE 任务）
+  - training/BingBertGlue/pytorch_pretrained_bert      # 同上
+  - training/BingBertGlue/turing                       # 同上
+  - training/BingBertSquad/pytorch_pretrained_bert     # 同上（SQuAD 任务）
+  - training/BingBertSquad/turing                      # 同上
+  - compression/bert/huggingface_transformer           # compression 工具
+  - compression/reasoning_aware_compression/rac         # RAC 实现
+  - compression/reasoning_aware_compression/tests       # RAC 测试
+  - training/data_efficiency/vit_finetuning/models      # ViT 模型定义
+  - training/data_efficiency/vit_finetuning/utils       # ViT 工具
+  - training/HelloDeepSpeed/tests                       # HelloDeepSpeed 测试
+  - training/pipeline_parallelism/alexnet.py            # AlexNet 模型定义（单文件）
+  - training/offload_states/output_table.py             # 工具：输出表（单文件）

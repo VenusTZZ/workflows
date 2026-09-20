@@ -14,7 +14,7 @@
 
 ## 清单
 
-[examples_manifest.yaml](examples_manifest.yaml) 的 `scan.root` 为 DeepSpeedExamples 仓根，`include_extensions` 为 `.sh` / `.py`，`scan.exclude` 把被 import 的库、模型定义、测试等配套物剪枝掉。`files-only` 扫描模型的对账单位是入口文件。
+[examples_manifest.yaml](examples_manifest.yaml) 的 `scan.root` 为 DeepSpeedExamples 仓根，`include_extensions` 为 `.sh` / `.py`。`files-only` 扫描模型的对账单位是入口文件；被 import 的库、模型定义、测试等"不是 example 的配套物"全部登记在 `unsupported` 段（带说明性注释），扫描引擎不再有独立的 exclude 字段。
 
 当前 supported 共 10 条单卡（`linux-aarch64-a2-1`）小规模 example，统一用 CANN 9.1.0 镜像，模型走 ModelScope、数据集用仓内本地 fixture，全部用 `overlay_args` 压到 CI 规模：
 

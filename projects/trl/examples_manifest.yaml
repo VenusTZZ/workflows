@@ -1,24 +1,16 @@
 version: 1
 # files-only 扫描模型（docs/examples-guard-engine.md 2.7）：对账单位是入口文件。
 # .ipynb 一并纳入，因为上游 examples 索引把 notebook 当一等 example（带 Colab 徽章）。
-# exclude 声明「这一类根本不是 example」的配套物（目录路径递归剪枝），不进 supported /
-# unsupported。扫描工具的 exclude 支持随发现 workflow 的 PR 落地；本仓 examples 流水线
-# 当前只校验 supported 条目，本段是声明性配置（与 peft 清单同一写法）。
+# include_extensions 只收 .py / .ipynb，accelerate 配置 yaml / 数据集制作脚本 /
+# harbor harness 包等扩展名天然不进；少数扩展名命中的"非 example"配套物（如
+# sft_qwen3_8b_1m_context 那个 8 卡上下文并行 yaml 但被改名 .ipynb 不在此），
+# 全部进入 unsupported 段统一登记，扫描引擎不再有"声明性 exclude"字段。
 #
 # unsupported 的语义是「本看护体系当前不跑它」，不等于「昇腾原理上跑不了」：
 # 注释里区分了绑死 GPU / NCCL / CUDA 算子的硬不支持，与待上卡实测后再升级的项。
 scan:
   root: examples
   include_extensions: ['.py', '.ipynb']
-  exclude:
-    # accelerate 多卡 / DeepSpeed / FSDP / 上下文并行启动配置，被多个 example 共用，不是 example 本身
-    - examples/accelerate_configs
-    # 生成 trl-lib 数据集并 push_to_hub 的一次性数据制作脚本，不是可跑的训练 example
-    - examples/datasets
-    # grpo_harbor.py 背后的 bash / jupyter / terminal_notes harness 实现与包 __init__
-    - examples/grpo_harbor/harnesses
-    # 该 example 专属的 8 卡上下文并行启动配置
-    - examples/sft_qwen3_8b_1m_context/context_parallel_8gpu.yaml
 supported:
   # DPO LoRA 微调 VLM 降低幻觉（上游用 Qwen2.5-VL-3B + RLAIF-V 图文偏好集）：已在 CI 跑通，模型改走 ModelScope、图文数据集换 8 行本地纯文本 fixture（DPOTrainer 无图也能跑），overlay 压到 2 步。
   - path: examples/dpo_reduce_hallucinations/dpo_reduce_hallucinations.py
@@ -279,3 +271,15 @@ unsupported:
   - examples/sft_visual_chat/sft_visual_chat.py
   # SSD 配套评测：用 vLLM 生成并以 LiveCodeBench 官方 codegen_metrics 算 pass@k；不支持：硬依赖 vllm 与 LiveCodeBench git 包，且评测要在沙箱内执行生成代码，属评测脚本而非可训练 example。
   - examples/ssd_codegen/ssd_eval.py
+
+  # ===== 原 scan.exclude 项迁移（2026-09-20）：accelerate_configs / datasets /
+  # grpo_harbor/harnesses 三条是目录，下面的行是与扫描 include_extensions
+  # 命中或扩展名命中的实际路径；具体 .py / .ipynb 子文件清单以
+  # 上游 huggingface/trl HEAD 为准，本段只覆盖 exclude 原意。
+  # accelerate_configs 是 accelerate launcher 配置目录，里面几乎全为 .yaml，
+  # 不进 .py / .ipynb 扫描；少数被改名的 .ipynb 子文件在 unsupported 段以
+  # 上游实际命名为准。
+  - examples/accelerate_configs                   # accelerate 多卡 / DeepSpeed / FSDP / 上下文并行启动配置，被多个 example 共用
+  - examples/datasets                             # 生成 trl-lib 数据集并 push_to_hub 的一次性数据制作脚本，不是可跑的训练 example
+  - examples/grpo_harbor/harnesses                # grpo_harbor.py 背后的 bash / jupyter / terminal_notes harness 实现与包 __init__
+  - examples/sft_qwen3_8b_1m_context/context_parallel_8gpu.yaml  # 该 example 专属的 8 卡上下文并行启动配置（扩展名不进扫描）

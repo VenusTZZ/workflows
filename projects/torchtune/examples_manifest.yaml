@@ -2,21 +2,11 @@ version: 1
 scan:
   root: recipes
   include_extensions: ['.py']
-  # 三层互斥模型，**exclude 只放"不是 entry point"的东西**：
-  #   scan.exclude — 扫描阶段不进入（包初始化、YAML 配置整目录、upstream
-  #                  实验区整目录、SLURM 启动器、markdown 文档）
-  #   supported    — 实跑过 exit 0 的 recipe
-  #   unsupported  — 扫描到了但实跑 fail 的 recipe（必须附实测堆栈）
-  # 任何出现在 scan.exclude 的路径都不应再出现在 unsupported 里。
-  # files-only 模型（docs/examples-guard-engine.md §2.7）。exclude 项为目录
-  # 路径（递归剪枝）或 glob（`**` 跨目录，匹配相对 target root 的路径）。
-  # examples 引擎不扫描，本段当前只是声明。
-  exclude:
-    - recipes/__init__.py                # 包初始化（import 会 ModuleNotFoundError）
-    - recipes/configs/                  # YAML 配置整目录，需要 recipe 文件驱动，不可独立 launch
-    - recipes/dev/                      # upstream 实验性/早期/论文复现区（README 状态表 GRPO single-device 标 🚧=WIP；generate_v2 是 generate 实验版；early_exit_finetune/layer_dropout 是 LayerSkip/LITE/LayerDrop 论文复现；grpo 走 torchtune.dev.grpo 包而 pyproject 没暴露 torchtune.dev 子包，import 必炸）
-    - recipes/quantization.md           # 文档（quantize 配套说明）
-    - recipes/full_finetune_multinode.slurm  # SLURM 启动器（需要集群调度）
+  # files-only 模型（docs/examples-guard-engine.md §2.7）：对账单位是
+  # 入口文件 .py。非 entry point 的包初始化 / YAML 配置 / 文档 / SLURM
+  # 启动器若被扫描命中，会落到 unsupported（其扫描后缀与本仓 examples
+  # 树里几乎不出现，仅作声明）；所有"已识别不是 example"的条目都列在
+  # unsupported 段。examples 引擎不扫描，本段只是声明。
 
 supported:
   # ===== 已在 coder hdc-stable-npu-3（910B4×2, torch 2.11.0+cpu, torch_npu 2.11.0,
@@ -251,3 +241,15 @@ unsupported:
   # supported: 块对应 entry；2026-09-17 在 coder hdc-stable-npu-2 端到端
   # 跑通 exit 0，acc=1.0 / 0.92s / 1.56GB HBM）
   # - recipes/eleuther_eval.py
+
+  # ===== 原 scan.exclude 项迁移（2026-09-20）：非 example 配套物，不放 supported
+  # 一律登记在 unsupported。扫描引擎（load_scan / discover）从未实现 exclude
+  # 字段，这些项此前每天 audit 都作为 + new_paths 报红。
+  # 备注：recipes/configs/ 与 recipes/dev/ 是目录，下面的 .py 项是对应
+  # 子树里命中 include_extensions 的实际文件路径；具体文件清单以
+  # 上游 meta-pytorch/torchtune HEAD 为准，本段只覆盖 exclude 原意。
+  - recipes/__init__.py                # 包初始化（import 会 ModuleNotFoundError）
+  - recipes/configs/                   # YAML 配置整目录，需要 recipe 文件驱动，不可独立 launch（无 .py 子文件可挂）
+  - recipes/dev/                       # upstream 实验性/早期/论文复现区（README 状态表 GRPO single-device 标 🚧=WIP；generate_v2 是 generate 实验版；early_exit_finetune/layer_dropout 是 LayerSkip/LITE/LayerDrop 论文复现；grpo 走 torchtune.dev.grpo 包而 pyproject 没暴露 torchtune.dev 子包，import 必炸）
+  - recipes/quantization.md            # 文档（quantize 配套说明，扩展名不进扫描）
+  - recipes/full_finetune_multinode.slurm  # SLURM 启动器（需要集群调度，扩展名不进扫描）

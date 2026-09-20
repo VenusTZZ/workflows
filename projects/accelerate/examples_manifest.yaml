@@ -2,19 +2,6 @@ version: 1
 scan:
   root: examples
   include_extensions: ['.sh', '.py']
-  # Files-only 模型（同 peft exclude 语义）：目录递归剪枝，glob 跨目录。
-  # 排除"不是 example 的配套物"：配置目录、helper 模块、README、上游 requirements。
-  exclude:
-    - examples/config_yaml_templates                 # accelerate launcher 配置 yaml
-    - examples/deepspeed_config_templates           # deepspeed json 配置
-    - examples/slurm                                # slurm 提交脚本 + fsdp 配置
-    - examples/torch_native_parallelism/configs     # tp_hsdp / cp yaml
-    - examples/torch_native_parallelism/utils.py    # 多文件 example 的 helper
-    - examples/alst_ulysses_sequence_parallelism/sp-alst.accelerate-config.yml  # accelerate launcher 配置
-    - examples/alst_ulysses_sequence_parallelism/sp-alst.ds-config.json           # deepspeed json 配置
-    - examples/inference/pippy/requirements.txt     # pippy 专属依赖
-    - examples/requirements.txt                     # 顶层 install 列表（不直接执行）
-    - '**/README.md'
 
 supported:
   # overlay_args 约定：
@@ -494,3 +481,21 @@ unsupported:
   # 成本。要绿必须改代码（文件名截断）或换短 prompt 数据集（也需改代码）。
 # （coder 实跑 rc=1：OSError Errno 36 @ 307/1632 images）
   - examples/inference/distributed/distributed_image_generation.py
+
+  # 非 example 的配套物（不是入口）：扫描引擎按 include_extensions 仍
+  # 命中，落 unsupported 是审计去重。注释说明为什么不在 supported：
+  # run_me.py 是 config_yaml_templates 目录的"如何用 yaml 模板"demo 脚本
+  # （依赖该目录下的 7 个 yaml launcher 配置），不是独立可跑 example。
+  - examples/config_yaml_templates/run_me.py
+
+  # SLURM 提交脚本：scheduler 启动器（sbatch / srun），裸跑无 SLURM 环境
+  # 立刻 sbatch: command not found；multi-cpu/gpu/node/fsdp 4 个变体都是
+  # shell wrapper 不是训练入口，由各自 example 引用。
+  - examples/slurm/submit_multicpu.sh
+  - examples/slurm/submit_multigpu.sh
+  - examples/slurm/submit_multinode.sh
+  - examples/slurm/submit_multinode_fsdp.sh
+
+  # nd_parallel / fsdp2_fp8 多文件 example 的 helper：被同目录入口脚本
+  # `from .utils import ...` 相对导入，无 __main__；独立运行直接 ImportError。
+  - examples/torch_native_parallelism/utils.py

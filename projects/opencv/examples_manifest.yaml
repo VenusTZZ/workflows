@@ -63,47 +63,6 @@ version: 1
 scan:
   root: samples
   include_extensions: ['.py', '.sh']
-  exclude:
-    # ===== helpers / 构建配置 / 文档 / 资源（samples/python + samples/dnn）=====
-    - samples/python/_coverage.py             # 上游测试覆盖率 helper
-    - samples/python/_doc.py                  # doc 生成 helper
-    - samples/python/common.py                # samples/python 共享 helper（splitfn/Sketcher）
-    - samples/python/CMakeLists.txt           # 构建配置
-    - samples/python/_run_winpack_demo.cmd    # Windows 启动脚本
-    - samples/dnn/common.py                   # dnn 样本共享 helper
-    - samples/dnn/common.hpp                  # 同上（C++ 头）
-    - samples/dnn/custom_layers.hpp           # custom_layer 的实现配套
-    - samples/dnn/custom_layer_onnx.cpp       # 同上
-    - samples/dnn/download_models.py          # 模型下载器：seed 接管后无需单独看护
-    - samples/dnn/shrink_tf_graph_weights.py  # TF graph 工具
-    - samples/dnn/tf_text_graph_common.py     # TF→OpenCV text graph 转换 helper
-    - samples/dnn/tf_text_graph_efficientdet.py
-    - samples/dnn/tf_text_graph_faster_rcnn.py
-    - samples/dnn/tf_text_graph_mask_rcnn.py
-    - samples/dnn/tf_text_graph_ssd.py
-    - samples/dnn/models.yml                  # 模型清单元数据
-    - samples/dnn/README.md                   # 文档
-    - samples/dnn/CMakeLists.txt              # 构建配置
-    - samples/dnn/js_face_recognition.html    # js demo
-    - samples/dnn/face_detector/              # 资源
-    - samples/dnn/results/                    # 资源
-    # ===== 管线 / 调试配套 =====
-    - samples/dnn/dnn_model_runner/           # 19 个 .py：转换 + 精度评估管线
-    - samples/gdb/                            # gdb pretty-printer
-    - samples/install/                        # 5 个 .sh 安装脚本
-    # ===== 教程树（非 example 树，整体剪枝）=====
-    # snippets(19) + tutorial_code(67) = 86 个 .py。源码实测其中 9 个
-    # headless：7 个纯 CPU 教程可跑（snippets/stitching.py、
-    # compareHist_Demo、file_input_output、hough_line x2、hdr_imaging、
-    # documentation），2 个是 PyTorch→ONNX 转换工具（voc_segm_test /
-    # py_to_py_fcn_resnet50，需 torch + VOC 数据）。即便可跑也是教程
-    # 价值（纯 CPU 算子演示），不入 unsupported 复审段。
-    - samples/python/snippets/
-    - samples/python/tutorial_code/
-    # ===== 资源 / 元数据 / 全局 =====
-    - samples/data/                           # 图/视频/模型资源
-    - '**/__pycache__'
-    - '**/CMakeLists.txt'
 
 supported:
   # ===== NPU DNN CANN smoke（Quick-start 子集）=====
@@ -126,7 +85,9 @@ supported:
   #                     Quick-start 文档预期完全一致；CPU 参考 ≈ 0.91）
   #
   # 期望：GE 编译 + NPU forward 出 top-1=372，exit 0。GE 编译首腿约
-  # 0.5–1 min，整腿在 NPU box 端到端 ≈ 2–4 min（CI 25 min 充足）。
+  # 0.5–1 min，整腿在 NPU box 端到端 ≈ 2–4 min。冷启动时 setup 还要
+  # 源码构建 opencv-cann（实测 ~23 min @-j2），合计 ~28 min，超时
+  # 留足余量设 40。
   - path: ../workflows/projects/opencv/scripts/test_npu_dnn.py
     profile: opencv
     runner: linux-aarch64-a2-1
@@ -136,7 +97,7 @@ supported:
       - --input ${TARGET_ROOT}/samples/data/baboon.jpg
       - --imagenet-topk 5
       - --expected-top1 372
-    timeout_minutes: 25
+    timeout_minutes: 40
 
 # ===== unsupported =====
 # 源码重析后的完整清单（53 项 .py + 平台树）。分段：
@@ -245,3 +206,51 @@ unsupported:
   - samples/opencl/**               # OpenCL kernel
   - samples/sycl/**                 # SYCL
   - samples/va_intel/**             # VA-API
+
+  # ===== 原 scan.exclude 项迁移（2026-09-20）：opencv 的 exclude 形态是
+  # helpers + 构建配置 + 文档 + 资源 + 教程树 + 管线 + 调试配套，分目录/单文件
+  # 两种形式混合。扫描引擎从未实现 exclude，下列子项此前每天 audit 都作为
+  # + new_paths 报红（命中 include_extensions 的子文件均会出现在 discovered
+  # 集合里）；迁移后这里作为单一事实源。具体子文件清单以
+  # 上游 opencv/opencv@5.0.0 HEAD 为准，本段覆盖 exclude 原意。
+  #
+  # ---- helpers / 构建配置 / 文档 / 资源（samples/python + samples/dnn）----
+  - samples/python/_coverage.py             # 上游测试覆盖率 helper
+  - samples/python/_doc.py                  # doc 生成 helper
+  - samples/python/common.py                # samples/python 共享 helper（splitfn/Sketcher）
+  - samples/python/CMakeLists.txt           # 构建配置（扩展名不进扫描）
+  - samples/python/_run_winpack_demo.cmd    # Windows 启动脚本（扩展名不进扫描）
+  - samples/dnn/common.py                   # dnn 样本共享 helper
+  - samples/dnn/common.hpp                  # 同上（C++ 头，扩展名不进扫描）
+  - samples/dnn/custom_layers.hpp           # custom_layer 的实现配套（扩展名不进扫描）
+  - samples/dnn/custom_layer_onnx.cpp       # 同上（扩展名不进扫描）
+  - samples/dnn/download_models.py          # 模型下载器：seed 接管后无需单独看护
+  - samples/dnn/shrink_tf_graph_weights.py  # TF graph 工具
+  - samples/dnn/tf_text_graph_common.py     # TF→OpenCV text graph 转换 helper
+  - samples/dnn/tf_text_graph_efficientdet.py
+  - samples/dnn/tf_text_graph_faster_rcnn.py
+  - samples/dnn/tf_text_graph_mask_rcnn.py
+  - samples/dnn/tf_text_graph_ssd.py
+  - samples/dnn/models.yml                  # 模型清单元数据（扩展名不进扫描）
+  - samples/dnn/README.md                   # 文档（扩展名不进扫描）
+  - samples/dnn/CMakeLists.txt              # 构建配置（扩展名不进扫描）
+  - samples/dnn/js_face_recognition.html    # js demo（扩展名不进扫描）
+  - samples/dnn/face_detector/              # 资源目录
+  - samples/dnn/results/                    # 资源目录
+  # ---- 管线 / 调试配套 ----
+  - samples/dnn/dnn_model_runner/           # 19 个 .py：转换 + 精度评估管线
+  - samples/gdb/                            # gdb pretty-printer
+  - samples/install/                        # 5 个 .sh 安装脚本
+  # ---- 教程树（非 example 树，整体剪枝）----
+  # snippets(19) + tutorial_code(67) = 86 个 .py。源码实测其中 9 个
+  # headless：7 个纯 CPU 教程可跑（snippets/stitching.py、
+  # compareHist_Demo、file_input_output、hough_line x2、hdr_imaging、
+  # documentation），2 个是 PyTorch→ONNX 转换工具（voc_segm_test /
+  # py_to_py_fcn_resnet50，需 torch + VOC 数据）。即便可跑也是教程
+  # 价值（纯 CPU 算子演示），不入 unsupported 复审段。
+  - samples/python/snippets/
+  - samples/python/tutorial_code/
+  # ---- 资源 / 元数据 / 全局 ----
+  - samples/data/                           # 图/视频/模型资源
+  - '**/__pycache__'                        # 字节码缓存
+  - '**/CMakeLists.txt'                     # 构建配置（glob）

@@ -5,49 +5,12 @@ scan:
   # torchtitan 的 "example" 不是目录 + 脚本的形态，而是单个 train.py
   # 入口 + `--module X --config Y` CLI 参数选模型配置。所以
   # scan.root 设为仓库根 `torchtitan`，include_extensions 留宽；
-  # exclude 把所有非 example 形态的子树都剪掉（configs / docs /
-  # tests assets / proto / requirements），剩下的 .py 文件是
-  # "可能被作为入口点的脚本"。本清单 supported/unsupported 都按
-  # 「(path, overlay_args)」组合语义记录，不依赖 scan 的扫描结果。
-  exclude:
-    - torchtitan/config                              # 训练 job YAML 配置目录
-    - torchtitan/tools                               # proto / ckpt convert 工具
-    - torchtitan/docs                                # 文档源
-    - torchtitan/protocols                           # 结构化日志协议定义
-    - torchtitan/tests                               # 自测 + tests/assets tokenizer
-    # ===== rl/ 子树：utility 模块（不涉及）=====
-    # 不放 unsupported 因为这些是 import 库不是入口点。真正的 rl
-    # 入口（rl/train.py + rl/generate.py + rl/scripts/loss_compare.py）
-    # 已在 unsupported 段。下面这些是它们 import 的工具 / 数据结构 /
-    # actor 类定义，不是 example 形态：
-    - torchtitan/experiments/rl/rollout              # Rollout / RolloutGroup / Turn dataclass（被 rl/train.py import）
-    - torchtitan/experiments/rl/renderer.py          # RENDERER_BY_MODEL 字典 + Renderer 注册（被 rl/components 间接 import）
-    - torchtitan/experiments/rl/rollout_recorder.py  # RolloutRecorder JSONL 序列化工具
-    - torchtitan/experiments/rl/components           # Batcher / TrainingSampleBuilder / WeightSync / WorkBuffer
-    - torchtitan/experiments/rl/actors               # Generator / PolicyTrainer 类（actor 框架，monarch 依赖）
-    - torchtitan/experiments/rl/environment          # Message / Token dataclass + gym wrapper
-    - torchtitan/experiments/rl/losses               # DAPOLoss / GRPOLoss 类
-    - torchtitan/experiments/rl/models               # rl-specific attention / cast_linear / vllm_worker
-    - torchtitan/experiments/rl/observability        # rl-specific metrics（被 rl/controller_metrics import）
-    - torchtitan/experiments/rl/routing              # InterGeneratorRouter / IntraGeneratorRouter
-    - torchtitan/experiments/rl/rubrics              # RewardFn abstract + rubric 评分
-    # rl/scripts 子包：__init__.py 由 **/__init__.py glob 兜底，loss_compare.py 是真实入口（已转 unsupported 段）。
-    - torchtitan/experiments/rl/tests                # rl 包内单测（**/tests/** 兜底）
-    - torchtitan/experiments/rl/types.py             # rl 共享 dataclass types
-    - torchtitan/experiments/rl/controller.py        # async controller 协调逻辑（_rollout_loop 等）
-    - torchtitan/experiments/rl/controller_metrics.py  # MetricsTimer 工具
-    - torchtitan/experiments/rl/batch_invariance.py  # BatchInvariantFlexConverter + runtime patches
-    # GraphTrainer 内部的非 example 入口（被 precompile_main.py / run_train_precompile.sh import，
-    # 但自身不能独立 dispatch）：
-    - torchtitan/experiments/graph_trainer/precompile.py
-    - '**/__init__.py'
-    - '**/README.md'
-    - '**/test_*'        # 文件名以 test_ 开头（fnmatch 语义，只匹配 basename）
-    - '**/tests/**'      # 兜底：tests/ 子目录里的非 test_*.py 文件（run_tests.sh、
-                        # integration_tests.py、_trainer_test_utils.py 等）
-    - '**/*config*.yaml'
-    - '**/*config*.json'
-    - '**/requirements*.txt'
+  # 非 example 形态的子树（configs / docs / tests / proto / requirements）
+  # 在本仓 examples 流水线里要么扩展名天然不命中（.yaml / .md），
+  # 要么已落入 unsupported 段（test_*.py / tests/** / rl 子树 import 库
+  # / graph_trainer precompile 等），本段不再有"声明性 exclude"字段。
+  # 本清单 supported/unsupported 都按 「(path, overlay_args)」组合语义
+  # 记录，不依赖 scan 的扫描结果。
 
 supported:
   # 1) 单卡 + default llama3_debugmodel 配置（ChunkedLossWrapper 路径）。
@@ -956,3 +919,51 @@ unsupported:
   # 切换到本地 tokenizer 资产路径。
   - torchtitan/models/flux/inference/infer.py
   - torchtitan/models/flux/run_infer.sh
+
+  # ===== 原 scan.exclude 项迁移（2026-09-20）：torchtitan 的 exclude 形态
+  # 是「非 example 形态子树 + rl/ 子树 utility 模块 + GraphTrainer 内部入口 +
+  # glob 兜底」。扫描引擎（load_scan / discover）从未实现 exclude，
+  # 下列目录项下的 .py 子文件此前每天 audit 都作为 + new_paths 报红；
+  # 迁移后这里作为单一事实源。具体子文件清单以
+  # 上游 pytorch/torchtitan HEAD 为准，本段覆盖 exclude 原意。
+  #
+  # ---- 非 example 形态子树（configs / docs / tests / proto / tools）----
+  - torchtitan/config                              # 训练 job YAML 配置目录
+  - torchtitan/tools                               # proto / ckpt convert 工具
+  - torchtitan/docs                                # 文档源
+  - torchtitan/protocols                           # 结构化日志协议定义
+  - torchtitan/tests                               # 自测 + tests/assets tokenizer
+  # ---- rl/ 子树：utility 模块（不涉及）----
+  # 不放 unsupported 因为这些是 import 库不是入口点。真正的 rl
+  # 入口（rl/train.py + rl/generate.py + rl/scripts/loss_compare.py）
+  # 已在 unsupported 段。下面这些是它们 import 的工具 / 数据结构 /
+  # actor 类定义，不是 example 形态：
+  - torchtitan/experiments/rl/rollout              # Rollout / RolloutGroup / Turn dataclass（被 rl/train.py import）
+  - torchtitan/experiments/rl/renderer.py          # RENDERER_BY_MODEL 字典 + Renderer 注册（被 rl/components 间接 import）
+  - torchtitan/experiments/rl/rollout_recorder.py  # RolloutRecorder JSONL 序列化工具
+  - torchtitan/experiments/rl/components           # Batcher / TrainingSampleBuilder / WeightSync / WorkBuffer
+  - torchtitan/experiments/rl/actors               # Generator / PolicyTrainer 类（actor 框架，monarch 依赖）
+  - torchtitan/experiments/rl/environment          # Message / Token dataclass + gym wrapper
+  - torchtitan/experiments/rl/losses               # DAPOLoss / GRPOLoss 类
+  - torchtitan/experiments/rl/models               # rl-specific attention / cast_linear / vllm_worker
+  - torchtitan/experiments/rl/observability        # rl-specific metrics（被 rl/controller_metrics import）
+  - torchtitan/experiments/rl/routing              # InterGeneratorRouter / IntraGeneratorRouter
+  - torchtitan/experiments/rl/rubrics              # RewardFn abstract + rubric 评分
+  # rl/scripts 子包：__init__.py 由 **/__init__.py glob 兜底，loss_compare.py 是真实入口（已转 unsupported 段）。
+  - torchtitan/experiments/rl/tests                # rl 包内单测（**/tests/** 兜底）
+  - torchtitan/experiments/rl/types.py             # rl 共享 dataclass types
+  - torchtitan/experiments/rl/controller.py        # async controller 协调逻辑（_rollout_loop 等）
+  - torchtitan/experiments/rl/controller_metrics.py  # MetricsTimer 工具
+  - torchtitan/experiments/rl/batch_invariance.py  # BatchInvariantFlexConverter + runtime patches
+  # ---- GraphTrainer 内部非 example 入口 ----
+  # 被 precompile_main.py / run_train_precompile.sh import，
+  # 但自身不能独立 dispatch：
+  - torchtitan/experiments/graph_trainer/precompile.py
+  # ---- glob 兜底 ----
+  - '**/__init__.py'                               # 包初始化（任何目录的 __init__.py）
+  - '**/README.md'                                 # 文档（扩展名不进扫描）
+  - '**/test_*'                                    # 文件名以 test_ 开头（fnmatch 语义，只匹配 basename）
+  - '**/tests/**'                                  # 兜底：tests/ 子目录里的非 test_*.py 文件（run_tests.sh、integration_tests.py、_trainer_test_utils.py 等）
+  - '**/*config*.yaml'                             # 训练 job YAML
+  - '**/*config*.json'                             # 训练 job JSON
+  - '**/requirements*.txt'                         # 依赖清单
