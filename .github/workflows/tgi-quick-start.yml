@@ -52,9 +52,10 @@ jobs:
       image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
       # Explicit device mounts (mooncake-style; the cluster device-plugin
       # may also auto-pass /dev/davinci*, but HCCL needs the manager /
-      # hisi_hdc / devmm_svm companions) + ModelScope cache volume
-      # (Qwen3-0.6B planted by cache-seed) so the doc's
-      # snapshot_download hits local disk instead of the network.
+      # hisi_hdc / devmm_svm companions) + ModelScope cache volume: the
+      # runner machines' shared host cache at /data/ci-cache/modelscope/tgi
+      # (populated by earlier test runs) so the doc's snapshot_download
+      # hits local disk and only cold machines touch the network.
       container_options: >-
         --shm-size=64g
         --device=/dev/davinci0

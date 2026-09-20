@@ -1,7 +1,7 @@
 # Quick Start (Ascend NPU)
 
-在单卡昇腾 NPU 上从源码构建并部署 Text Generation Inference（TGI）推理服务，
-对 Qwen3-0.6B 完成一次端到端文本生成。
+在昇腾 NPU 上从源码构建并部署 Text Generation Inference（TGI）推理服务，
+对 Qwen3-0.6B 完成端到端文本生成：单卡基线 + 双卡 HCCL 张量并行（`--num-shard 2`）。
 
 本文档覆盖上游官方 release 中**尚未包含**的 Ascend NPU 支持：构建、安装、
 启动与推理验证使用
@@ -106,15 +106,7 @@ count: 2
 
 > 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
 
-## 2. 下载基础模型
-
-默认使用 **ModelScope** 下载 Qwen3-0.6B（约 1.2 GB）：
-
-```shell #test-setup store="model_path"
-python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen3-0.6B'))" | tail -n 1
-```
-
-## 3. 安装依赖与工具链
+## 2. 安装依赖与工具链
 
 ### 系统依赖
 
@@ -161,6 +153,15 @@ export PATH="$HOME/.cargo/bin:$PATH"
 > 使用 rsproxy.cn（字节跳动 Rust 社区镜像）拉取工具链与 crates.io 依赖，规避
 > 国内网络访问 static.rust-lang.org / crates.io 的不稳定。TGI 仓库根目录的
 > `rust-toolchain.toml` 固定 1.85.1，因此这里直接安装该版本。
+
+## 3. 下载基础模型
+
+默认使用 **ModelScope** 下载 Qwen3-0.6B（约 1.2 GB，落到默认缓存
+`~/.cache/modelscope`）：
+
+```shell #test-setup store="model_path"
+python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen3-0.6B'))" | tail -n 1
+```
 
 ## 4. 构建并安装 TGI
 

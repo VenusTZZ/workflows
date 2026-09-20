@@ -14,9 +14,9 @@ Qwen3-0.6B 做端到端 `/generate` 验证——**单卡基线 + 双卡 HCCL 张
   `docs/Quick-start-Ascend.md` 的 hash。**因此每次把官方上游的新改动合入
   `feat/ascend-npu` 并验证通过后，必须在 fork 上打一个新 release**，
   否则流水线没有可测的新 ref。
-- **看护范围**：文档第 1（环境检查）、3（依赖与工具链）、4（构建安装）、
-  5（启动服务并验证推理：单卡基线 + 双卡张量并行）节，以及第 2 节的模型
-  缓存命中。**不看护**：`npu-smi info` 的机器相关数值输出（版本号、功耗、
+- **看护范围**：文档第 1（环境检查）、2（依赖与工具链）、4（构建安装）、
+  5（启动服务并验证推理：单卡基线 + 双卡张量并行）节，以及第 3 节的模型
+  下载与缓存命中。**不看护**：`npu-smi info` 的机器相关数值输出（版本号、功耗、
   温度等）。
 
 ## 绿灯含义
@@ -35,7 +35,6 @@ Qwen3-0.6B 做端到端 `/generate` 验证——**单卡基线 + 双卡 HCCL 张
 | `docs/Quick-start-Ascend.md` | 被看护的快速入门文档（`#test`/`#test-result` 标签契约见 `docs/markdown_doc_test_label.md`） |
 | `tests/test_quick_start_ascend.py` | 文档端到端测试（`NPU_READY=true` 时执行文档标签块） |
 | `tests/test_project_contract.py` | 静态契约测试（注册表条目、标签配对、关键内容），无卡可跑 |
-| `../cache-seed/tgi/ms_seeds.yaml` | Qwen3-0.6B 的 ModelScope 缓存 plant 清单 |
 
 ## 版本基线
 
@@ -45,7 +44,7 @@ Qwen3-0.6B 做端到端 `/generate` 验证——**单卡基线 + 双卡 HCCL 张
 | CANN / Python | 9.1.0 / 3.12 | 镜像自带 |
 | torch / torch_npu | 2.9.0 / 2.9.0.post2 | 华为 ascend 源 |
 | transformers / kernels | 4.57.6 / 0.5.0 | `kernels` 必须 0.5.0（构建后端 lockfile） |
-| 模型 | Qwen/Qwen3-0.6B（约 1.2 GB） | cache-seed plant，CI 零下载 |
+| 模型 | Qwen/Qwen3-0.6B（约 1.2 GB） | 走 runner 共享 ModelScope 缓存卷，冷机自动从 ModelScope 下载 |
 
 runner 为 `linux-aarch64-a2-2`（两张 910B4）：单卡基线与双卡 HCCL 张量
 并行同机验证。双卡的硬前提是**被测 tag 包含 launcher 的 LOCAL_RANK 注入**
@@ -59,5 +58,6 @@ quick-start 看护范围。
 - 薄触发器 `.github/workflows/tgi-quick-start.yml` → 共享引擎
   `quick-start-template.yml`；cron 在 bring-up 调绿前保持注释，手动
   `workflow_dispatch` 不写 monitor 状态。
-- 模型/数据零下载：`ms_seeds.yaml` 由 `cache-seed` workflow dispatch
-  投递后，经 `container_options` 的 modelscope 缓存卷命中本地。
+- 模型下载走 `container_options` 挂载的 modelscope 共享缓存卷
+  （`/data/ci-cache/modelscope/tgi`，runner 机器上已有该模型缓存；
+  冷机由 `snapshot_download` 自动从 ModelScope 拉取）。
