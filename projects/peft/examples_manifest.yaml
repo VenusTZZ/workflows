@@ -111,11 +111,11 @@ supported:
     timeout_minutes: 30
 
   # SFT + QLoRA-FSDP（Llama-2-70b 换 0.5B，bnb 关掉退化成 LoRA+FSDP1）：
-  # fsdp_config_qlora.yaml 本就 num_processes: 2，a2-8 原样只用 2 卡
-  # （其余 6 卡空闲，可接受）；npu-5 1m18s exit 0
+  # fsdp_config_qlora.yaml 本就 num_processes: 2，只需 a2-2（不必占 a2-8）；
+  # npu-5 2×910B4 2 rank 实跑 1m18s exit 0
   - path: examples/sft/run_peft_qlora_fsdp.sh
     profile: peft
-    runner: linux-aarch64-a2-8
+    runner: linux-aarch64-a2-2
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     overlay_args:
       - --model_name_or_path ${SFT_MODEL_PATH}
@@ -166,11 +166,11 @@ supported:
 
   # SFT + QLoRA-DeepSpeed-Z3（Llama-2-70b 换 0.5B，bnb 关掉退化 ZeRO-3+
   # LoRA）：deepspeed_config_z3_qlora.yaml 本就 num_processes: 2 且无
-  # gradient_accumulation_steps 键（transformers 不做硬校验），a2-8 原样
-  # 只用 2 卡；npu-5 1m38s exit 0
+  # gradient_accumulation_steps 键（transformers 不做硬校验），只需 a2-2
+  # （不必占 a2-8）；npu-5 2 rank 实跑 1m38s exit 0
   - path: examples/sft/run_peft_qlora_deepspeed_stage3.sh
     profile: peft_ds
-    runner: linux-aarch64-a2-8
+    runner: linux-aarch64-a2-2
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     overlay_args:
       - --model_name_or_path ${SFT_MODEL_PATH}
