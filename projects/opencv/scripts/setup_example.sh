@@ -10,7 +10,7 @@
 #      still needs the toolkit).
 #   2. Run a source build of opencv + opencv_contrib with WITH_CANN=ON
 #      if /usr/local/opencv-cann/bin/opencv_version is missing. The
-#      build is heavy (~50-70 min at -j2) and is fully idempotent; a
+#      build is heavy (~23 min at -j2) and is fully idempotent; a
 #      pre-built install is left in place across example runs because
 #      the engine's run-example job reuses the same self-hosted
 #      runner (linux-aarch64-a2-1) and the install path
@@ -79,7 +79,7 @@ UPSTREAM_REF="${UPSTREAM_REF:-5.0.0}"  # set by the engine's monitor job
 if [[ -x "$OPENCV_INSTALL/bin/opencv_version" ]]; then
     echo "setup: reusing pre-built opencv-cann ($($OPENCV_INSTALL/bin/opencv_version))"
 else
-    echo "setup: building opencv-cann from source (UPSTREAM_REF=$UPSTREAM_REF, ~50-70 min at -j2)"
+    echo "setup: building opencv-cann from source (UPSTREAM_REF=$UPSTREAM_REF, ~23 min at -j2)"
     bash "$(dirname "$0")/build_opencv_cann.sh" "$UPSTREAM_REF"
 fi
 
