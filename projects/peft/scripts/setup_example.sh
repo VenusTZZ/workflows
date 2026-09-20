@@ -75,12 +75,12 @@ raise SystemExit(
   fi
   echo "installing torch==2.12.0+cpu (direct URL) + torch_npu==2.12.0"
   CP_ABI=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')")
-  pip install --no-deps \
+  python -m pip install --no-deps \
     "https://download.pytorch.org/whl/cpu/torch-2.12.0%2Bcpu-${CP_ABI}-${CP_ABI}-manylinux_2_28_aarch64.whl"
   # torch's pure-Python deps (filelock / typing-extensions / sympy /
   # networkx / jinja2 / fsspec) from aliyun so `import torch` succeeds
   # (the +cpu wheel does not pull them; none declare cuda-toolkit).
-  pip install -i "$ALIYUN_PIP_INDEX" \
+  python -m pip install -i "$ALIYUN_PIP_INDEX" \
     'filelock' 'typing-extensions>=4.10.0' 'setuptools<82' \
     'sympy>=1.13.3' 'networkx>=2.5.1' 'jinja2' 'fsspec>=0.8.5'
   pip_ascend torch_npu==2.12.0
@@ -90,11 +90,13 @@ install_cpu_torchvision() {
   # torchvision matching torch 2.12 is 0.27.0; like torch it ships as a
   # +cpu direct-download wheel only (PyPI linux wheels link libcudart.so
   # and are cuda-toolkit-gated). Only the adamss image example needs it.
-  local cp_abi ver="0.27.0"
+  # pillow is torchvision's image-codec dep (numpy already comes from
+  # scikit-learn/evaluate); install it separately so its deps resolve.
+  local cp_abi
   cp_abi=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')")
-  pip install --no-deps \
-    "https://download.pytorch.org/whl/cpu/torchvision-${ver}%2Bcpu-${cp_abi}-${cp_abi}-manylinux_2_28_aarch64.whl" \
-    pillow
+  python -m pip install --no-deps \
+    "https://download.pytorch.org/whl/cpu/torchvision-0.27.0%2Bcpu-${cp_abi}-${cp_abi}-manylinux_2_28_aarch64.whl"
+  python -m pip install pillow
 }
 
 # Copy CI fixture data into the target root so that example scripts can

@@ -621,8 +621,8 @@ supported:
   #   的 torchvision 0.22-0.29 与 torch 2.9.0+cpu ABI 不匹配，见 [[torchvision-v29-stable-abi]]）。
   # 以上 3 patch 均为 coder 验证机本地补丁，CI 不需要：(1) 脚本不 .to()，get_peft_model
   #   时权重在 CPU 上做 SVD（等价），Trainer 再搬 NPU；(2) evaluate.load 走 hf-mirror
-  #   小文件（glue_adamss_asa 同用法已过）；(3) CI 装 aarch64 torchvision 0.24.0 与
-  #   torch 2.9.0 ABI 匹配。
+  #   小文件（glue_adamss_asa 同用法已过）；(3) CI 装 aarch64 torchvision 0.27.0 与
+  #   torch 2.12.0 ABI 匹配（2026-09-20 随整栈升 2.12 同步，见 setup_example.sh）。
   # CI 资产（run 35222723526 302 cas-bridge 超时根因）：脚本 DATASET_CONFIGS["cifar10"]
   #   硬编码 Multimodal-Fatima/CIFAR10_train + CIFAR10_test（不是 uoft-cs/cifar10），
   #   模型默认 google/vit-base-patch16-224-in21k —— ModelScope 均无镜像，走
@@ -864,6 +864,31 @@ supported:
       - --checkpointing_steps 1000000
     timeout_minutes: 30
 
+  # ShiRA（稀疏 mask LoRA）：0.5B + ci_alpaca_10 fixture，同 gralora 族
+  # 配方（vanilla transformers.Trainer + device_map=auto 单卡全落 npu:0，
+  # 无 trl/bnb/fp16 硬编码）。
+  # 硬前提：torch/torch_npu 2.12.0——torch_npu 2.9 在
+  # torch.sparse_coo_tensor 构造处 INTERNAL ASSERT 崩（layer.py:222），
+  # 2.12 上构造 + dense+=sparse 前向反向均实测通过（2026-09-20 npu-1
+  # 微基准；setup_example.sh 2026-09-20 整栈升 2.12，全部 supported
+  # 随之在 2.12 复跑）。
+  - path: examples/shira_finetuning/shira_finetuning.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --base_model ${SFT_MODEL_PATH}
+      - --data_path ${TARGET_ROOT}/fixtures/ci_alpaca_10   # 默认 yahma/alpaca-cleaned 52k：换 fixture（instruction/output 字段，脚本 :169-174 拼模板）
+      - --num_epochs 1
+      - --batch_size 1
+      - --cutoff_len 256
+      - --val_set_size 1
+      - --learning_rate 1e-4
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --eval_step 100
+      - --save_step 100
+    timeout_minutes: 30
+
 unsupported:
   - examples/conditional_generation/peft_lora_seq2seq_accelerate_fsdp.py
   - examples/causal_language_modeling/peft_lora_clm_accelerate_ds_zero3_offload.py
@@ -886,7 +911,6 @@ unsupported:
   - examples/sft/run_peft_fsdp_gptq.sh
   - examples/frod_finetuning/frod_image_classification.py
   - examples/frod_finetuning/frod_text_classification.py
-  - examples/shira_finetuning/shira_finetuning.py
   - examples/qalora_finetuning/qalora_gptq_finetuning.py
   - examples/eva_finetuning/eva_finetuning.py
   - examples/eva_finetuning/eva_finetuning_multi_accelerator.py

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import unittest
 
 from workflows.markdown_doc_test_base import MarkdownDocTestBase
@@ -188,8 +189,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         _PROBE_SCRIPT = (
             'import torch, torch_npu\n'
             "raise SystemExit(0 if "
-            "torch.__version__.startswith('2.9.0') "
-            "and torch_npu.__version__.startswith('2.9.0') "
+            "torch.__version__.startswith('2.12.0') "
+            "and torch_npu.__version__.startswith('2.12.0') "
             "else 1)"
         )
         probe = subprocess.run(
@@ -208,13 +209,38 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
             )
             print(f'setup: reusing image torch stack ({versions.stdout.strip()})')
         else:
-            print('setup: installing torch==2.9.0 torch_npu==2.9.0.post2')
+            # torch 2.12.0 (upgraded 2026-09-20 from 2.9.0 to match the
+            # examples guard; unblocks shira's sparse-COO tuner): the
+            # cluster cache / aliyun only host the CUDA torch wheel whose
+            # METADATA declares cuda-toolkit (conflicts with
+            # PIP_CONSTRAINT cuda-toolkit<0). Fetch the CPU wheel directly
+            # from pytorch.org and pull torch's pure-Python deps from the
+            # cluster index. torch_npu 2.12.0 comes from the ascend extra.
+            print('setup: installing torch==2.12.0+cpu (direct URL) + torch_npu==2.12.0')
+            cp_abi = f'cp{sys.version_info.major}{sys.version_info.minor}'
+            subprocess.run(
+                [
+                    'python', '-m', 'pip', 'install', '--no-deps',
+                    'https://download.pytorch.org/whl/cpu/'
+                    f'torch-2.12.0%2Bcpu-{cp_abi}-{cp_abi}-manylinux_2_28_aarch64.whl',
+                ],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    'python', '-m', 'pip', 'install',
+                    '--index-url', cls._CLUSTER_INDEX,
+                    'filelock', 'typing-extensions>=4.10.0', 'setuptools<82',
+                    'sympy>=1.13.3', 'networkx>=2.5.1', 'jinja2', 'fsspec>=0.8.5',
+                ],
+                check=True,
+            )
             subprocess.run(
                 [
                     'python', '-m', 'pip', 'install',
                     '--index-url', cls._CLUSTER_INDEX,
                     '--extra-index-url', cls._ASCEND_EXTRA,
-                    'torch==2.9.0', 'torch_npu==2.9.0.post2',
+                    'torch_npu==2.12.0',
                 ],
                 check=True,
             )
