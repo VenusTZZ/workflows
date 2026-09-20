@@ -1,20 +1,5 @@
 #!/usr/bin/env bash
-# Prepare the CI environment for one supported accelerate example.
-# $1 is the manifest profile. Unknown profiles fail before any install.
-# accelerate itself is installed from TARGET_ROOT (the release checkout
-# under test), so the guarded tag is exactly the code that runs.
-#
-# The upstream examples/requirements.txt is deliberately NOT installed
-# wholesale: we install the checkout plus the minimal NLP+CV stack instead.
-#
-# Asset sourcing (2026-09-17, supersedes the 2026-09-16 hf-mirror Xet
-# incident): every model/dataset the supported examples hardcode is
-# seeded into the runners' shared cache root by the cache-seed workflow
-# (ModelScope download → HF hub cache layout; spec:
-# cache-seed/accelerate/ms_seeds.yaml, executed by scripts/ms_seed.py).
-# The pool shares one persistent cache volume, so one dispatch warms
-# every runner. Setup here only installs the stack and validates the
-# seeded assets resolve locally; nothing downloads weights at runtime.
+
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then

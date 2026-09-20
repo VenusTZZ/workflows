@@ -18,20 +18,7 @@ scan:
 
 supported:
   # overlay_args 约定：
-  #   只写真值与默认不同的项。accelerate argparse 大量默认值已合理：
-  #     --mixed_precision default=None   → fp32（accelerate 内部 None 规约成 "no"）
-  #     --cpu default=False（store_true）→ Accelerator 自动检 NPU
-  #     --use_stateful_dataloader=False  → 普通 dataloader
-  #   写进去的只有：
-  #     - argparse required=True 必填（cv/complete_cv 的 --data_dir）
-  #     - 显式 override 默认的（checkpointing_steps / output_dir / with_tracking / project_dir）
-  # launcher 约定（可选字段，透传到 run_example.sh 的 LAUNCHER env）：
-  #   torchrun → torch.distributed.run --nproc_per_node <可见 NPU 数>，激活
-  #   多卡路径（DDP wrap / comm hook / 跨 rank 聚合）；用于特性激活依赖
-  #   多进程、裸 python 会静默退化的 example（a2-2 条目）。
-  #   accelerate-deepspeed → run_example.sh 在 CI 工作副本物化 ZeRO-2 bf16
-  #   ds json + accelerate launch --config_file 启动（num_processes 跟随
-  #   可见 NPU 数）。用于特性激活依赖 launcher 的 example（deepspeed 分支）。
+  #   只写真值与默认不同的项。每个加的overlay_arg必须注释清楚必要性
 
   - path: examples/nlp_example.py
     profile: accelerate-nlp
@@ -54,8 +41,6 @@ supported:
     overlay_args:
       # argparse required=True，不传直接 argparse 报错。cv_example.py 用
       # os.listdir(data_dir) + ".jpg" 过滤，data_dir 必须直接含 .jpg；
-      # setup_example.sh 把 timm/oxford-iiit-pet 解到
-      # ${TARGET_ROOT}/fixtures/pets/images/，所以这里指向 images/ 子目录。
       - --data_dir ${TARGET_ROOT}/fixtures/pets/images
     timeout_minutes: 30
 
@@ -87,10 +72,9 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      # argparse default=None → 不做 checkpoint；显式开 epoch 级落盘
+      # argparse default=None → 不做 checkpoint，显式开 epoch 级落盘
       - --checkpointing_steps epoch
-      # argparse default="."（cwd）；改到 CI_OUTPUT_DIR 让 runner 收进
-      # artifacts，CI 完成后统一清理
+      # argparse default="."（cwd）；改到 CI_OUTPUT_DIR 让 runner 收进 artifacts，CI 完成后统一清理
       - --output_dir ${CI_OUTPUT_DIR}
     timeout_minutes: 30
 
@@ -442,13 +426,28 @@ unsupported:
   # 架构，已 CI 种子）后 host RAM 仅 2×0.7GB，cgroup 毫无压力。
   # FSDP2 + bf16 + NPU HCCL 训练本身 rc 内正常（Step 0/2/3 loss 输出，
   # trainer 版 step 60 loss 2.16→2.10 收敛）。
-  # 真正的剩余 blocker 是两个与资源无关的 torch_npu/FSDP2 边角：
-  #   (a) nd_parallel.py:158 末尾 `model.save_pretrained(...)` 把
-  #       FSDP2 分片后的 tensor 交给 safetensors → _find_shared_tensors
-  #       触发 storage.data_ptr() → RuntimeError "Attempted to access the
-  #       data pointer on an invalid python storage"（safetensors × FSDP2
-  #       sharded × torch_npu 三方 ABI gap；单卡非 FSDP2 保存正常，
-  #       `accelerate.save_state` 也正常，分片视图才触发）
+  # 真正的剩余 blocker 是两个与资源无关的边角：
+  #   (a) nd_parallel.py:158 末尾 `model.save_pretrained(...)`。根因不在
+  #       "张量分片"而是 state_dict 的值类型变了：dp-shard-size≥2 时
+  #       accelerate 用 FullyShardedDataParallelPlugin(state_dict_type=
+  #       "SHARDED_STATE_DICT") 把 model wrap 成 FSDP2，`model.state_dict()`
+  #       每个权重变成 DTensor（逻辑分片对象，每个 rank 只持 _local_tensor），
+  #       不再是普通 Tensor。transformers save_pretrained → safetensors
+  #       save_file → _find_shared_tensors（safetensors/torch.py:81）为去重
+  #       对每个值调 storage_ptr(v)（torch.py:18/22）→ v.untyped_storage()
+  #       .data_ptr() / v.storage().data_ptr()；DTensor.data_ptr() 返回 0、
+  #       且 torch_npu 下 DTensor.storage() 不是有效 storage，直接抛
+  #       RuntimeError "Attempted to access the data pointer on an invalid
+  #       python storage"。属 safetensors × FSDP2(DTensor) × torch_npu 三方
+  #       ABI gap：safetensors 假设 state_dict 是取得到 data_ptr 的普通
+  #       tensor，DTensor 破坏了这个契约，torch_npu 比 CUDA 更"硬"（直接
+  #       抛而非给占位返回）。单卡 dp-shard-size=1 不 wrap、state_dict 是
+  #       普通 Tensor 故保存正常；`accelerate.save_state()`（FSDP2 官方
+  #       checkpoint 路）走 gather/分片语义也正常——只有 save_pretrained
+  #       撞这个 gap。修法选一（均 patch，多卡/overlay 够不到）：example 侧
+  #       unwrap_model 或用 save_state；accelerate 侧 save_pretrained 先
+  #       full_tensor/gather；torch_npu/safetensors 让 DTensor.storage()
+  #       返回 0/_local_tensor 指针而非硬抛。
   #   (b) nd_parallel_trainer.py:51 `TrainingArguments(num_train_epochs=1,
   #       per_device_train_batch_size=1, logging_steps=5, ...)` 写死 1
   #       epoch 无 max_steps CLI 旋钮，CI smoke（默认 1-2 epoch）跑不完
@@ -461,7 +460,10 @@ unsupported:
   # （coder 实跑：accelerate launch --num_processes 2 --mixed_precision bf16
   #   nd_parallel.py --dp-shard-size 2 --num-steps 3 --sequence-length 128
   #   --model-name HuggingFaceTB/SmolLM-360M 训练 OK；末尾 save_pretrained
-  #   rc=1 @ safetensors storage.data_ptr）
+  #   rc=1 @ safetensors storage.data_ptr。2026-09-20 最小复现钉死 DTensor：
+  #   distribute_tensor + Shard 产出的 DTensor，dt.data_ptr()==0、
+  #   dt._local_tensor.data_ptr()==真实指针、save_file({"w": dt}) 在
+  #   storage_ptr(v) 抛 invalid python storage，坐实上面 DTensor 契约 gap）
   # nd_parallel_trainer.py:23 同款 Hermes-3-Llama-3.1-8B 默认，但 overlay
   # --model-name 同样可绕；跑不完是 num_train_epochs=1 无 max_steps 写死。
   - examples/torch_native_parallelism/nd_parallel.py
