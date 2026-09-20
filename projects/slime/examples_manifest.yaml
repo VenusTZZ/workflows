@@ -21,12 +21,6 @@ version: 1
 scan:
   root: examples
   include_extensions: ['.sh', '.py']
-  exclude:
-    # Package marker, not a runnable example.
-    - examples/__init__.py
-    # Shared library imported by examples/tau-bench/generate_with_tau.py,
-    # not an independent entry.
-    - examples/tau-bench/token_delta.py
 supported:
   # Fully-async rollout 全链路（Qwen2.5-0.5B + dapo-math-17k）。CI 复刻 fork 昇腾
   # nightly 测试 tests/tests_npu/nightly_CI/test_qwen2.5_0.5B_fully_async_short_npu.py
@@ -40,6 +34,8 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     timeout_minutes: 300
 unsupported:
+  # __init__.py：examples 顶层包标记，非独立运行入口。
+  - examples/__init__.py
   # ===== coding_agent_rl：硬阻塞（集群级外部服务 + 无公开模型/数据） =====
   # 8 节点 64 rollout 卡硬编码（examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nodes.sh：
   # --rollout-num-gpus 64、CP=8/EP=8/TP=2、hostfile /root/mpi_rack_hostfile 逐 IP
@@ -202,6 +198,8 @@ unsupported:
   # generate_with_tau.py 被 run_qwen3_4B.sh 以 --custom-generate-function-path /
   # --custom-rm-path 调用（tau-bench 工具调用 rollout 与奖励），非独立入口。
   - examples/tau-bench/generate_with_tau.py
+  # token_delta.py 被 generate_with_tau.py import（工具调用增量统计），非独立入口。
+  - examples/tau-bench/token_delta.py
   # openai_tool_adapter.py 被 generate_with_tau.py import（OpenAI 工具协议适配），非独立入口。
   - examples/tau-bench/openai_tool_adapter.py
   # sglang_tool_parser.py 被 generate_with_tau.py import（sglang FunctionCallParser 工具解析），非独立入口。
