@@ -673,6 +673,7 @@ projects:
     dir: projects/roll
     workflows:
       quick_start: .github/workflows/roll-quick-start.yml
+      examples: .github/workflows/roll-examples.yml
   # TGI quickstart guards a full source build (Rust launcher/router +
   # Python server) and a real /generate inference on a 2-card 910B
   # runner: single-card baseline + dual-card HCCL tensor parallelism
@@ -689,4 +690,3 @@ projects:
     dir: projects/tgi
     workflows:
       quick_start: .github/workflows/tgi-quick-start.yml
-      examples: .github/workflows/roll-examples.yml
