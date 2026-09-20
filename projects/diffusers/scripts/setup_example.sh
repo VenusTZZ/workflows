@@ -17,9 +17,9 @@ PROFILE="$1"
 
 # Validate the profile before installing anything (contract: unknown
 # profile must exit non-zero before any install).
-SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-amused diffusers-cogvideo diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2"
+SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-research diffusers-research-plain diffusers-t2i-adapter diffusers-text-to-image diffusers-textual-inversion diffusers-unconditional diffusers-vqgan diffusers-sdxl-online diffusers-amused diffusers-cogvideo diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2"
 case "$PROFILE" in
-  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-amused|diffusers-cogvideo|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2) ;;
+  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-research|diffusers-research-plain|diffusers-t2i-adapter|diffusers-text-to-image|diffusers-textual-inversion|diffusers-unconditional|diffusers-vqgan|diffusers-sdxl-online|diffusers-amused|diffusers-cogvideo|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2) ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -143,7 +143,14 @@ from modelscope import snapshot_download
 WORKSPACE = Path(os.environ["GITHUB_WORKSPACE"])
 ENV_FILE = os.environ["GITHUB_ENV"]
 MODEL_CACHE = Path(os.environ.get("MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope")))
+MODEL_CACHE.mkdir(parents=True, exist_ok=True)
 WANT = {item.strip() for item in os.environ.get("DIFFUSERS_DOWNLOAD", "").split(",") if item.strip()}
+
+# ModelScope's snapshot_download gives up on a single file once its own
+# retries are exhausted (e.g. "1 file(s) failed to download out of 16"),
+# which fails the whole setup. Re-run it a few times: each pass resumes /
+# re-fetches only what is still missing.
+DOWNLOAD_ATTEMPTS = 3
 
 exports: dict[str, str] = {}
 failures: list[str] = []
@@ -155,12 +162,30 @@ def export(name: str, path: str) -> None:
 
 
 def snapshot(name: str, ms_id: str, **kwargs) -> None:
-    try:
-        local = Path(snapshot_download(ms_id, cache_dir=str(MODEL_CACHE), **kwargs))
-        export(name, str(local))
-    except Exception as exc:  # noqa: BLE001 - report and continue
-        failures.append(f"{ms_id}: {type(exc).__name__}: {exc}")
-        print(f"FAIL {ms_id}: {exc}", flush=True)
+    last: Exception | None = None
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            local = Path(snapshot_download(ms_id, cache_dir=str(MODEL_CACHE), **kwargs))
+            export(name, str(local))
+            return
+        except Exception as exc:  # noqa: BLE001 - retry, then report
+            last = exc
+            print(f"retry {attempt}/{DOWNLOAD_ATTEMPTS} {ms_id}: {type(exc).__name__}: {exc}", flush=True)
+    failures.append(f"{ms_id}: {type(last).__name__}: {last}")
+    print(f"FAIL {ms_id}: {last}", flush=True)
+
+
+def hf_snapshot(repo_id: str, **kwargs) -> str:
+    from huggingface_hub import snapshot_download as hf_snapshot_download
+
+    last: Exception | None = None
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            return hf_snapshot_download(repo_id, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - retry, then report
+            last = exc
+            print(f"retry {attempt}/{DOWNLOAD_ATTEMPTS} {repo_id}: {type(exc).__name__}: {exc}", flush=True)
+    raise last
 
 
 # SDXL base components only. The repo also carries sd_xl_base_1.0.safetensors
@@ -240,11 +265,9 @@ if "cogvideo" in WANT:
     # will fail and the dataset must be delivered via cache-seed/diffusers/
     # instead (same treatment as peft's Xet-backed fixtures).
     try:
-        from huggingface_hub import snapshot_download as hf_snapshot_download
-
         dataset_dir = WORKSPACE / "datasets" / "disney"
         dataset_dir.mkdir(parents=True, exist_ok=True)
-        hf_snapshot_download(
+        hf_snapshot(
             "Wild-Heart/Disney-VideoGeneration-Dataset",
             repo_type="dataset",
             local_dir=str(dataset_dir),
@@ -259,11 +282,9 @@ if "cogvideo" in WANT:
 # hf-mirror into the workspace and point --dataset_name at the local directory.
 if "3d-icon" in WANT:
     try:
-        from huggingface_hub import snapshot_download as hf_snapshot_download
-
         dataset_dir = WORKSPACE / "datasets" / "3d_icon"
         dataset_dir.mkdir(parents=True, exist_ok=True)
-        hf_snapshot_download(
+        hf_snapshot(
             "linoyts/3d_icon",
             repo_type="dataset",
             local_dir=str(dataset_dir),
@@ -319,7 +340,7 @@ setup_diffusers_sd15() {
 }
 
 # diffusers-dreambooth: SD1.4 dreambooth / dreambooth-LoRA training examples.
-# The dataset is the repo's own docs/source/en/imgs, so no dataset download.
+# The dataset is the fixture image (fixtures/DOG.jpg), so no dataset download.
 setup_diffusers_dreambooth() {
   install_example_stack
   download_assets sd14
@@ -336,6 +357,62 @@ setup_diffusers_instruct_pix2pix() {
 # (kandinsky-community/kandinsky-2-2-decoder, no ModelScope mirror) and the
 # dataset are fetched by the example at run time.
 setup_diffusers_kandinsky() {
+  install_example_stack
+}
+
+# diffusers-research: research_projects SD1.5 training examples. Base + SD1.5
+# predownload; datasets (naruto / fixtures/DOG.jpg) at run time.
+setup_diffusers_research() {
+  install_example_stack
+  download_assets sd15
+}
+
+# diffusers-research-plain: research_projects examples that fetch their own
+# model + dataset at run time (cifar10 / inpainting / instruct-pix2pix /
+# wuerstchen-prior / sd-vae-ft-mse). Base only.
+setup_diffusers_research_plain() {
+  install_example_stack
+}
+
+# diffusers-t2i-adapter: T2I-Adapter SDXL. The tiny SDXL / tiny adapter models
+# and the fill10 dataset are fetched via hf-mirror at run time. Base only.
+setup_diffusers_t2i_adapter() {
+  install_example_stack
+}
+
+# diffusers-text-to-image: text_to_image SD1.5 / SDXL (full + LoRA) examples.
+# Tiny SD models and the dummy_image_text_data dataset are fetched via
+# hf-mirror at run time. Base only.
+setup_diffusers_text_to_image() {
+  install_example_stack
+}
+
+# diffusers-textual-inversion: textual_inversion SD1.5 / SDXL examples. Tiny
+# models are fetched via hf-mirror at run time; the dataset is the fixture
+# image (fixtures/DOG.jpg). Base only.
+setup_diffusers_textual_inversion() {
+  install_example_stack
+}
+
+# diffusers-unconditional: unconditional_image_generation (DDPM 64px). The
+# ddpm_dummy config and dummy_image_class_data dataset are fetched via
+# hf-mirror at run time. Base only.
+setup_diffusers_unconditional() {
+  install_example_stack
+}
+
+# diffusers-vqgan: VQGAN training (VQModel + Paella discriminator + timm
+# perceptual loss). timm is the example's own requirement; the dataset is the
+# tiny dummy_image_text_data and timm vgg19 weights are fetched at run time.
+setup_diffusers_vqgan() {
+  install_example_stack
+  python -m pip install timm
+}
+
+# diffusers-sdxl-online: SDXL examples that pull the model + datasets online
+# (hf-mirror) at run time, using the fp16 variant (~6.6GB) to keep the
+# download small. Base only.
+setup_diffusers_sdxl_online() {
   install_example_stack
 }
 
@@ -365,7 +442,7 @@ setup_diffusers_controlnet() {
 setup_diffusers_controlnet_sdxl() {
   install_example_stack
   echo "HF_DATASETS_TRUST_REMOTE_CODE=1" >> "$GITHUB_ENV"
-  download_assets sdxl
+  # SDXL is pulled online (hf-mirror, --variant fp16) by the example.
 }
 
 # diffusers-lcm: LCM consistency-distillation webdataset examples with an
@@ -381,7 +458,7 @@ setup_diffusers_lcm() {
 setup_diffusers_lcm_sdxl() {
   install_example_stack
   python -m pip install webdataset braceexpand
-  download_assets sdxl,sdxl-vae
+  # SDXL teacher + fp16-safe VAE are pulled online (hf-mirror) by the example.
 }
 
 # diffusers-cogvideo: CogVideoX-2b LoRA finetuning. decord + imageio /
