@@ -65,7 +65,6 @@ supported:
   - path: examples/sft/run_peft_fsdp.sh
     profile: peft
     runner: linux-aarch64-a2-8
-    npu_devices: '0,1,2,3,4,5,6,7'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     overlay_args:
       - --model_name_or_path ${SFT_MODEL_PATH}   # 默认 gated meta-llama/Llama-2-70b-hf：换 seed 的 0.5B
@@ -90,7 +89,6 @@ supported:
   - path: examples/sft/run_peft_multigpu.sh
     profile: peft
     runner: linux-aarch64-a2-8
-    npu_devices: '0,1,2,3,4,5,6,7'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     overlay_args:
       - --model_name_or_path ${SFT_MODEL_PATH}   # 默认 mistralai/Mistral-7B-v0.1：换 0.5B
@@ -118,7 +116,6 @@ supported:
   - path: examples/sft/run_peft_qlora_fsdp.sh
     profile: peft
     runner: linux-aarch64-a2-8
-    npu_devices: '0,1,2,3,4,5,6,7'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     overlay_args:
       - --model_name_or_path ${SFT_MODEL_PATH}
@@ -148,7 +145,6 @@ supported:
   - path: examples/sft/run_peft_deepspeed.sh
     profile: peft_ds
     runner: linux-aarch64-a2-8
-    npu_devices: '0,1,2,3,4,5,6,7'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     overlay_args:
       - --model_name_or_path ${SFT_MODEL_PATH}
@@ -175,7 +171,6 @@ supported:
   - path: examples/sft/run_peft_qlora_deepspeed_stage3.sh
     profile: peft_ds
     runner: linux-aarch64-a2-8
-    npu_devices: '0,1,2,3,4,5,6,7'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
     overlay_args:
       - --model_name_or_path ${SFT_MODEL_PATH}
