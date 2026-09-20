@@ -66,8 +66,25 @@ raise SystemExit(
     return
   fi
   echo "installing torch==2.11.0 torch_npu==2.11.0"
-  pip_ascend -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
-      torch==2.11.0
+  # The 148MB torch+cpu aarch64 wheel is the long pole of setup — CI run
+  # 35483448757 (2026-09-20) saw each leg print the "Downloading torch-
+  # 2.11.0+cpu... (148.1 MB)" banner then hang for 28+ min before the
+  # 30-min job timeout kicked in. Split download from install so a slow
+  # link can be retried with curl's byte range resume, and so pip
+  # install runs against a local wheel (no pip resolver round-trip).
+  XTUNER_WHEEL_DIR=/tmp/xtuner-wheels
+  mkdir -p "$XTUNER_WHEEL_DIR"
+  if [[ ! -f "$XTUNER_WHEEL_DIR/torch-2.11.0+cpu-cp312-cp312-manylinux_2_28_aarch64.whl" ]]; then
+    local wheel_url="https://mirrors.aliyun.com/pytorch-wheels/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl"
+    curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors --max-time 1500 \
+      -C - -o "$XTUNER_WHEEL_DIR/torch-2.11.0+cpu-cp312-cp312-manylinux_2_28_aarch64.whl" \
+      "$wheel_url" \
+      || pip_ascend -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
+  fi
+  if [[ -f "$XTUNER_WHEEL_DIR/torch-2.11.0+cpu-cp312-cp312-manylinux_2_28_aarch64.whl" ]]; then
+    pip_ascend --no-index --find-links "$XTUNER_WHEEL_DIR" torch==2.11.0 || \
+      pip_ascend -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
+  fi
   pip_ascend torch_npu==2.11.0
 }
 
@@ -118,13 +135,14 @@ setup_xtuner-llm() {
   python -m pip install --no-deps -e "$TARGET_ROOT" 2>&1 | tail -3
   # runtime deps — verbatim from Quick-start-Ascend.md `xtuner-install-binary`
   # block (applies on top of xtuner==0.2.0 too; matches verified stack).
-  python -m pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
+  # torch / torch_npu already installed by ensure_torch_stack; do not
+  # re-list them here, or pip would redownload the 148 MB torch wheel.
+  python -m pip install --find-links "${XTUNER_WHEEL_DIR:-}" -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
       'mmengine==0.10.6' 'transformers==4.48.0' 'peft>=0.14.0' \
       'datasets>=3.2.0,<4.0.0' einops loguru openpyxl 'scikit-image' scipy \
       SentencePiece tiktoken transformers_stream_generator cyclopts \
       'opencv-python-headless<=4.12.0.88' 'torchvision==0.26.0+cpu' \
-      timm pyarrow pydantic tensorboard xxhash imageio 'py-libnuma' GitPython \
-      'torch==2.11.0' 'torch_npu==2.11.0'
+      timm pyarrow pydantic tensorboard xxhash imageio 'py-libnuma' GitPython
   python -c "
 import torch, torch_npu
 assert torch.__version__.startswith('2.11.0'), f'torch drifted to {torch.__version__}'
