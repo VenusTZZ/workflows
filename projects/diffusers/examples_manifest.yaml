@@ -192,8 +192,8 @@ supported:
       - --pretrained_teacher_model stabilityai/stable-diffusion-xl-base-1.0      # 在线 hf-mirror（无 --variant，按 fp32 取 ~14GB）
       - --pretrained_vae_model_name_or_path madebyollin/sdxl-vae-fp16-fix
       - --output_dir ${CI_OUTPUT_DIR}
-      - --mixed_precision fp16
-      - --resolution 512
+      - --mixed_precision bf16                                  # fp16 反向 aclnn 算子失败，改 bf16
+      - --resolution 256
       - --lora_rank 4
       - --max_train_steps 1
       - --max_train_samples 1
@@ -233,7 +233,8 @@ supported:
       - --variant fp16
       - --output_dir ${CI_OUTPUT_DIR}
       - --dataset_name fusing/fill50k
-      - --resolution 512
+      - --resolution 256                                  # 512 在 29.5GB 卡上 OOM
+      - --gradient_checkpointing
       - --train_batch_size 1
       - --max_train_steps 1
       - --checkpointing_steps 1
@@ -254,14 +255,14 @@ supported:
       - --gradient_accumulation_steps 1
     timeout_minutes: 60
 
-  # SD1.4 dreambooth（全量）。上游命令见 examples/dreambooth/README.md；
+  # SD1.5 dreambooth（全量）。上游命令见 examples/dreambooth/README.md；
   # 数据集用 fixtures/DOG.jpg（${FIXTURE_DIR}，无下载）。2026-09-18 昇腾机验证可跑。
   - path: examples/dreambooth/train_dreambooth.py
     profile: diffusers-dreambooth
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --pretrained_model_name_or_path ${SD14_MODEL_PATH}   # ModelScope: AI-ModelScope/stable-diffusion-v1-4
+      - --pretrained_model_name_or_path stable-diffusion-v1-5/stable-diffusion-v1-5   # 在线 hf-mirror（SD1.4 在 HF 是 gated，改用 SD1.5）
       - --instance_data_dir ${FIXTURE_DIR}
       - --output_dir ${CI_OUTPUT_DIR}
       - --instance_prompt "a photo of sks dog"
@@ -271,13 +272,13 @@ supported:
       - --gradient_checkpointing
     timeout_minutes: 90
 
-  # SD1.4 dreambooth LoRA。同上游 README；数据集同上（fixtures/DOG.jpg）。
+  # SD1.5 dreambooth LoRA。同上游 README；数据集同上（fixtures/DOG.jpg）。
   - path: examples/dreambooth/train_dreambooth_lora.py
     profile: diffusers-dreambooth
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --pretrained_model_name_or_path ${SD14_MODEL_PATH}   # ModelScope: AI-ModelScope/stable-diffusion-v1-4
+      - --pretrained_model_name_or_path stable-diffusion-v1-5/stable-diffusion-v1-5   # 在线 hf-mirror（SD1.4 在 HF 是 gated，改用 SD1.5）
       - --instance_data_dir ${FIXTURE_DIR}
       - --output_dir ${CI_OUTPUT_DIR}
       - --instance_prompt "a photo of sks dog"
@@ -459,20 +460,6 @@ supported:
       - --pretrained_model_name_or_path stabilityai/sd-vae-ft-mse
       - --input_image ${FIXTURE_DIR}/DOG.jpg
     timeout_minutes: 30
-
-  # Wuerstchen prior（默认 warp-ai/wuerstchen-prior + naruto；需 seed）
-  - path: examples/research_projects/wuerstchen/text_to_image/train_text_to_image_prior.py
-    profile: diffusers-research-plain
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --dataset_name lambdalabs/naruto-blip-captions
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256
-      - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
-      - --max_train_steps 1
-      - --seed 42
-    timeout_minutes: 90
 
   # T2I-Adapter SDXL（tiny 模型 + fill10；2026-09-20 昇腾机验证可跑）
   - path: examples/t2i_adapter/train_t2i_adapter_sdxl.py
@@ -678,21 +665,6 @@ supported:
 
   # scheduled_huber / text_to_image LoRA SDXL
   - path: examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image_lora_sdxl.py
-    profile: diffusers-sdxl-online
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
-      - --variant fp16
-      - --dataset_name lambdalabs/naruto-blip-captions
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256 --center_crop --random_flip
-      - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
-      - --max_train_steps 1 --checkpointing_steps 1
-    timeout_minutes: 120
-
-  # scheduled_huber / text_to_image SDXL
-  - path: examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image_sdxl.py
     profile: diffusers-sdxl-online
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
@@ -1004,7 +976,13 @@ unsupported:
   # OTHER_BACKEND：JAX/Flax
   - examples/research_projects/sdxl_flax/sdxl_single.py
   - examples/research_projects/sdxl_flax/sdxl_single_aot.py
-  # wuerstchen lora_prior：需降级 diffusers（用已废弃的 LoRA processor 构造 API）
+  # scheduled_huber text_to_image SDXL（全量，非 LoRA）：SDXL 全量微调 + Adam
+  # fp32 状态 > 单卡 29.5GB，NPU OOM（同目录的 LoRA 版已迁 supported）
+  - examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image_sdxl.py
+  # wuerstchen prior / lora_prior：import diffusers.pipelines.wuerstchen，该模块在
+  # 当前 diffusers 已删除（WuerstchenPrior / DEFAULT_STAGE_C_TIMESTEPS 都没了）
+  # → ModuleNotFoundError，跑不了
+  - examples/research_projects/wuerstchen/text_to_image/train_text_to_image_prior.py
   - examples/research_projects/wuerstchen/text_to_image/train_text_to_image_lora_prior.py
   # CUDA_DEP + GATED_MODEL：硬编码 cuda/mps（无 NPU 分支，L49-66）；模型为 SD3.5（gated）
   - examples/server/server.py
