@@ -56,6 +56,11 @@ supported:
       # trainer 进程数压到 1：recipe 默认 nproc_per_node=8 是按 8 卡 A2 pod 调的，
       # smoke 只用卡 1 跑 trainer，单进程足够；卡 0 给 sglang capture server。
       - deployment.trainer.nproc_per_node=1
+      # receive_buffers 显式回退 pageable：上游把默认值改成 pinned 后，NPU 上
+      # pin 判定走 torch.cuda.is_available() 恒为 False，pageable host buffer
+      # register_buffer 返回 -600 变成硬 RuntimeError；pageable 走 get_into 老路径
+      # 正常。与 Quick-start-Ascend.md smoke-train-launch 保持一致。
+      - deployment.disaggregated.receive_buffers=pageable
       # target model 路径：recipe 默认 Qwen/Qwen3.5-4B（HF Hub，runner 不可达），
       # 覆成 setup_example.sh 从 ModelScope 预下载并 export 的本地路径。
       - model.target_model_path=${SPECFORGE_MODEL_PATH}
