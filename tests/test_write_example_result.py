@@ -83,6 +83,32 @@ class MainTests(unittest.TestCase):
             'job_status': 'failure',
         })
 
+    def test_project_case_result_records_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / 'result.json'
+            env = dict(
+                ENV,
+                EXAMPLE_SOURCE='project',
+                EXAMPLE_PATH='example/test_npu_discovery.py',
+            )
+            with mock.patch.dict(os.environ, env), \
+                    mock.patch.object(write_example_result, 'fetch_conclusion',
+                                      return_value='success'), \
+                    mock.patch.object(sys, 'argv',
+                                      ['prog', '--output', str(out)]):
+                write_example_result.main()
+            data = json.loads(out.read_text(encoding='utf-8'))
+
+        self.assertIn('source', data)
+        self.assertNotIn('case_id', data)
+        self.assertEqual(data['source'], 'project')
+        self.assertEqual(data['target_repo'], 'huggingface/peft')
+
+    def test_result_schema_has_no_case_id_extension(self) -> None:
+        schema_path = SCRIPTS.parent / 'schemas' / 'result.schema.json'
+        schema = json.loads(schema_path.read_text(encoding='utf-8'))
+        self.assertNotIn('case_id', schema['properties'])
+
     def test_missing_conclusion_exits_1(self) -> None:
         with mock.patch.dict(os.environ, ENV), \
                 mock.patch.object(write_example_result, 'fetch_conclusion',

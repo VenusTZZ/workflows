@@ -103,6 +103,8 @@ def main() -> None:
         'image': env['IMAGE'],
         'job_status': conclusion_to_status(conclusion),
     }
+    if env.get('EXAMPLE_SOURCE'):
+        result['source'] = env['EXAMPLE_SOURCE']
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open('w', encoding='utf-8') as handle:

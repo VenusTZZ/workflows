@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import sys
 import unittest
 from pathlib import Path
@@ -41,21 +42,42 @@ class TestRayProjectContract(unittest.TestCase):
             },
         )
 
-    def test_manifest_guards_only_the_two_selected_upstream_tests(self) -> None:
+    def test_manifest_contains_upstream_and_project_npu_cases(self) -> None:
         manifest_path = _REPO_ROOT / "projects" / "ray" / "examples_manifest.yaml"
         manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-        expected_paths = {
+        upstream_paths = {
             "python/ray/tests/accelerators/test_npu.py",
             "python/ray/train/tests/test_torch_device_manager.py",
         }
-        self.assertEqual(set(manifest["scan"]["paths"]), expected_paths)
+        project_paths = {
+            "example/test_npu_discovery.py",
+            "example/test_npu_task_actor.py",
+            "example/test_npu_resource_lifecycle.py",
+            "example/test_npu_worker_recovery.py",
+            "example/test_npu_fractional.py",
+            "example/test_npu_train_single.py",
+            "example/test_npu_train_hccl.py",
+            "example/test_npu_train_ddp.py",
+            "example/test_npu_train_resume.py",
+            "example/test_npu_data_batch.py",
+            "example/test_npu_data_actor.py",
+            "example/test_npu_serve_inference.py",
+            "example/test_npu_serve_batching.py",
+            "example/test_npu_tune_trials.py",
+        }
+        self.assertEqual(set(manifest["scan"]["paths"]), upstream_paths)
+        supported = manifest["supported"]
         self.assertEqual(
-            {entry["path"] for entry in manifest["supported"]}, expected_paths
+            {entry["path"] for entry in supported}, upstream_paths | project_paths
         )
+        self.assertTrue(all("case_id" not in entry for entry in supported))
         self.assertEqual(
-            {entry["profile"] for entry in manifest["supported"]},
-            {"core", "train"},
+            {entry["path"] for entry in supported if entry["source"] == "project"},
+            project_paths,
         )
+        for path in project_paths:
+            self.assertTrue((_REPO_ROOT / "projects" / "ray" / path).is_file(), path)
+        self.assertFalse(any("multi_node" in path for path in project_paths))
         self.assertEqual(manifest["unsupported"], [])
 
     def test_quick_start_covers_environment_detection_and_isolation(self) -> None:
@@ -90,7 +112,6 @@ class TestRayProjectContract(unittest.TestCase):
 
     def test_project_scripts_and_workflows_exist(self) -> None:
         expected = [
-            "projects/ray/scripts/check_manifest.py",
             "projects/ray/scripts/setup_example.sh",
             "projects/ray/scripts/run_example.sh",
             "projects/ray/tests/test_quick_start_ascend.py",
@@ -131,13 +152,10 @@ class TestRayProjectContract(unittest.TestCase):
         )[0]
         self.assertIn("ensure_torch_stack", setup_train)
 
-        workflow_text = (
-            _REPO_ROOT / ".github" / "workflows" / "ray-examples.yml"
-        ).read_text(encoding="utf-8")
-        preflight = workflow_text.split("- name: Source CANN and check NPU", 1)[
-            1
-        ].split("- name: Setup test environment", 1)[0]
-        self.assertNotIn("import torch", preflight)
+        source_cann = setup_text.split("source_cann()", 1)[1].split(
+            "ensure_torch_stack()", 1
+        )[0]
+        self.assertNotIn("import torch", source_cann)
 
     def test_example_test_dependencies_follow_the_target_requirements(self) -> None:
         setup_text = (
@@ -162,6 +180,24 @@ class TestRayProjectContract(unittest.TestCase):
         self.assertNotIn("boto3==1.29.7", setup_text)
         self.assertNotIn("python -m pip install pytest mock", setup_text)
 
+    def test_project_npu_profiles_install_only_needed_ray_extras(self) -> None:
+        setup_text = (
+            _REPO_ROOT / "projects" / "ray" / "scripts" / "setup_example.sh"
+        ).read_text(encoding="utf-8")
+        for profile, extra in (
+            ("npu", '""'),
+            ("data", "data"),
+            ("serve", "serve"),
+            ("tune", "tune"),
+        ):
+            self.assertIn(f"setup_{profile}()", setup_text)
+            section = setup_text.split(f"setup_{profile}()", 1)[1].split("\n}", 1)[0]
+            self.assertIn("ensure_torch_stack", section)
+            self.assertIn(f"install_target_ray {extra}", section)
+            self.assertIn("install_test_dependencies", section)
+        self.assertIn("PIP_INDEX_URL", setup_text)
+        self.assertIn("PIP_TRUSTED_HOST", setup_text)
+
     def test_example_setup_links_tests_from_the_target_checkout(self) -> None:
         setup_text = (
             _REPO_ROOT / "projects" / "ray" / "scripts" / "setup_example.sh"
@@ -180,13 +216,48 @@ class TestRayProjectContract(unittest.TestCase):
         self.assertIn("link_target_ray_tests", setup_core)
         self.assertIn("link_target_ray_tests", setup_train)
 
-    def test_example_workflow_uses_the_project_local_checker(self) -> None:
+    def test_example_workflow_uses_shared_engine(self) -> None:
         workflow_path = _REPO_ROOT / ".github" / "workflows" / "ray-examples.yml"
         text = workflow_path.read_text(encoding="utf-8")
-        self.assertIn("python/ray/tests/accelerators/test_npu.py", text)
-        self.assertIn("python/ray/train/tests/test_torch_device_manager.py", text)
-        self.assertIn("projects/ray/scripts/check_manifest.py", text)
-        self.assertIn("sha=master", text)
+        self.assertIn("uses: ./.github/workflows/examples-template.yml", text)
+        self.assertIn("project: ray", text)
+        self.assertIn("upstream_repo: ray-project/ray", text)
+        self.assertIn("max_parallel: 2", text)
+        self.assertNotIn("run-example:", text)
+
+    def test_train_examples_attach_checkpoint_to_reported_metrics(self) -> None:
+        for name in ("test_npu_train_single.py", "test_npu_train_hccl.py"):
+            with self.subTest(name=name):
+                path = _REPO_ROOT / "projects" / "ray" / "example" / name
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                reports = [
+                    node
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "train"
+                    and node.func.attr == "report"
+                ]
+                self.assertEqual(len(reports), 1)
+                self.assertIn("checkpoint", {kw.arg for kw in reports[0].keywords})
+
+    def test_hccl_checkpoint_is_created_only_by_rank_zero(self) -> None:
+        path = _REPO_ROOT / "projects" / "ray" / "example" / "test_npu_train_hccl.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        rank_zero_branches = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.If) and ast.unparse(node.test) == "rank == 0"
+        ]
+        self.assertEqual(len(rank_zero_branches), 1)
+        self.assertTrue(
+            any(
+                isinstance(node, ast.Call)
+                and ast.unparse(node.func) == "train.Checkpoint.from_directory"
+                for node in ast.walk(rank_zero_branches[0])
+            )
+        )
 
 
 if __name__ == "__main__":

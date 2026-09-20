@@ -118,6 +118,73 @@ class CheckSupportedEntriesTests(unittest.TestCase):
         self.assertEqual(outputs['has_supported'], 'false')
         self.assertEqual(outputs['supported_matrix'], [])
 
+    def test_mixed_sources_keep_relative_paths_in_job_names(self) -> None:
+        manifest = VALID_MANIFEST.replace(
+            '    timeout_minutes: 90\n',
+            '    timeout_minutes: 90\n'
+            '  - source: project\n'
+            '    path: example/run.py\n'
+            '    profile: npu\n'
+            '    runner: linux-aarch64-a2-1\n'
+            '    image: img:tag\n'
+            '    timeout_minutes: 60\n',
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'target'
+            upstream = target / 'examples' / 'sft' / 'run.sh'
+            upstream.parent.mkdir(parents=True)
+            upstream.write_text('#!/bin/sh\n', encoding='utf-8')
+            project_case = root / 'example' / 'run.py'
+            project_case.parent.mkdir()
+            project_case.write_text('def test_npu(): pass\n', encoding='utf-8')
+            manifest_path = root / 'examples_manifest.yaml'
+            manifest_path.write_text(manifest, encoding='utf-8')
+            env = dict(os.environ, GITHUB_OUTPUT=str(root / 'out'))
+
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), '--target-root', str(target),
+                 '--manifest', str(manifest_path)],
+                capture_output=True, text=True, env=env, check=False,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            payload = (root / 'out').read_text(encoding='utf-8').split(
+                'supported_matrix<<EOF\n', 1)[1].split('\nEOF\n', 1)[0]
+            matrix = json.loads(payload)
+            self.assertEqual(matrix[0]['name'], 'examples/sft/run')
+            self.assertEqual(matrix[1]['name'], 'example/run')
+            self.assertEqual(matrix[1]['source'], 'project')
+
+    def test_missing_project_case_fails_before_runner(self) -> None:
+        manifest = VALID_MANIFEST.replace(
+            '    timeout_minutes: 90\n',
+            '    timeout_minutes: 90\n'
+            '  - source: project\n'
+            '    path: example/missing.py\n'
+            '    profile: npu\n'
+            '    runner: linux-aarch64-a2-1\n'
+            '    image: img:tag\n'
+            '    timeout_minutes: 60\n',
+        )
+        code, _, stderr = self._run(manifest)
+        self.assertEqual(code, 1)
+        self.assertIn('supported project example missing', stderr)
+
+    def test_project_case_path_cannot_escape_manifest_directory(self) -> None:
+        manifest = VALID_MANIFEST.replace(
+            '    timeout_minutes: 90\n',
+            '    timeout_minutes: 90\n'
+            '  - source: project\n'
+            '    path: ../outside.py\n'
+            '    profile: npu\n'
+            '    runner: linux-aarch64-a2-1\n'
+            '    image: img:tag\n'
+            '    timeout_minutes: 60\n',
+        )
+        code, _, stderr = self._run(manifest)
+        self.assertEqual(code, 1)
+        self.assertIn('path must be relative', stderr)
 
 if __name__ == '__main__':
     unittest.main()

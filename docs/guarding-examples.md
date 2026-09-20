@@ -27,6 +27,8 @@
 
 ## 一、workflow 要求
 
+> 现行公共 `examples-template.yml` 与下文 legacy 三信号范式有意不同：它只在最新 release 变化或上轮失败待重试时运行已声明的 `supported` 条目；新增上游 Example 的发现另由独立流程负责。Ray 的混合来源清单在同一 `supported` 段区分 `source: upstream` 和 `source: project`，项目自有测试不冒充上游 Example。详细契约见 [Examples 看护工作流引擎](examples-guard-engine.md)。
+
 推荐在 [https://github.com/cosdt-ci-test/workflows](https://github.com/cosdt-ci-test/workflows) 下新增目标软件的 github workflow，workflow 的核心要求是：
 
 - 对用昇腾能跑通的 examples，必须在合适的 runner 机器上跑通。
@@ -136,4 +138,3 @@ workflows/
 └── projects/
     └── <project>/                    # 项目专属数据
 ```
-

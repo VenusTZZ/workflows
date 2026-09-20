@@ -104,6 +104,8 @@ flowchart TD
 
 #### 2.4.1 引擎化边界：动态矩阵如何跨 `workflow_call`
 
+Ray 的 opt-in 混合来源扩展：supported 条目不写 `source` 时，仍按原行为在目标/examples checkout 查找；`source: project` 时，`path` 在本仓该项目 manifest 所在目录下查找，运行时将来源传给项目 `run_example.sh`。矩阵 job 显示名统一使用完整相对路径去掉扩展名，避免不同目录的同名脚本冲突；`source` 作为可选字段写入 `result.json`，旧项目未写该字段时，矩阵和结果结构保持原样。`npu_devices` 仅在条目显式声明时写入运行环境，其他项目不受影响。Ray 的自有测试因此与上游测试共用一份 manifest，以及以最新 release 为被测版本的看护回路。
+
 这是本设计与 quick start 引擎最关键的差异。quick start 引擎的 test job 是**单 job**：runner、镜像、超时都是 `workflow_call` inputs。examples 的调度单元是「每条 supported 条目一个 job」，runner / 卡数 / 镜像 / 超时**逐条不同**，无法用 inputs 表达（GitHub Actions 不允许 matrix 来自 workflow inputs）。
 
 解法：把 manifest-check 作为**引擎内部 job**，从 `projects/${{ inputs.project }}/examples_manifest.yaml` 派生 `supported_matrix`（job output，由 [scripts/check_supported_entries.py](../scripts/check_supported_entries.py) 写出：只做 supported 校验与矩阵派生，不算差集——差集归发现 workflow，见 §2.7），run-example 用 `fromJSON(needs.manifest-check.outputs.supported_matrix)` 展开矩阵。这正是 ms-swift-examples.yml 现有机制，只是把写死的 `projects/ms-swift` 参数化为 `inputs.project`。
