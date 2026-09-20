@@ -118,59 +118,26 @@ PY
 
 ensure_passthrough "$LAUNCH_PATH"
 
-# SCALE_PROCESSES (manifest field scale_processes): rewrite the
-# hardcoded process counts of self-launching .sh examples in this CI
-# working copy only (never committed - same policy as ensure_passthrough):
-#   - launcher line: --nproc_per_node <n> -> visible NPU count
-#     (run_peft_multigpu.sh pins 8; a2-2 must run 2)
-#   - referenced accelerate configs (--config_file <path>):
-#     num_processes: <n> -> visible NPU count (fsdp/deepspeed configs
-#     pin 8), and deepspeed gradient_accumulation_steps: <n> -> the
-#     overlay value (default 1; transformers trainer_config_finalize
-#     hard-rejects a ds config that disagrees with TrainingArguments)
-scale_launcher_processes() {
-  local script="$1"
-  [[ "$script" == *.sh ]] || return 0
-  local npus
-  npus=$("$PYTHON" -c "import torch, torch_npu; print(torch.npu.device_count())")
-  echo "scaling launcher process counts to $npus npu(s)"
 
-  sed -i -E "s/--nproc_per_node [0-9]+/--nproc_per_node $npus/" "$script"
-
-  local script_dir cfg_rel cfg_path ga i
-  script_dir=$(dirname "$script")
-  ga=1
-  for ((i = 0; i < ${#EXTRA_ARGS[@]} - 1; i++)); do
-    if [[ "${EXTRA_ARGS[i]}" == "--gradient_accumulation_steps" ]]; then
-      ga="${EXTRA_ARGS[i + 1]}"
-    fi
-  done
-  for cfg_rel in $(grep -oE -- '--config_file[[:space:]]+"?[^"[:space:]]+\.ya?ml' "$script" \
-                   | sed -E 's/^--config_file[[:space:]]+"?//'); do
-    cfg_path="$script_dir/$cfg_rel"
-    [[ -f "$cfg_path" ]] || { echo "config not found: $cfg_path" >&2; exit 1; }
-    # Keys may sit at column 0 (accelerate config) or nested inside
-    # deepspeed_config: (indented) - tolerate leading whitespace.
-    sed -i -E "s/^([[:space:]]*)num_processes: [0-9]+/\1num_processes: $npus/" "$cfg_path"
-    if grep -qE '^[[:space:]]*gradient_accumulation_steps: [0-9]+' "$cfg_path"; then
-      sed -i -E "s/^([[:space:]]*)gradient_accumulation_steps: [0-9]+/\1gradient_accumulation_steps: $ga/" "$cfg_path"
-    fi
-    echo "scaled $cfg_rel: num_processes=$npus gradient_accumulation_steps=$ga"
-  done
-}
-
-if [[ -n "${SCALE_PROCESSES:-}" ]]; then
-  scale_launcher_processes "$LAUNCH_PATH"
-fi
-
-# One sitecustomize.py, two patches, injected at interpreter startup:
+# One sitecustomize.py, three patches, injected at interpreter startup:
 # 1. CUDA->NPU: most peft examples hardcode device="cuda";
-#    torch_npu's transfer_to_npu maps torch.cuda onto npu.
+#    torch_npu's transfer_to_npu maps torch.cuda onto npu (also covers
+#    `torch.device("cuda" if torch.cuda.is_available() else "cpu")`
+#    device-branch examples such as lora_ga: verified npu-5, the branch
+#    resolves to npu).
 # 2. Dataset: the sft example calls load_dataset(path) with a local
 #    .jsonl fixture and reads BOTH "train" and "test" splits
 #    (splits="train,test"); datasets 3.x cannot infer a builder from a
 #    single file path - rewrite local data files to
 #    load_dataset("<builder>", data_files={"train": path, "test": path}).
+# 3. fp16 neutralizer: several finetuning scripts hardcode
+#    TrainingArguments(fp16=True, ...). accelerate 1.15's fp16 chain
+#    (optimizer.step(grad_scaler=scaler)) is incompatible with torch_npu
+#    2.9 amp.GradScaler -> TypeError "Adam.step got unexpected keyword
+#    argument grad_scaler" (gralora/lily/peanut/alora/dora/road, all
+#    repro'd pre-shim; coder npu-5 verified the neutralizer makes them
+#    exit 0). No supported entry relies on fp16=True, so forcing
+#    fp16=False globally is a no-op for every other entry.
 prepare_shims() {
   local shim_dir="$GITHUB_WORKSPACE/ci_patch"
   mkdir -p "$shim_dir"
@@ -213,6 +180,19 @@ def _patched_load_dataset(path, *args, **kwargs):
 
 
 _datasets.load_dataset = _patched_load_dataset
+
+import transformers as _tf
+
+_orig_training_args_init = _tf.TrainingArguments.__init__
+
+
+def _fp16_neutral_init(self, *args, **kwargs):
+    if kwargs.get("fp16"):
+        kwargs["fp16"] = False
+    _orig_training_args_init(self, *args, **kwargs)
+
+
+_tf.TrainingArguments.__init__ = _fp16_neutral_init
 PY
   export PYTHONPATH="$shim_dir:${PYTHONPATH:-}"
 }

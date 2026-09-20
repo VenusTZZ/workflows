@@ -14,7 +14,7 @@
 # setup_example.sh does this) so cmake's WITH_CANN can find the
 # toolkit.
 
-set -uo pipefail
+set -euo pipefail
 
 UPSTREAM_REF="${1:-5.0.0}"
 WORK="${WORK:-/home/coder/work}"
@@ -23,15 +23,46 @@ INSTALL_PREFIX=/usr/local/opencv-cann
 mkdir -p "$WORK"
 cd "$WORK"
 
-# 1) Clone (idempotent)
-if [[ ! -d opencv/.git ]]; then
-    git clone --depth 1 --branch "$UPSTREAM_REF" \
-        https://github.com/opencv/opencv.git
-fi
-if [[ ! -d opencv_contrib/.git ]]; then
-    git clone --depth 1 --branch "$UPSTREAM_REF" \
-        https://github.com/opencv/opencv_contrib.git
-fi
+# 1) Clone (idempotent) with retry. CI runners hit transient GitHub
+#    HTTP 500s on the opencv_contrib clone (observed 2026-09-18 on
+#    linux-aarch64-a2-1: "RPC failed; HTTP 500 ... error reading
+#    section header 'shallow-info'" left opencv_contrib/ with a broken
+#    .git and no working tree, which propagated to the patch script
+#    as "FileNotFoundError: opencv_contrib/modules/cannops/src/
+#    cann_call.cpp" and then to cmake configure as "Configuring
+#    incomplete, errors occurred!" — surfaced too far downstream to
+#    diagnose). After each clone, verify a sentinel file exists; if
+#    not, nuke .git and retry up to 3 times before giving up.
+clone_repo() {
+    local url="$1" dir="$2"
+    local tries=0 max=3
+    while (( tries < max )); do
+        tries=$((tries + 1))
+        if [[ ! -d "$dir/.git" ]]; then
+            echo "build: cloning $url (try $tries/$max)"
+            if git clone --depth 1 --branch "$UPSTREAM_REF" "$url" "$dir"; then
+                :
+            else
+                rm -rf "$dir"
+            fi
+        fi
+        # Sentinel files prove the working tree actually arrived; a
+        # half-finished --depth 1 clone passes `[[ -d $dir/.git ]]`
+        # but is missing everything else.
+        local sentinel="$dir/.git/HEAD"
+        if [[ -f "$sentinel" ]] && [[ -d "$dir/modules" ]]; then
+            echo "build: $dir clone OK (sentinel: $sentinel)"
+            return 0
+        fi
+        echo "build: $dir clone incomplete (sentinel: $sentinel), retrying" >&2
+        rm -rf "$dir"
+    done
+    echo "build: $dir clone FAILED after $max tries" >&2
+    return 1
+}
+
+clone_repo https://github.com/opencv/opencv.git          opencv
+clone_repo https://github.com/opencv/opencv_contrib.git  opencv_contrib
 
 # 2) Apply 5 source patches (each idempotent — checks before patching)
 python3 - <<PY

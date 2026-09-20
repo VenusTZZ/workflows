@@ -33,7 +33,7 @@
 #      build surfaces here as a shape / dtype mismatch instead of
 #      waiting for the NPU leg to mis-pick CPU silently.
 
-set -uo pipefail
+set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
     echo "usage: $0 <profile>" >&2

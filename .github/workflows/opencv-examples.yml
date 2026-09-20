@@ -10,18 +10,21 @@
 # The self-hosted quickstarts (projects/opencv/examples/
 # quickstart_py_version.py / quickstart_dnn_inference.py /
 # quickstart_cann_unit_tests.sh) and the fork-mirror (A) / engine
-# pre-check-sync (B) plan they required are RETIRED: the examples
-# directory is deleted and the manifest's supported section now points
-# at real upstream samples/ paths (the 5.0.0 LLM/VLM inference
-# samples: gpt2 / gemma3 / qwen / vlm _inference.py), so
-# manifest-check passes against plain opencv/opencv — no fork, no
-# engine tweak.
-# schedule stays DISABLED until the first manual dispatch is green:
-# the 4 supported legs are source-analysis picks (headless + ONNX +
-# zero non-cv2 deps) but have NOT been run in CI yet, and their ONNX
-# models + tokenizer configs must be seeded into
-# projects/opencv/fixtures/models/ first (see the manifest header's
-# model-seeding contract). Re-enable the cron after a green run:
+# pre-check-sync (B) plan they required are RETIRED. The current
+# supported entry is a single self-hosted NPU DNN CANN smoke
+# (projects/opencv/scripts/test_npu_dnn.py) that mirrors the Quick-
+# start's mobilenetv2-12 + DNN_BACKEND_CANN + NPU forward path with
+# zero source patches.
+#
+# The earlier 4 supported legs (samples/dnn/{gpt2,gemma3,qwen,vlm}
+# _inference.py, 5.0.0 headless LLM/VLM samples) are withdrawn from
+# supported: each requires a multi-GB user-exported ONNX + opencv-
+# style tokenizer config.json and HF-mirror xet backup is blocked
+# from CN runners, so they can't run until a model-seed workflow
+# (cache-seed-class) is wired up. See projects/opencv/examples_manifest.yaml
+# header for the per-script blocker list. Re-enable them after the
+# first green run of test_npu_dnn.py + after the seed workflow lands.
+# schedule stays DISABLED until then:
 #   schedule:
 #     - cron: '0 */6 * * *'
 
@@ -63,11 +66,12 @@ jobs:
             # tree directly.
             upstream_repo: opencv/opencv
             target_ref: ${{ inputs.target_ref }}
-            # 2 (not 4): keep matrix pressure low on the shared NPU
-            # runner. The matrix is 4 supported entries (gpt2 / gemma3 /
-            # qwen / vlm inference); they currently run the OPENCV CPU
-            # backend (see manifest header), but the setup leg still
-            # builds opencv-cann on this runner, so serialization
-            # matters. The 5 doc-snippet CPU algorithms run as a
-            # setup_example.sh step-5 sanity check, not matrix legs.
-            max_parallel: 2
+            # 1 (single supported leg): keep matrix pressure low on
+            # the shared NPU runner. The supported entry is the
+            # self-hosted NPU DNN CANN smoke (projects/opencv/scripts/
+            # test_npu_dnn.py); the setup leg still source-builds
+            # opencv-cann on this runner (~25 min cold / cached
+            # after the first run), so serialization matters. The 5
+            # doc-snippet CPU algorithms run as a setup_example.sh
+            # step-5 sanity check, not matrix legs.
+            max_parallel: 1

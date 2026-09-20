@@ -183,15 +183,22 @@ PY
 setup_peft_dreambooth() {
   # SD dreambooth 例（lora/oft/deft/hra/stable_diffusion ×5）：SFT 栈之外
   # 还要 diffusers + tensorboard。run 35303810367 实测缺 diffusers 直接
-  # import 崩（train_dreambooth.py:14）；--report_to tensorboard 是
-  # accelerate log_with，需要 tensorboard 包。
-  # diffusers 不 pin：requirements 对 transformers>=4.x / hub>=0.30 的约束
-  # 均被 setup_peft 的 pinned 线满足，pip 不会动已装版本；具体版本线以
-  # 首轮 CI 绿后为准再固定。
+  # import 崩（train_dreambooth.py:14）→ 初版修复"diffusers tensorboard"
+  # 不 pin，以为 pip 不会动已装版本——run 35316518546（2026-09-18）5 条
+  # dreambooth 全挂打脸：最新 diffusers 0.40 要求 huggingface-hub>=1.23，
+  # pip 把 hub 从 0.36.2 升到 1.31+（对已装的 transformers 只给 warning
+  # 不回退），transformers 4.57.1 的 dependency_versions_check 硬校验
+  # hub<1.0 → `import transformers` 直接 ImportError。
+  # 修复（coder npu-5 2026-09-18 实测 5 条 exit 0）：hub<1.0 +
+  # diffusers==0.39.0 双 pin（0.39 与 hub<1.0 兼容，0.40 起不兼容）。
+  # hra 例外：v0.21.0 脚本 :319 在 cwd/data/dreambooth 不存在时无条件
+  # git clone github.com/google/dreambooth（runner 网络不通 + 纯死代码，
+  # 该路径只用于 clone 自身）；预先 mkdir 空目录即可绕过，无需 patch。
   setup_peft
-  echo "installing dreambooth stack (diffusers + tensorboard)"
-  python -m pip install diffusers tensorboard
+  echo "installing dreambooth stack (diffusers==0.39.0 + tensorboard, hub<1.0)"
+  python -m pip install "huggingface_hub<1.0" "diffusers==0.39.0" tensorboard
   python -c "import diffusers, tensorboard; print('diffusers', diffusers.__version__)"
+  mkdir -p "$TARGET_ROOT/data/dreambooth"
 
   # SD v1.5 由 cache-seed 投递（与 accelerate 共享同一缓存卷，2026-09-17
   # 已 plant；peft 的 ms_seeds.yaml 同步声明，冷缓存时 peft 自己 dispatch
