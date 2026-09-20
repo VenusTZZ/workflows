@@ -104,9 +104,28 @@ ensure_torch_stack() {
   # wheel directly, whose Requires-Dist: cuda-toolkit collides with
   # constraints — --find-links to a +cpu-only directory sidesteps it.)
   echo "installing torch==2.11.0+cpu (aliyun pytorch-wheels/cpu find-links, deps from PIP_INDEX_URL)"
-  python -m pip install \
-    --find-links https://mirrors.aliyun.com/pytorch-wheels/cpu \
-    torch==2.11.0
+  # The 148MB torch+cpu aarch64 wheel is the long pole of setup — CI run
+  # 35483424375 (2026-09-20) saw every leg print the "Downloading torch-
+  # 2.11.0+cpu... (148.1 MB)" banner then hang for 28+ min before the
+  # 30-min job timeout cancelled the job. Split download from install so
+  # a slow link can be retried with curl's byte-range resume (-C -) and
+  # bounded by --max-time, and so pip installs a local wheel instead of
+  # re-resolving through the aliyun find-links (pure-python deps still
+  # come from PIP_INDEX_URL). Same hardening as projects/xtuner
+  # (CI run 35483448757).
+  TORCH_WHEEL_DIR=/tmp/torchtune-wheels
+  mkdir -p "$TORCH_WHEEL_DIR"
+  TORCH_WHEEL="$TORCH_WHEEL_DIR/torch-2.11.0+cpu-cp312-cp312-manylinux_2_28_aarch64.whl"
+  if [[ ! -f "$TORCH_WHEEL" ]]; then
+    curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors --max-time 1500 \
+      -C - -o "$TORCH_WHEEL" \
+      "https://mirrors.aliyun.com/pytorch-wheels/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl" \
+      || python -m pip install --find-links https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
+  fi
+  if [[ -f "$TORCH_WHEEL" ]]; then
+    python -m pip install --find-links "$TORCH_WHEEL_DIR" torch==2.11.0 || \
+      python -m pip install --find-links https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
+  fi
   # main HEAD torchtune (post-multimodal merge) unconditionally imports
   # torchvision at torchtune/data/_utils.py:12 — this sits upstream of
   # torchtune.datasets (datasets/__init__.py:7 → multimodal → _llava →

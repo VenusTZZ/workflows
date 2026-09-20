@@ -62,7 +62,7 @@ supported:
       - log_every_n_steps=1  # upstream 默认 1：确保 1 步内也有日志
       - batch_size=1  # upstream 默认 2：压批
       - max_seq_len=512  # upstream 默认 2048：压序列长度
-    timeout_minutes: 30
+    timeout_minutes: 60
 
   # 全量 SFT：Qwen2.5-0.5B + 50 行 alpaca，1 step，1 卡
   - path: recipes/full_finetune_single_device.py
@@ -82,7 +82,7 @@ supported:
       - log_every_n_steps=1
       - batch_size=1
       - max_seq_len=512
-    timeout_minutes: 30
+    timeout_minutes: 60
 
   # LoRA DPO：Qwen2.5-0.5B + 8 行对话式偏好数据，1 step
   - path: recipes/lora_dpo_single_device.py
@@ -104,7 +104,7 @@ supported:
       - log_every_n_steps=1
       - batch_size=1
       - max_seq_len=512
-    timeout_minutes: 30
+    timeout_minutes: 60
 
   # 推理生成：Qwen2.5-0.5B，单条 prompt（upstream 配置默认是 Llama2 7B）
   - path: recipes/generate.py
@@ -127,8 +127,10 @@ supported:
     # 走 cluster pip cache 被 4 个并发 job 压到 237 kB/s，光 torch 就要 10min；
     # torchvision 装到一半容器被 k8s 杀掉 ("container implementation failed")。
     # 跟同 run 的 lora_finetune/full_finetune/lora_dpo（timeout=30，setup 17min 内
-    # 跑通）对齐，提到 30。
-    timeout_minutes: 30
+    # 跑通）对齐，提到 30。2026-09-20 run 35483424375 30min 仍不够（torch 下载
+    # 挂 28min 直接超时），跟 xtuner（35483448757）同修：setup 改 curl 续传，
+    # timeout 提到 60 兜底。
+    timeout_minutes: 60
 
   # 量化：Qwen2.5-0.5B，Int8DynActInt4 权重量化（torchao）
   # Int8DynActInt4WeightQuantizer 用 torchao 0.18 的
@@ -154,8 +156,9 @@ supported:
       - checkpointer.model_type=QWEN2  # 同 generate：走 qwen2_hf_to_tune
       - checkpointer.output_dir=${CI_OUTPUT_DIR}  # 量化结果落 CI 工作目录
       - quantizer.groupsize=128  # Qwen2.5-0.5B hidden_size=896，128 是能整除的标准 group size
-    # 2026-09-18 CI run 35322839791：同上 setup timeout 不足，提到 30
-    timeout_minutes: 30
+    # 2026-09-18 CI run 35322839791：同上 setup timeout 不足，提到 30。
+    # 2026-09-20 run 35483424375 30min 仍超时（torch 下载挂 28min），提到 60。
+    timeout_minutes: 60
 
   # 评测：Qwen2.5-0.5B + lm_eval + 自定义 ci_truthfulqa_mc2 任务（本地 JSON 驱动）
   # eleuther_eval recipe 在 __init__ 强检 `version("lm-eval") < "0.4.5"`
@@ -203,8 +206,9 @@ supported:
     # 2026-09-18 CI run 35322839791：setup 比其它 3 个 recipe 还要重（多装
     # lm-eval==0.4.5 + evaluate==0.4.6 + sacrebleu + scikit-learn 等 30+ 包），
     # 15min 连 setup 跑不完；同 run 的 lora_finetune/full_finetune/lora_dpo
-    # 用 30min 全过，对齐到 30。
-    timeout_minutes: 30
+    # 用 30min 全过，对齐到 30。2026-09-20 run 35483424375 30min 仍超时
+    # （torch 下载挂 28min 直接超时），提到 60 兜底（同 xtuner 35483448757）。
+    timeout_minutes: 60
 
 # ===== unsupported（每条附 runtime-verified 标签 + 实测失败堆栈） =====
 # 2026-09-15 在 coder hdc-stable-npu-4（910B4×2, torch 2.12.0+cpu, torch_npu 2.12.0,
