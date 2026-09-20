@@ -9,11 +9,6 @@ version: 1
 scan:
   root: examples
   include_extensions: ['.yaml']
-  exclude:
-    # 9 个被各 example 配置继承的共享环境 / 模板片段，不是可独立执行的 example
-    - examples/config
-    # 仅有 Hydra defaults 的空壳配置，没有模型 / worker / 资源配置
-    - examples/qwen2.5-0.5B-agentic/agentic_val_webshop.yaml
 supported:
   # Agentic-Rollout：仅推理的 Sokoban 多轮环境交互与轨迹组装。与上游 agentic_rollout_sokoban.yaml 同 pipeline，
   # CI 重写为 ci_agentic_rollout：单卡 vLLM-Ascend、单环境、序列 256。国内 CANN 基础镜像启动后
@@ -264,3 +259,13 @@ unsupported:
   - examples/qwen3.5-397A17-rlvr_megatron/rlvr_megatron_80GB.yaml
   # Video-R1 Qwen2.5-VL-7B（Megatron，私有数据）；不支持：Megatron + 私有路径 + 视频多模态。
   - examples/video-rlvr/video_r1.yaml
+
+  # ===== 原 scan.exclude 项迁移（2026-09-20）：
+  # examples/config 是被各 example 配置继承的 9 个共享环境 / 模板片段
+  # 目录，不是可独立执行的 example；其下子 .yaml 文件由清单
+  # supported / unsupported 段以实际文件名为准统一登记（具体文件名
+  # 清单以 alibaba/ROLL HEAD 为准）。
+  - examples/config
+  # 仅有 Hydra defaults 的空壳配置，没有模型 / worker / 资源配置；
+  # 单条文件原 exclude 就直接列了，迁移到此处保持原意。
+  - examples/qwen2.5-0.5B-agentic/agentic_val_webshop.yaml
