@@ -26,9 +26,9 @@ on:
   workflow_dispatch:
     inputs:
       target_ref:
-        description: Branch, tag, or SHA to test (defaults to v0.2.0; the latest xtuner release whose xtuner/__init__.py is not entirely commented out — main HEAD and v1.0.x shipped an empty __init__.py that breaks `from xtuner import DS_CEPH_DIR` on every demo_data/*/config recipe)
+        description: Branch, tag, or SHA to test (defaults to ''; the engine's monitor step then resolves to the latest upstream release tag, falling back to main if the API is unreachable)
         required: false
-        default: v0.2.0
+        default: ''
         type: string
 
 # Engine jobs query the GitHub Job API (validate-results); called
