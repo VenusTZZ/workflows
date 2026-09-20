@@ -92,22 +92,6 @@ raise SystemExit(
   pip_ascend torch_npu==2.11.0
 }
 
-# Copy the alpaca-format fixture into the target root so the example
-# scripts can load it via --dataset_name_or_path without hitting HF
-# (China runners cannot reach tatsu-lab/alpaca).
-prepare_fixtures() {
-  local src="${FIXTURE_DIR:?FIXTURE_DIR is required}"
-  local dst="$TARGET_ROOT/fixtures"
-  echo "preparing fixtures from $src to $dst"
-  if ! ls "$src"/*.jsonl 1>/dev/null 2>&1; then
-    echo "FATAL: no fixture files (*.jsonl) found in $src" >&2
-    exit 1
-  fi
-  mkdir -p "$dst"
-  cp "$src"/*.jsonl "$dst/"
-  echo "copied $(ls "$dst"/*.jsonl 2>/dev/null | wc -l) fixture file(s) to $dst"
-}
-
 setup_xtuner-llm() {
   # scikit-image pulls GUI opencv-python 5.x as a transitive dep, whose
   # cv2.abi3.so links libxcb.so.1 / libGL.so.1 — missing from the lean
@@ -240,6 +224,5 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 select_pip_index
 python -m pip install -U pip setuptools wheel
 ensure_torch_stack
-prepare_fixtures
 
 "setup_${PROFILE}"

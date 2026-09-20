@@ -50,19 +50,51 @@ except urllib.error.HTTPError:
 }
 
 ensure_torch_stack() {
-  # Same torch line as peft quick-start (CANN 9.1.0 pairing): reuse
-  # the image stack when it already matches, otherwise install.
+  # torch 2.12.0 + torch_npu 2.12.0 + CANN 9.1.0 (upgraded 2026-09-20
+  # from 2.9.0 to unblock the sparse-COO tuners shira: torch_npu 2.9
+  # crashes at torch.sparse_coo_tensor construction plus dense+=sparse
+  # off. Reuse the image stack when it already matches, otherwise
+  # install.
+  #
+  # torch==2.12.0 is NOT installed via `pip_ascend`: aliyun (and the
+  # cluster pip cache, both PyPI mirrors) only host the CUDA torch
+  # wheel, whose METADATA declares `Requires-Dist: cuda-toolkit`, which
+  # conflicts with constraints-npu.txt `cuda-toolkit<0`. The CPU
+  # variant is `torch==2.12.0+cpu` (PEP 440 local label) published ONLY
+  # at https://download.pytorch.org/whl/cpu/ - so fetch it by direct
+  # URL. We compute the cp tag at runtime because the manifest mixes
+  # py3.10 (30 entries) and py3.12 (15 entries) images.
   if python -c "
 import torch, torch_npu
 raise SystemExit(
-    0 if torch.__version__.startswith('2.9.0')
-    and torch_npu.__version__.startswith('2.9.0') else 1)
+    0 if torch.__version__.startswith('2.12.0')
+    and torch_npu.__version__.startswith('2.12.0') else 1)
 "; then
     echo "reusing image torch stack ($(python -c 'import torch; print(torch.__version__)'))"
     return
   fi
-  echo "installing torch==2.9.0 torch_npu==2.9.0.post2"
-  pip_ascend torch==2.9.0 torch_npu==2.9.0.post2
+  echo "installing torch==2.12.0+cpu (direct URL) + torch_npu==2.12.0"
+  CP_ABI=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')")
+  pip install --no-deps \
+    "https://download.pytorch.org/whl/cpu/torch-2.12.0%2Bcpu-${CP_ABI}-${CP_ABI}-manylinux_2_28_aarch64.whl"
+  # torch's pure-Python deps (filelock / typing-extensions / sympy /
+  # networkx / jinja2 / fsspec) from aliyun so `import torch` succeeds
+  # (the +cpu wheel does not pull them; none declare cuda-toolkit).
+  pip install -i "$ALIYUN_PIP_INDEX" \
+    'filelock' 'typing-extensions>=4.10.0' 'setuptools<82' \
+    'sympy>=1.13.3' 'networkx>=2.5.1' 'jinja2' 'fsspec>=0.8.5'
+  pip_ascend torch_npu==2.12.0
+}
+
+install_cpu_torchvision() {
+  # torchvision matching torch 2.12 is 0.27.0; like torch it ships as a
+  # +cpu direct-download wheel only (PyPI linux wheels link libcudart.so
+  # and are cuda-toolkit-gated). Only the adamss image example needs it.
+  local cp_abi ver="0.27.0"
+  cp_abi=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')")
+  pip install --no-deps \
+    "https://download.pytorch.org/whl/cpu/torchvision-${ver}%2Bcpu-${cp_abi}-${cp_abi}-manylinux_2_28_aarch64.whl" \
+    pillow
 }
 
 # Copy CI fixture data into the target root so that example scripts can
@@ -134,8 +166,8 @@ setup_peft() {
   echo "installing peft from $TARGET_ROOT"
   python -m pip install -e "$TARGET_ROOT"
   python -m pip install "transformers==4.57.1" "datasets>=4.7.0,<6" \
-    "huggingface_hub<1.0" "trl==1.12.0" evaluate scikit-learn \
-    torchvision==0.24.0
+    "huggingface_hub<1.0" "trl==1.12.0" evaluate scikit-learn
+  install_cpu_torchvision
   python -c "import peft, trl, transformers, datasets, accelerate; print('peft', peft.__version__, '/ trl', trl.__version__, '/ transformers', transformers.__version__)"
 
   # Resolve seeded asset paths for overlay_args. The shared cache root
