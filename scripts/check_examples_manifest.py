@@ -100,11 +100,12 @@ def matrix_entries(supported: list[dict]) -> list[dict]:
         entry['overlay_args'] = overlay_args
         if exec_path is not None:
             entry['exec'] = exec_path.strip()
-        # Display name for the run-example job label: basename of path
-        # with extension stripped (e.g. examples/sft/run_peft.sh ->
-        # run_peft). Workflow templates use this so the matrix leg label
-        # is the script name rather than its full relative path.
-        entry['name'] = PurePosixPath(path).stem
+        # Display name for the run-example job label: full relative path
+        # with the extension stripped (examples/sft/run_peft.sh ->
+        # examples/sft/run_peft; a bare foo.py -> foo). Uniform and
+        # unique - same-named scripts in different directories get
+        # distinct labels. Keep in sync with check_supported_entries.py.
+        entry['name'] = str(PurePosixPath(path).with_suffix(''))
         entries.append(entry)
     if errors:
         for message in errors:

@@ -1,0 +1,222 @@
+version: 1
+# slime-ascend examples ledger.
+#
+# Ledger baseline tree: gitcode.com/Ascend/slime-ascend main examples/
+# (the NPU adaptation fork; 81 files). The engine validates supported
+# paths against the monitored upstream checkout (THUDM/slime @ release
+# tag) - every supported path below exists in both trees (verified
+# 2026-09-20 against v0.3.2 and fork main e5cf8dc).
+#
+# The fork's own CI never runs examples/ (pr-test.yml only runs
+# tests/test_*.py), but its NPU CI suite (tests/tests_npu/) proves the
+# runtime end to end on Ascend; supported entries below reuse those
+# verified configs as their CI recipe.
+#
+# Execution never uses the upstream .sh launchers directly: they
+# hardcode absolute paths (/root/slime, /path/to/...), large models,
+# 8-16 GPU layouts and multi-thousand-rollout schedules without "$@"
+# passthrough. projects/slime/scripts/ci_train_driver.py re-assembles
+# the same train.py/train_async.py invocation with CI-sized parameters
+# instead; no example source is modified.
+scan:
+  root: examples
+  include_extensions: ['.sh', '.py']
+  exclude:
+    # Package marker, not a runnable example.
+    - examples/__init__.py
+    # Shared library imported by examples/tau-bench/generate_with_tau.py,
+    # not an independent entry.
+    - examples/tau-bench/token_delta.py
+supported:
+  # Fully-async rollout 全链路（Qwen2.5-0.5B + dapo-math-17k）。CI 复刻 fork 昇腾
+  # nightly 测试 tests/tests_npu/nightly_CI/test_qwen2.5_0.5B_fully_async_short_npu.py
+  # 的已验证配方：train_async.py、actor 1 卡 + rollout 3 卡（每 engine 1 卡）、
+  # TP/PP/CP/EP 全 1、GRPO、--num-rollout 2；仅两处压缩偏离（response 8192→1024、
+  # 数据换仓内 16 行 fixture）。模型走 ModelScope 本地路径（Qwen2.5-0.5B-Instruct），
+  # ref-load 用 tools/convert_hf_to_torch_dist.py 现转的 _torch_dist 目录。
+  - path: examples/fully_async/run-qwen2.5-0.5B-fully_async.sh
+    profile: slime_fully_async
+    runner: linux-aarch64-a2-4
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    timeout_minutes: 300
+unsupported:
+  # ===== coding_agent_rl：硬阻塞（集群级外部服务 + 无公开模型/数据） =====
+  # 8 节点 64 rollout 卡硬编码（examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nodes.sh：
+  # --rollout-num-gpus 64、CP=8/EP=8/TP=2、hostfile /root/mpi_rack_hostfile 逐 IP
+  # ssh 组网）；硬依赖 E2B 兼容 sandbox 集群（docker_sandbox.py 默认内网 IP
+  # 80.48.5.89）、Node 22 / Claude Code tarball、SLIME_HEAD_HOST 反连（缺失即
+  # RuntimeError）；MOCK_SANDBOX 分支 import 的 sandbox_mock.py 在仓内不存在；
+  # Qwen3.6-35B-A3B 与 swe_train.jsonl 均无公开下载源。
+  - examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nodes.sh
+  # aiohttp_threaded.py 被 generate.py 的 sandbox 路径 import（aiohttp 并发工具），非独立入口。
+  - examples/coding_agent_rl/aiohttp_threaded.py
+  # docker_sandbox.py 被 generate.py 按 SANDBOX 实现选择 import（远程 Docker sandbox 适配），非独立入口。
+  - examples/coding_agent_rl/docker_sandbox.py
+  # generate.py 被 run_qwen36_35b_a3b_swe_8nodes.sh 以
+  # --custom-generate-function-path examples.coding_agent_rl.generate.generate 调用（SWE 工程智能体
+  # rollout 与奖励逻辑），非独立入口。
+  - examples/coding_agent_rl/generate.py
+  # sandbox.py 被 generate.py import（sandbox 抽象 + SWE-bench 环境整备），非独立入口。
+  - examples/coding_agent_rl/sandbox.py
+  # ===== delta_weight_sync：硬阻塞（模型规模 + 零覆盖入口） =====
+  # 入口 examples/delta_weight_sync/run-glm4.7-355B-A32B-delta.sh：
+  # GLM-4.7-355B-A32B（bf16 约 700GB+）16 节点 128 卡全硬编码（actor 8 节点 x 8 卡、
+  # rollout 64 卡、TP8/PP4/CP2/EP16、/shared/fs 跨节点共享盘），source 绝对路径
+  # /root/slime，零参数覆盖；delta 特性本身模型无关，属特性级测试而非 example 看护。
+  - examples/delta_weight_sync/run-glm4.7-355B-A32B-delta.sh
+  # ===== eval_multi_task：阶段三候选（需 CI 专用 eval 配置） =====
+  # multi_task.sh 零参数覆盖（模型 /root/Qwen3-4B + 预转 _torch_dist + 8 卡 TP2 全硬编码）、
+  # 无条件 --use-wandb --wandb-key；ifbench 奖励运行时 git clone
+  # https://github.com/allenai/IFBench.git（slime/rollout/rm_hub/ifbench.py）国内不稳；
+  # multi_task.yaml 的 aime/gpqa/ifbench 数据路径全为 /root 绝对路径。
+  # 可接入路径：复刻 launcher + 仓内 CI eval yaml（去 ifbench、关 wandb、Qwen3-0.6B），4 卡。
+  - examples/eval_multi_task/multi_task.sh
+  # multi_task.yaml 被 multi_task.sh 以 --eval-config 传入的评测数据集配置（数据路径硬编码），非独立入口。
+  - examples/eval_multi_task/multi_task.yaml
+  # ===== fully_async：同 example 的 35B 启动器（阶段三候选） =====
+  # run-qwen3.5-9B-fully_async.sh 是 fully_async 的大模型变体（Qwen3.5-9B）；
+  # 0.5B 版已由 supported 条目看护同一代码路径（fully_async_rollout），
+  # 9B 规模需 8 卡且转换耗时，暂不重复接入。
+  - examples/fully_async/run-qwen3.5-9B-fully_async.sh
+  # ===== geo3k_vlm：硬阻塞（私有 Megatron fork） =====
+  # run_geo3k_qwen35.sh：Qwen3.5-35B-A3B + PYTHONPATH 挂 GitHub 私有 fork
+  # Megatron-Bridge-slime（docs/ascend_tutorial/examples/qwen3.5-9B.md 的依赖），CI 无私有 fork 访问保障。
+  - examples/geo3k_vlm/run_geo3k_qwen35.sh
+  # run_geo3k_vlm.sh：仅存在于 fork main（上游 release 树无此文件，manifest-check 无法校验），
+  # TP=4/8 卡硬编码、SLIME_SCRIPT_* env 白名单不含 NPU sglang 参数，需复刻 launcher；次轮候选。
+  - examples/geo3k_vlm/run_geo3k_vlm.sh
+  # run_geo3k_vlm_sft.sh：SFT 变体，需先手工跑 README 预处理产出 train_formatted.parquet
+  # 且走 train_async.py 的 SFT 配方，无 NPU 验证先例；暂不接入。
+  - examples/geo3k_vlm/run_geo3k_vlm_sft.sh
+  # ===== geo3k_vlm_multi_turn：阶段三候选（NPU 变体为 16 卡占位模板） =====
+  # 3 个 NPU 专用变体（run_grpo_npu.sh / run_ppo_npu.sh /
+  # npu_run_geo3k_vlm_multi_turn_qwen35_9b.sh 与 npu_run_geo3k_vlm_multi_turn_qwen35_9b.py）
+  # 均为 /path/to 占位符模板、
+  # actor 8 + rollout 8 = 16 卡分离硬编码（ASCEND_RT_VISIBLE_DEVICES=0..15）、
+  # num-rollout 3000；可接入路径：复刻 grpo_npu launcher 压到 4 卡 colocate +
+  # Qwen3-VL-2B（ModelScope 可下）+ hf-mirror 数据集。通用版
+  # run_geo3k_vlm_multi_turn.py 走 nvidia-smi/CUDA 语义需 launcher 层补 NPU 参数。
+  - examples/geo3k_vlm_multi_turn/run_geo3k_vlm_multi_turn.py
+  - examples/geo3k_vlm_multi_turn/run_grpo_npu.sh
+  - examples/geo3k_vlm_multi_turn/run_ppo_npu.sh
+  - examples/geo3k_vlm_multi_turn/npu_run_geo3k_vlm_multi_turn_qwen35_9b.sh
+  - examples/geo3k_vlm_multi_turn/npu_run_geo3k_vlm_multi_turn_qwen35_9b.py
+  # run_geo3k_vlm_multi_turn_grpo_npu.py 被 run_grpo_npu.sh 调用（execute_train_npu 组装 GRPO 参数），非独立入口。
+  - examples/geo3k_vlm_multi_turn/run_geo3k_vlm_multi_turn_grpo_npu.py
+  # run_geo3k_vlm_multi_turn_ppo_npu.py 被 run_ppo_npu.sh 调用（execute_train_npu 组装 PPO+critic 参数），非独立入口。
+  - examples/geo3k_vlm_multi_turn/run_geo3k_vlm_multi_turn_ppo_npu.py
+  # base_env.py 被 env_geo3k.py import（多轮环境基类），非独立入口。
+  - examples/geo3k_vlm_multi_turn/base_env.py
+  # env_geo3k.py 被 rollout.py import（Geo3K 多轮图文环境与本地打分），非独立入口。
+  - examples/geo3k_vlm_multi_turn/env_geo3k.py
+  # geo3k_vlm_multi_turn_config.yaml 被 train.py 以 --custom-config-path 传入（max_turns 等多轮配置），非独立入口。
+  - examples/geo3k_vlm_multi_turn/geo3k_vlm_multi_turn_config.yaml
+  # rollout.py 被 train.py 以 --custom-generate-function-path
+  # examples.geo3k_vlm_multi_turn.rollout.generate 调用（多轮 rollout 逻辑），非独立入口。
+  - examples/geo3k_vlm_multi_turn/rollout.py
+  # ===== multi_agent：阶段三候选（30B-A3B NPU 未验证 8 卡 colocate） =====
+  # run-qwen3-30B-A3B-multi-agent.sh：Qwen3-30B-A3B（bf16 约 60GB）8 卡 colocate（TP4/EP8），
+  # source 绝对路径 /root/slime、零参数覆盖、num-rollout 3000；NPU 已验证形态是 16 卡分离式
+  # （scripts/ascend_script/run-qwen3-30B-A3B-npu.sh、NPU nightly 16 卡），8 卡 colocate 未验证；
+  # 可接入路径：复刻 launcher 换 Qwen3-4B（TP2，4-8 卡）。agent_system.py 仅调 slime 自带
+  # sglang router + 本地 deepscaler RM，无外部服务。
+  - examples/multi_agent/run-qwen3-30B-A3B-multi-agent.sh
+  # agent_system.py 被 rollout_with_multi_agents.py import（solver/rewriter/selector 三角色实现），非独立入口。
+  - examples/multi_agent/agent_system.py
+  # prompts.py 被 agent_system.py import（角色 prompt 模板），非独立入口。
+  - examples/multi_agent/prompts.py
+  # rollout_with_multi_agents.py 被 run-qwen3-30B-A3B-multi-agent.sh 以
+  # --custom-generate-function-path examples.multi_agent.rollout_with_multi_agents.generate_with_multi_agents 调用，非独立入口。
+  - examples/multi_agent/rollout_with_multi_agents.py
+  # ===== on_policy_distillation：阶段二接入（teacher 规模需换小） =====
+  # run-qwen3-8B-opd.sh：sglang teacher 模式，但 teacher Qwen3-32B --tp 1 在 910B 64GB 卡放不下
+  # （bf16 约 64GB > mem-fraction 0.6 可用），student Qwen3-8B + 7 卡分离布局需整体复刻；
+  # 阶段二复刻 fork tests/tests_npu/st/test_qwen2.5_0.5B_opd_sglang_npu.py（0.5B student +
+  # 同模型 teacher，7 train + 1 teacher）的已验证配方接入。
+  - examples/on_policy_distillation/run-qwen3-8B-opd.sh
+  # run-qwen3-8B-opd-megatron.sh：megatron teacher 模式（--opd-type megatron），需预转 _torch_dist
+  # teacher 权重且 NPU 无验证先例；阶段二仅接 sglang teacher 模式。
+  - examples/on_policy_distillation/run-qwen3-8B-opd-megatron.sh
+  # run-glm4.7-30B-opd.sh：teacher Qwen3-32B --tp 4 占 4 NPU + student GLM-4.7-Flash 30B-A3B
+  # 8 NPU（ASCEND_RT_VISIBLE_DEVICES=0..15，16 卡 A2 布局），且本机 IP==TEACHER_IP 时只起
+  # teacher 不训练（分支 bug），单节点 CI 无法承接。
+  - examples/on_policy_distillation/run-glm4.7-30B-opd.sh
+  # ===== retool：阶段二接入（GLM NPU 变体需 16 卡） =====
+  # retool_glm4.7_flash_rl_npu.sh：NPU 专用脚本但面向 16 卡 A2（actor 8 + rollout 8 分离、
+  # GLM-4.7-Flash 30B-A3B 约 60GB、ASCEND_RT_VISIBLE_DEVICES=0..15），路径全为 /path/to 占位，
+  # 单节点 8 卡放不下分离布局。
+  - examples/retool/retool_glm4.7_flash_rl_npu.sh
+  # retool_qwen3_4b_sft.sh：SFT 变体（8 卡），与 RL 条目共用同一 retool 工具链；
+  # 阶段二先接 RL 路径，SFT 暂不重复接入。
+  - examples/retool/retool_qwen3_4b_sft.sh
+  # retool_qwen3_4b_rl.sh 的 CI 配方在阶段二落地（4 卡 colocate + Qwen3-4B/0.6B 复刻，
+  # sandbox 纯本地 subprocess 无 docker 依赖）；上游 .sh 本身零覆盖 + nvidia-smi/CUDA 语义，
+  # 不直接执行。
+  - examples/retool/retool_qwen3_4b_rl.sh
+  # generate_with_retool.py 被 retool_*.sh 以 --custom-generate-function-path /
+  # --custom-rm-path 调用（retool 工具调用 rollout 与奖励），非独立入口。
+  - examples/retool/generate_with_retool.py
+  # rl_data_preprocess.py 是 DAPO-Math-17k 原始集→{prompt,label} jsonl 的本地预处理脚本（一次性数据工程），非训练入口。
+  - examples/retool/rl_data_preprocess.py
+  # sft_data_processing.py 是 retool SFT 数据预处理脚本（一次性数据工程），非训练入口。
+  - examples/retool/sft_data_processing.py
+  # tool_sandbox.py 被 generate_with_retool.py import（本地 Python sandbox，正则黑名单 +
+  # subprocess + rlimit），非独立入口。
+  - examples/retool/tool_sandbox.py
+  # ===== search-r1：阶段三候选（检索依赖需 mock） =====
+  # run_qwen2.5_3B.sh：Qwen2.5-3B 4+4 卡 colocate（TP2）、数据 /root/Search-R1/data/nq_hotpotqa_train
+  # 绝对路径（需 clone GitHub PeterGriffinJin/Search-R1 + HF 数据工程预生成 parquet）；
+  # generate_with_search.py 硬编码 search_url 127.0.0.1:8000/retrieve，官方 local_dense_retriever
+  # 需 60-70GB wiki-18 索引（下载后约 132GB）且 retrieval_server.py 为 CUDA-only（model.cuda() +
+  # faiss-gpu），google 后端需 serper.dev 付费 key；可接入路径：CI 侧起本地 mock 检索服务 +
+  # 预生成 parquet 缓存，4 卡。
+  - examples/search-r1/run_qwen2.5_3B.sh
+  # generate_with_search.py 被 run_qwen2.5_3B.sh 以 --custom-generate-function-path /
+  # --custom-rm-path 调用（搜索型 rollout 与 EM 奖励），非独立入口。
+  - examples/search-r1/generate_with_search.py
+  # google_search_server.py 是 serper.dev 付费 API 代理服务（境外付费 key），CI 不可用。
+  - examples/search-r1/google_search_server.py
+  # download.py 被 README 流程调用（HF 下载 wiki-18 索引 60-70GB），一次性数据工程，非训练入口。
+  - examples/search-r1/local_dense_retriever/download.py
+  # retrieval_server.py 是 FAISS 检索服务（CUDA-only：model.cuda()、faiss-gpu），NPU 机器无法运行。
+  - examples/search-r1/local_dense_retriever/retrieval_server.py
+  # local_search_server.py 是本地检索服务（监听 8000/retrieve 供 generate_with_search 调用），非独立训练入口。
+  - examples/search-r1/local_search_server.py
+  # qa_em_format.py 被 generate_with_search.py import（QA EM 答案抽取/格式化），非独立入口。
+  - examples/search-r1/qa_em_format.py
+  # ===== strands_sglang：阶段三候选（依赖 API 漂移需冒烟） =====
+  # strands_qwen3_8b.sh：Qwen3-8B 8 卡 colocate（TP2）、num-rollout 3000、response 16384、
+  # source 绝对路径 /root/slime、零参数覆盖；依赖 camel-ai + strands-sglang（PyPI 可装、无外部
+  # 服务，SGLangModel 直连本地 router）；可接入路径：复刻 launcher 换 Qwen3-4B/1.7B 压规模；
+  # 风险是 strands-sglang 迭代快、PyPI 版与 slime 版本的 API 契约需冒烟验证。
+  - examples/strands_sglang/strands_qwen3_8b.sh
+  # generate_with_strands.py 被 strands_qwen3_8b.sh 以 --custom-generate-function-path /
+  # --custom-rm-path 调用（strands agent rollout 与奖励），非独立入口。
+  - examples/strands_sglang/generate_with_strands.py
+  # ===== tau-bench：硬阻塞（境外 LLM API 硬依赖） =====
+  # run_qwen3_4B.sh：NUM_GPUS=2/TP2/colocate 硬编码、模型 Qwen3-4B-Instruct-2507；
+  # 致命点是 generate_with_tau.py 硬编码 gemini-2.5-flash-lite 用户模拟器
+  # （TAU_CONFIGS user_model_provider: gemini）且源码强制覆写 GEMINI_API_KEY="NONE"，
+  # 不改 example 源码无法本地化，另需 clone GitHub JD-ETH/tau-bench 特定分支安装。
+  - examples/tau-bench/run_qwen3_4B.sh
+  # generate_with_tau.py 被 run_qwen3_4B.sh 以 --custom-generate-function-path /
+  # --custom-rm-path 调用（tau-bench 工具调用 rollout 与奖励），非独立入口。
+  - examples/tau-bench/generate_with_tau.py
+  # openai_tool_adapter.py 被 generate_with_tau.py import（OpenAI 工具协议适配），非独立入口。
+  - examples/tau-bench/openai_tool_adapter.py
+  # sglang_tool_parser.py 被 generate_with_tau.py import（sglang FunctionCallParser 工具解析），非独立入口。
+  - examples/tau-bench/sglang_tool_parser.py
+  # trainable_agents.py 被 generate_with_tau.py import（可训练 agent 轨迹组装），非独立入口。
+  - examples/tau-bench/trainable_agents.py
+  # tau1_mock.py 是离线数据生成脚本（tau-bench 任务索引导出 jsonl，不 mock rollout），一次性数据工程。
+  - examples/tau-bench/tau1_mock.py
+  # ===== train_infer_mismatch_helper：阶段三候选（复刻成本最低） =====
+  # run-qwen3-4b-mis.sh：Qwen3-4B 8 卡（TP2 x CP2）colocate、source 绝对路径 /root/slime、
+  # wandb 无条件开启、num-rollout 3000 全硬编码；可接入路径：复刻 launcher（CP 2→1 规避风险、
+  # 换 Qwen3-0.6B、4 卡），mis.yaml/mis.py 仓内相对参数可直接复用。
+  - examples/train_infer_mismatch_helper/run-qwen3-4b-mis.sh
+  # mis.py 被 train.py 以 --custom-tis-function-path
+  # examples.train_infer_mismatch_helper.mis.compute_mis_weights_with_cp 调用（MIS 权重计算），非独立入口。
+  - examples/train_infer_mismatch_helper/mis.py
+  # mis.yaml 被 train.py 以 --custom-config-path 传入（IS/RS 超参），非独立入口。
+  - examples/train_infer_mismatch_helper/mis.yaml

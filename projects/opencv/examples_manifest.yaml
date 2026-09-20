@@ -25,31 +25,40 @@ version: 1
 #                              snippets(19)/tutorial_code(67) 86
 #   unsupported             53 = python 27（GUI 24 + cpu_only 3）
 #                              + dnn 26（GUI 24 + 设备 1 + 评估管线 1）
-#   supported                4 = samples/dnn 5.0.0 新增 LLM/VLM 推理
+#   supported                1 = NPU DNN CANN smoke（Quick-start 子集，
+#                              self-hosted in projects/opencv/scripts/
+#                              test_npu_dnn.py，详见 supported 段注）
 # 另：.sh 5 个全为 samples/install 安装脚本（exclude）；samples/cpp
 # (289 .cpp) + java/android/swift/winrt/winrt_universal/wp8/gpu/tapi/
 # hal/semihosting/directx/opengl/opencl/sycl/va_intel 等平台树
 # （~890 文件）矩阵不跑（cpp_matrix_skip，见 unsupported 末段）。
 #
-# === NPU 看护现状（重要）===
-# 4 个 supported 样本源码不含 setPreferableBackend/Target，也没有
-# --backend 参数：readNetFromONNX 走默认 DNN_BACKEND_OPENCV——当前
-# 看护的是"源码构建 opencv 的 dnn LLM 推理链路（readNetFromONNX +
-# cv.dnn.Tokenizer + 自回归 decode）可用性"（CPU 腿）。CANN/NPU 腿
-# 待上游暴露 backend 参数后经 overlay 注入（5.0.0 onnx_importer2
-# 新引擎不支持非 CPU 后端，需 OPENCV_DNN_ENGINE=1 classic——经验来
-# 自已退役的 quickstart_dnn_inference.py）。源码构建本身含 CANN 后
-# 端这件事由 setup_example.sh 第 5 步 DNN_BACKEND_CANN != 0 断言看护。
+# === NPU 看护现状 ===
+# supported 段当前是 1 个 Quick-start 风格的 DNN CANN+NPU smoke
+#（mobilenetv2-12.onnx + OPENCV_FORCE_DNN_ENGINE=1 + DNN_BACKEND_CANN
+# + DNN_TARGET_NPU + 期望 top-1=372 patas monkey）。这条腿真正走
+# classic 引擎的 switchToCannBackend → GE 编译 → NPU forward，看护
+# 的是"源码构建 opencv 的 NPU 推理端到端链路"。源码构建本身含
+# CANN 后端的事由 setup_example.sh 第 5 步 DNN_BACKEND_CANN != 0 断
+# 言提前看护。
 #
-# === 模型来源 ===
-# 全部走 seed workflow 预置到 ${FIXTURE_DIR}/models/ 下（网络问题不
-# 归本 manifest 管），overlay 只注入路径。统一契约：每个模型目录含
-# model.onnx（vlm 为 siglip/embedding/gemma 三段）+ config.json
-# （cv.dnn.Tokenizer.load 兼容格式，opencv_extra/testdata/dnn/llm/*/
-# config.json 风格）。gpt2 文档中的 tiktoken 仅用于自行导出模型，
-# 推理本体零第三方依赖（numpy + argparse + cv2）。seed 落地前
-# manifest-check 照常通过（只验脚本路径在 target 树存在），run-example
-# 会因模型缺失失败——这是预期 bring-up 状态。
+# === 5.0.0 LLM/VLM 推理样本（已退役出 supported）===
+# 此前 supported 列了 samples/dnn/gpt2_inference.py /
+# gemma3_inference.py / qwen_inference.py / vlm_inference.py 四个
+# 5.0.0 新增的 headless LLM/VLM 推理脚本。它们零非 cv2 依赖、纯
+# readNetFromONNX + cv.dnn.Tokenizer 自回归 decode，但每条都需要
+# 用户按各脚本 docstring 自行 export 的多 GB ONNX + opencv 风格
+# tokenizer config.json：
+#   - gpt2_inference.py  需要 fix-dynamic-axis 导出版（脚本固定
+#     窗口约束），onnx/models 的 gpt2-10.onnx 动态轴不可用。
+#   - gemma3_inference.py / qwen_inference.py  要 optimum-cli 从
+#     google/gemma-3-1b-it / Qwen2.5-0.5B-Instruct 重导。
+#   - vlm_inference.py    要 3 段（siglip + embedding + gemma2）
+#     多 GB ONNX，HF 镜像 xet 备份从 CN runner 拉不通。
+# 在上游补上模型种子 workflow（cache-seed 类，命中 shared hf cache
+# 根）之前没法跑通；因此从 supported 撤出。这与原 manifest §"未实
+# 跑验证（模型 seed 未接）"是同一判断。源码构建本身含 CANN 后端
+# 这件事继续由 setup_example.sh 第 5 步看护。
 
 scan:
   root: samples
@@ -97,68 +106,37 @@ scan:
     - '**/CMakeLists.txt'
 
 supported:
-  # ===== 5.0.0 新增 LLM/VLM 推理样本（samples/dnn）=====
-  # 入选标准（samples 树里同时满足的只有这 4 个）：
-  #   (1) headless——无 namedWindow/imshow/waitKey/摄像头；
-  #   (2) readNetFromONNX 纯推理；
-  #   (3) 零第三方依赖——numpy + argparse + cv2，tokenizer 走
-  #       cv.dnn.Tokenizer.load；
-  #   (4) 结果 print 到 stdout，无交互。
-  # 共性限制见文件头"NPU 看护现状"：默认 OPENCV CPU backend。
-  # 未实跑验证（模型 seed 未接）；首跑预期失败点 = 模型缺失。
-
-  # GPT-2 文本生成：124M ONNX，自回归 decode。注意脚本要求 prompt
-  # 长度与模型导出时的固定窗口一致（seed 契约：导出窗口 = 默认
-  # prompt 长度）。
-  - path: samples/dnn/gpt2_inference.py
+  # ===== NPU DNN CANN smoke（Quick-start 子集）=====
+  # 走 Quick-start-Ascend.md §"跑 DNN 推理" 的核心子集：mobilenetv2-12
+  # + OPENCV_FORCE_DNN_ENGINE=1 + DNN_BACKEND_CANN + DNN_TARGET_NPU。
+  # path 是相对 target 的 '..' 跳出，指向本仓库
+  # projects/opencv/scripts/test_npu_dnn.py —— 这个脚本是 self-hosted
+  # 的 NPU 端到端 smoke（无第三方依赖，零 patch），原 manifests 的
+  # 4 个 LLM/VLM supported 因模型种子 workflow 未接入已撤出（见文件
+  # 头 "5.0.0 LLM/VLM 推理样本（已退役出 supported）" 段）。
+  #
+  # overlay_args 全是 fixture / target 解析：
+  #   --model      mobilenetv2-12.onnx，13.9 MB，CI 入仓（projects/
+  #                opencv/fixtures/），setup_example.sh step 4 已拷到
+  #                $TARGET_ROOT/fixtures/ 备用
+  #   --input      baboon.jpg 512x512，setup step 4 已从 upstream
+  #                samples/data/ 拷到 $TARGET_ROOT/fixtures/
+  #   --imagenet-topk  5（默认打印 top-5，落地日志看 class score 分布）
+  #   --expected-top1  372（ImageNet-1k patas / hussar monkey 类，与
+  #                     Quick-start 文档预期完全一致；CPU 参考 ≈ 0.91）
+  #
+  # 期望：GE 编译 + NPU forward 出 top-1=372，exit 0。GE 编译首腿约
+  # 0.5–1 min，整腿在 NPU box 端到端 ≈ 2–4 min（CI 25 min 充足）。
+  - path: ../workflows/projects/opencv/scripts/test_npu_dnn.py
     profile: opencv
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --model ${FIXTURE_DIR}/models/gpt2/model.onnx
-      - --tokenizer_path ${FIXTURE_DIR}/models/gpt2/config.json
-      - --max_seq_len 8   # 默认 32：压生成步数（CPU 腿每步一次全 forward）
-    timeout_minutes: 30
-
-  # Gemma3 文本生成（--use_kv_cache 需 causal-lm-with-past 导出版，
-  # 默认关；seed 契约提供无 past 版即按默认跑）。
-  - path: samples/dnn/gemma3_inference.py
-    profile: opencv
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model ${FIXTURE_DIR}/models/gemma3/model.onnx
-      - --tokenizer_path ${FIXTURE_DIR}/models/gemma3/config.json
-      - --max_new_tokens 4   # 默认 64：1B 模型 CPU 腿压时长
-    timeout_minutes: 45
-
-  # Qwen2.5 文本生成（kv-cache 语义同上）。
-  - path: samples/dnn/qwen_inference.py
-    profile: opencv
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model ${FIXTURE_DIR}/models/qwen2.5/model.onnx
-      - --tokenizer_path ${FIXTURE_DIR}/models/qwen2.5/config.json
-      - --max_new_tokens 4   # 默认 64：0.5B CPU 腿压时长
-    timeout_minutes: 45
-
-  # PaliGemma2-3B 视觉语言：siglip 视觉编码 + embedding + gemma2 三段
-  # ONNX 串接（~12GB fp32，910B 侧无显存问题，CPU 腿吃 host RAM）。
-  # 输入图用仓内 samples/data/baboon.jpg（setup 已另行拷贝一份到
-  # fixtures/，此处直接用 target 树原生路径）。
-  - path: samples/dnn/vlm_inference.py
-    profile: opencv
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --siglip ${FIXTURE_DIR}/models/paligemma2/siglip.onnx
-      - --embedding ${FIXTURE_DIR}/models/paligemma2/embedding.onnx
-      - --gemma ${FIXTURE_DIR}/models/paligemma2/gemma.onnx
-      - --tokenizer_path ${FIXTURE_DIR}/models/paligemma2/config.json
+      - --model ${FIXTURE_DIR}/mobilenetv2-12.onnx
       - --input ${TARGET_ROOT}/samples/data/baboon.jpg
-      - --max_new_tokens 4   # 默认 64：3B CPU 腿压时长
-    timeout_minutes: 90
+      - --imagenet-topk 5
+      - --expected-top1 372
+    timeout_minutes: 25
 
 # ===== unsupported =====
 # 源码重析后的完整清单（53 项 .py + 平台树）。分段：

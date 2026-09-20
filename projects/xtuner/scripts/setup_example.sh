@@ -66,8 +66,29 @@ raise SystemExit(
     return
   fi
   echo "installing torch==2.11.0 torch_npu==2.11.0"
-  pip_ascend -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
-      torch==2.11.0
+  # The 148MB torch+cpu aarch64 wheel is the long pole of setup — CI run
+  # 35483448757 (2026-09-20) saw each leg print the "Downloading torch-
+  # 2.11.0+cpu... (148.1 MB)" banner then hang for 28+ min before the
+  # 30-min job timeout kicked in. Split download from install so a slow
+  # link can be retried with curl's byte range resume, and so pip
+  # install runs against a local wheel (no pip resolver round-trip).
+  XTUNER_WHEEL_DIR=/tmp/xtuner-wheels
+  mkdir -p "$XTUNER_WHEEL_DIR"
+  if [[ ! -f "$XTUNER_WHEEL_DIR/torch-2.11.0+cpu-cp312-cp312-manylinux_2_28_aarch64.whl" ]]; then
+    local wheel_url="https://mirrors.aliyun.com/pytorch-wheels/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl"
+    curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors --max-time 1500 \
+      -C - -o "$XTUNER_WHEEL_DIR/torch-2.11.0+cpu-cp312-cp312-manylinux_2_28_aarch64.whl" \
+      "$wheel_url" \
+      || pip_ascend -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
+  fi
+  if [[ -f "$XTUNER_WHEEL_DIR/torch-2.11.0+cpu-cp312-cp312-manylinux_2_28_aarch64.whl" ]]; then
+    # --no-deps so pip doesn't try to also pull filelock/networkx/jinja2
+    # from --no-index (the local dir only has torch). Those deps come
+    # along via the runtime-deps pip install below, which goes back to
+    # the aliyun / cluster indexes.
+    pip_ascend --no-deps --no-index --find-links "$XTUNER_WHEEL_DIR" torch==2.11.0 || \
+      pip_ascend -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.11.0
+  fi
   pip_ascend torch_npu==2.11.0
 }
 
@@ -118,13 +139,16 @@ setup_xtuner-llm() {
   python -m pip install --no-deps -e "$TARGET_ROOT" 2>&1 | tail -3
   # runtime deps — verbatim from Quick-start-Ascend.md `xtuner-install-binary`
   # block (applies on top of xtuner==0.2.0 too; matches verified stack).
+  # torch / torch_npu already installed by ensure_torch_stack; do not
+  # re-list them here, or pip would redownload the 148 MB torch wheel.
+  # Use PIP_CONSTRAINT (set above) to keep mmengine from pulling a
+  # fresh torch==2.x range marker and re-downloading torch.
   python -m pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu \
       'mmengine==0.10.6' 'transformers==4.48.0' 'peft>=0.14.0' \
       'datasets>=3.2.0,<4.0.0' einops loguru openpyxl 'scikit-image' scipy \
       SentencePiece tiktoken transformers_stream_generator cyclopts \
       'opencv-python-headless<=4.12.0.88' 'torchvision==0.26.0+cpu' \
-      timm pyarrow pydantic tensorboard xxhash imageio 'py-libnuma' GitPython \
-      'torch==2.11.0' 'torch_npu==2.11.0'
+      timm pyarrow pydantic tensorboard xxhash imageio 'py-libnuma' GitPython
   python -c "
 import torch, torch_npu
 assert torch.__version__.startswith('2.11.0'), f'torch drifted to {torch.__version__}'
@@ -182,6 +206,14 @@ PY
 #!/usr/bin/env bash
 # Launcher used by supported demo_data/*/config.py entries. Manifest
 # invokes it as `xtuner_train_demo.sh <cfg-path> <overlay args>`.
+# run_example.sh's *.sh branch sets cwd to $TARGET_ROOT/scripts/ before
+# invoking this launcher (matches torchtitan's `tune run` launcher
+# pattern), but xtuner.tools.train reads the cfg via `osp.isfile(...)`
+# which is cwd-relative. The manifest cfg path is relative to the
+# release checkout (e.g. `examples/demo_data/multi_turn_2/config.py`),
+# so this launcher must cd back to $TARGET_ROOT before invoking the
+# train module. TARGET_ROOT is exported by run_example.sh.
+cd "${TARGET_ROOT:?TARGET_ROOT is required}" || exit 1
 exec python -m xtuner.tools.train "$@"
 SH
   chmod +x "$TARGET_ROOT/scripts/xtuner_train_demo.sh"

@@ -25,17 +25,16 @@
 # sd-turbo, ~3.4 GB) via ModelScope snapshot_download, so the ModelScope
 # cache is bind-mounted to the host
 # (/data/ci-cache/modelscope/stable-diffusion-webui) to keep the
-# downloaded weights persistent across runs. The self-hosted NPU
-# runner (linux-aarch64-a2-1) auto-passes /dev/davinci* into the
-# container via the cluster device-plugin.
+# downloaded weights persistent across runs. The pip cache is also
+# bind-mounted to avoid re-downloading wheels across runs. The
+# self-hosted NPU runner (linux-aarch64-a2-1) auto-passes /dev/davinci*
+# into the container via the cluster device-plugin.
 
 name: stable-diffusion-webui-quick-start
 
 concurrency:
-  # Fixed group: manual and schedule runs share one serial queue. The
-  # venv (/tmp/sd-webui-venv) is bind-mounted to the host and shared
-  # across runs, so concurrent runs would race on it; serializing also
-  # matches the single-NPU physical constraint of the runner.
+  # Fixed group: manual and schedule runs share one serial queue,
+  # matching the single-NPU physical constraint of the runner.
   group: stable-diffusion-webui-quick-start
   # cancel-in-progress: false because (1) a schedule run cancelled
   # mid-way loses its outcome writeback - the outcome is what makes
@@ -69,19 +68,10 @@ jobs:
       container_options: >-
         --volume=/data/ci-cache/modelscope/stable-diffusion-webui:/root/.cache/modelscope
         --volume=/data/ci-cache/pip:/root/.cache/pip
-        --volume=/data/ci-cache/uv-cache:/root/.cache/uv
-        --volume=/data/ci-cache/uv-python:/root/.local/share/uv/python
-        --volume=/data/ci-cache/sd-webui-venv:/tmp/sd-webui-venv
-      # Bind mounts persist four caches on the host across runs:
+      # Bind mounts persist two caches on the host across runs:
       # 1. ModelScope weights (AI-ModelScope/sd-turbo, ~3.4 GB);
-      # 2. pip wheel cache (torch/gradio/etc downloaded once; pip still
-      #    re-installs but never re-downloads);
-      # 3. uv download cache + managed CPython 3.10 (no more github
-      #    round-trip for the py3.10 toolchain);
-      # 4. the whole py3.10 venv at the SAME container path
-      #    (/tmp/sd-webui-venv, shebang-safe) — the doc's install block
-      #    verifies it via import + version asserts and skips the
-      #    ~30 min rebuild when valid.
+      # 2. pip wheel cache (wheels downloaded once; pip still
+      #    re-installs but never re-downloads).
       timeout_minutes: 180
       upstream_repo: AUTOMATIC1111/stable-diffusion-webui
       # Raw URL the engine's monitor hashes and the test fetches;

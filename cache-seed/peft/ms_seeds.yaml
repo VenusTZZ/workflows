@@ -33,6 +33,16 @@ seeds:
   - ms_id: facebook/dinov2-base
     hf_id: facebook/dinov2-base
     kind: model
+  # peft_adalora_seq2seq.py 硬编码 facebook/bart-base。ModelScope 在原 id
+  # 下有镜像（AI-ModelScope/bart-base 不存在，试过 404）
+  - ms_id: facebook/bart-base
+    hf_id: facebook/bart-base
+    kind: model
+  # feature_extraction/peft_lora_embedding_semantic_search.py 的 overlay
+  # --model_name_or_path（bare id 走 hub cache 解析）
+  - ms_id: AI-ModelScope/all-MiniLM-L6-v2
+    hf_id: sentence-transformers/all-MiniLM-L6-v2
+    kind: model
   # adamss/no_lora 用 glue mrpc，adamss_manual 默认 cola（只取这两个
   # 子树，避免 140MB 全量 9 configs）
   - ms_id: nyu-mll/glue

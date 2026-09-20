@@ -110,15 +110,16 @@ flowchart TD
 
 推论：薄触发器完全不感知矩阵；「加一条 supported 只改清单」的既有收益原样保留。
 
-#### 2.4.2 只监控 release；无 release 是一等公民状态
+#### 2.4.2 监控 release + workflow-files 两信号；无 release 是一等公民状态
 
-只保留 release 一个触发信号，无 fallback 链：
+保留 release 触发信号为主，另加 workflow-files 信号覆盖本仓看护本身的变化，无 fallback 链：
 
 1. **被测对象由 release 决定**：example 的行为 = example 脚本 × 它依赖的软件版本。脚本与依赖同时定版的公开时点就是发版——release tag 是「这次该测什么版本」的完整答案。main 上的中间态（无论改 src 还是改 examples）不是稳定被测对象，需要验证时用 `workflow_dispatch` 指定 ref 手动跑（仓库恒为 `upstream_repo`，界面上不提供仓库选择）。
-2. **NPU 占用最小化**：release 频率天然有限（peft 约每 1~2 月一版），schedule 轮询几乎永远只花免费 ubuntu-latest 上的几秒钟；三信号时代的 main HEAD 高频触发问题从机制上消失，schedule 可以常开。
-3. **无 release 的语义是「如实显示」，不是「想办法触发」**：`/releases/latest` 404 或解析不到 tag 时，monitor 在日志与 step summary 写明 no release，`need_to_run=false`，本次 run 在 monitor 后结束——不产生 result.json、不占 NPU。quick start 引擎的 fallback 链（prerelease → tags → HEAD）**不移植**：那条链存在是因为 quick start 必须解析出一个可测 ref；examples 看护面对「上游从未发版」时没有东西可测，如实报告即可，把版本信号退化成 commit 监控只会把删掉的高频触发从后门加回来。
+2. **workflow-files 信号**：本项目相关文件（`projects/<project>/**` + `.github/workflows/<project>-examples.yml`）在 main HEAD 上的 blob/tree SHA 合成 hash 变了 → 在最新 release tag 上重跑一次。共用 `.monitor` 的 `last_workflow_files_hash` 字段；fire 时 `reason=workflow-files`，ref 与 release 信号 fire 时同源（最新 release tag）。priority: release > workflow-files——release fire 时 reason 与 ref 仍取 release 信号，workflow-files 仅在 release 未 fire 时生效。两信号共用同一 `need_to_run` 输出。
+3. **NPU 占用最小化**：release 频率天然有限（peft 约每 1~2 月一版），schedule 轮询几乎永远只花免费 ubuntu-latest 上的几秒钟；三信号时代的 main HEAD 高频触发问题从机制上消失，schedule 可以常开。workflow-files 信号单次 tree API 调用，与 release 同价；本仓文件改动是低频事件，fire 不频繁。
+4. **无 release 的语义是「如实显示」，不是「想办法触发」**：`/releases/latest` 404 或解析不到 tag 时，release 信号 `release_ref` 输出空、`need_to_run` 不被 set；本次 run 在 monitor 后结束——不产生 result.json、不占 NPU。quick start 引擎的 fallback 链（prerelease → tags → HEAD）**不移植**：那条链存在是因为 quick start 必须解析出一个可测 ref；examples 看护面对「上游从未发版」时没有东西可测，如实报告即可，把版本信号退化成 commit 监控只会把删掉的高频触发从后门加回来。
 
-信号值比较键是 release tag；API 请求失败（空值）视为「信号未知」，不触发、不前滚状态，与 no-release 同样走 need_to_run=false 路径（区别只在日志措辞）。
+信号值比较键是 release tag；API 请求失败（空值）视为「信号未知」，不触发、不前滚状态，与 no-release 同样走 need_to_run=false 路径（区别只在日志措辞）。workflow-files 的 tree API 同理：空响应视为信号未知，不前滚 `last_workflow_files_hash`。
 
 #### 2.4.3 状态拓扑：restore 与 save 分离，run 内单次保存
 
@@ -351,6 +352,7 @@ GET /repos/<upstream_repo>/releases/latest    → release 信号（tag_name）
 
 | 日期 | 变更内容 | 原因 |
 |------|----------|------|
+| 2026-09-20 | 新增 workflow-files 信号：`monitor-release` step 改名为 `monitor`，内部分两信号区块（release + 本项目文件 SHA），共用 `.monitor` state。监控本项目相关文件（`projects/<project>/**` + `.github/workflows/<project>-examples.yml`）在 main HEAD 上的 blob/tree SHA 合成 hash，变化即 fire `reason=workflow-files`，ref 取最新 release tag。priority release > workflow-files。两信号共用同一 `need_to_run` 输出。`.monitor` 文件新增 `last_workflow_files_hash` 字段；decide step 简化为 4 行透传。 | 用户要求：本仓 example 监控相关文件改动也能触发看护，无需等 6 小时 schedule。复用 monitor-release 的 release API 调用作 ref，workflow-files step 不重复调 release；fire-and-forget，不防 retry 风暴（与现有 release 信号同形，靠 release-outcome=failure 推动 release-retry）。 |
 | 2026-09-16 | 引擎新增可选输入 `examples_repo`（分离模式）：example 脚本与被测软件分属两仓时（如 deepspeed：监控 `deepspeedai/DeepSpeed`，脚本在 `deepspeedai/DeepSpeedExamples`），examples 单独 checkout 到 `examples/`（跟默认分支）并以 `EXAMPLES_ROOT` 暴露；`target` 与 `TARGET_ROOT` 语义不变（被测仓 `@ target_ref`），setup 安装契约对所有项目同形。存量步骤零修改，不传输入时行为与此前逐字一致。 | PR 评审：原方案给存量 checkout 加条件并新引 `UPSTREAM_ROOT`；改为「只加步骤、不动存量」后回归面更小、契约更统一。代价是分离模式下 manifest-check 多一次主仓 checkout（免费 runner，可接受）。examples 仓跟默认分支而非 main：DeepSpeedExamples 默认分支为 master，且 release tag 跨仓不存在。 |
 | 2026-09-10 | 初版设计：examples 看护引擎化（引擎 + 薄触发器），监控信号由三（examples / release / commit）收敛为二（examples / release），scan.root 单一事实源，以 peft 为首个接入示例。 | 14 份复制式 examples workflow 维护成本高；commit 信号 NPU 占用过高致 schedule 停用；quick start 已验证引擎化形态。 |
 | 2026-09-10 | monitor state cache key 改为严格格式 `examples-monitor-state-<project>_<run_id>`：项目名禁 `_`、`_` 作终止分隔符、项目名移到尾部；配套三道运行时校验（project 输入校验、matched-key 断言、`.project` 属主标签）。 | 评审确认：`-` 分隔时项目名互为前缀（peft / peft-npu 类）可致 restore-keys 跨项目串扰，且 GitHub 缓存无 namespace 隔离机制；分隔符与名字字符集互斥可获得构造性保证，尾部命名同时支持按引擎前缀整体审计（gh cache list）。 |

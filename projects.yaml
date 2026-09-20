@@ -250,6 +250,12 @@ projects:
     runner: linux-aarch64-a2-1
     dir: projects/slime
     workflows:
+      # Examples guard on the shared engine (examples-template.yml).
+      # The guarded upstream is THUDM/slime (release-only trigger signal +
+      # manifest-check tree); the tested code is the gitcode NPU fork
+      # Ascend/slime-ascend main HEAD, cloned and installed by
+      # projects/slime/scripts/setup_example.sh. See projects/slime/README.md.
+      examples: .github/workflows/slime-examples.yml
       quick_start: .github/workflows/slime-quick-start.yml
   # specforge quick start runs an end-to-end 1-step training smoke on
   # 4-card NPU: installs torch 2.11.0 / torch_npu 2.11.0 / sglang 0.5.14

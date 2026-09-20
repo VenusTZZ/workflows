@@ -71,11 +71,13 @@ def validate(supported: list[dict], target_root: Path
             entry['exec'] = exec_path.strip()
         if launcher is not None:
             entry['launcher'] = launcher.strip()
-        # Display name for the run-example job label: basename of path
-        # with extension stripped (e.g. examples/sft/run_peft.sh ->
-        # run_peft). Workflow templates use this so the matrix leg label
-        # is the script name rather than its full relative path.
-        entry['name'] = PurePosixPath(path).stem
+        # Display name for the run-example job label: full relative path
+        # with the extension stripped (examples/sft/run_peft.sh ->
+        # examples/sft/run_peft; a bare foo.py -> foo). Uniform and
+        # unique - same-named scripts in different directories get
+        # distinct labels (peft's five */train_dreambooth.py used to
+        # collapse to a single "train_dreambooth").
+        entry['name'] = str(PurePosixPath(path).with_suffix(''))
         entries.append(entry)
     return entries, errors
 
