@@ -115,7 +115,7 @@ setup_specforge() {
   echo "installing specforge from $TARGET_ROOT"
   python -m pip install --no-deps "$TARGET_ROOT"
   python -m pip install \
-    "click>=8.0" "accelerate" "huggingface_hub<1.0" "pyyaml" "tqdm" \
+    "click>=8.0" "accelerate" "pyyaml" "tqdm" \
     "pydantic" "psutil" "safetensors" "requests" "typing-extensions"
   python -c "import specforge, click; print('specforge', getattr(specforge, '__version__', 'unknown'), '/ click', click.__version__)"
 
