@@ -2,21 +2,11 @@ version: 1
 scan:
   root: recipes
   include_extensions: ['.py']
-  # 三层互斥模型，**exclude 只放"不是 entry point"的东西**：
-  #   scan.exclude — 扫描阶段不进入（包初始化、YAML 配置整目录、upstream
-  #                  实验区整目录、SLURM 启动器、markdown 文档）
-  #   supported    — 实跑过 exit 0 的 recipe
-  #   unsupported  — 扫描到了但实跑 fail 的 recipe（必须附实测堆栈）
-  # 任何出现在 scan.exclude 的路径都不应再出现在 unsupported 里。
-  # files-only 模型（docs/examples-guard-engine.md §2.7）。exclude 项为目录
-  # 路径（递归剪枝）或 glob（`**` 跨目录，匹配相对 target root 的路径）。
-  # examples 引擎不扫描，本段当前只是声明。
-  exclude:
-    - recipes/__init__.py                # 包初始化（import 会 ModuleNotFoundError）
-    - recipes/configs/                  # YAML 配置整目录，需要 recipe 文件驱动，不可独立 launch
-    - recipes/dev/                      # upstream 实验性/早期/论文复现区（README 状态表 GRPO single-device 标 🚧=WIP；generate_v2 是 generate 实验版；early_exit_finetune/layer_dropout 是 LayerSkip/LITE/LayerDrop 论文复现；grpo 走 torchtune.dev.grpo 包而 pyproject 没暴露 torchtune.dev 子包，import 必炸）
-    - recipes/quantization.md           # 文档（quantize 配套说明）
-    - recipes/full_finetune_multinode.slurm  # SLURM 启动器（需要集群调度）
+  # files-only 模型（docs/examples-guard-engine.md §2.7）：对账单位是
+  # 入口文件 .py。非 entry point 的包初始化 / YAML 配置 / 文档 / SLURM
+  # 启动器若被扫描命中，会落到 unsupported（其扫描后缀与本仓 examples
+  # 树里几乎不出现，仅作声明）；所有"已识别不是 example"的条目都列在
+  # unsupported 段。examples 引擎不扫描，本段只是声明。
 
 supported:
   # ===== 已在 coder hdc-stable-npu-3（910B4×2, torch 2.11.0+cpu, torch_npu 2.11.0,
@@ -211,11 +201,6 @@ supported:
     timeout_minutes: 60
 
 # ===== unsupported（每条附 runtime-verified 标签 + 实测失败堆栈） =====
-# 2026-09-15 在 coder hdc-stable-npu-4（910B4×2, torch 2.12.0+cpu, torch_npu 2.12.0,
-# CANN 9.x）逐例跑：recipes/dev/* 4 个文件（multi_dataset/early_exit/generate_v2_dist/grpo）
-# 已经在 scan.exclude 里随 recipes/dev/ 整目录排除，本段不再列入。
-# 剩下 10 个文件全是 recipes/ 顶层的分布式或多卡路径，torch_npu 没 NCCL 必崩；
-# 3 个 single-device 缺配套依赖，无法启动。
 unsupported:
   # ===== runtime-verified: NCCL 在 init_process_group 抛 RuntimeError =====
   # 8 个 distributed recipes 全部在 `_patched_new_process_group_helper`（torch_npu
@@ -241,13 +226,9 @@ unsupported:
   # `_value_checkpointer.load_checkpoint()` + `reward_checkpointer.load_checkpoint()`
   # 两个独立外部权重，0.5B Instruct 没有现成 RM/VM checkpoint
   - recipes/ppo_full_finetune_single_device.py
-  # eleuther_eval.py:16 `from lm_eval.evaluator import evaluate` → `ModuleNotFoundError:
-  # No module named 'lm_eval'`（runner 不预装 lm-eval；即便装上，task dict 默认
-  # 走 HF 下载 hellaswag/arc 等，CI 不可控）。2026-09-17 改：setup_example.sh
-  # 装 `lm-eval==0.4.5`（recipe `version("lm-eval") < "0.4.5"` 是字符串比较
-  # 而不是 packaging.version，0.4.10-0.4.49 全被误拒），manifest 加
-  # fixtures/eleuther_tasks/ci_truthfulqa_mc2.yaml + fixtures/ci_truthfulqa_2.json
-  # 自定义任务走 include_path，绕开 HF 拉取，recipe 转 supported（见
-  # supported: 块对应 entry；2026-09-17 在 coder hdc-stable-npu-2 端到端
-  # 跑通 exit 0，acc=1.0 / 0.92s / 1.56GB HBM）
-  # - recipes/eleuther_eval.py
+
+
+  - recipes/__init__.py
+  - recipes/configs/
+  - recipes/dev/
+  - recipes/full_finetune_multinode.slurm

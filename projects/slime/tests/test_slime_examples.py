@@ -93,8 +93,6 @@ def test_unsupported_entries_carry_inline_comments() -> None:
 
     for path in unsupported_paths(manifest):
         assert commented_mentions(path), f"no ledger comment mentions {path}"
-    excluded = set(manifest["scan"]["exclude"])
-    assert excluded, "scan.exclude should not be empty"
 
 
 def test_scan_config_targets_fork_examples_tree() -> None:
@@ -103,7 +101,12 @@ def test_scan_config_targets_fork_examples_tree() -> None:
     assert scan["root"] == "examples"
     assert ".sh" in scan["include_extensions"]
     assert ".py" in scan["include_extensions"]
-    assert "examples/__init__.py" in scan["exclude"]
+    # scan.exclude was retired 2026-09-20; the package marker is now a
+    # ledger entry in `unsupported`.
+    assert "exclude" not in scan
+    unsupported = unsupported_paths(manifest)
+    assert "examples/__init__.py" in unsupported
+    assert "examples/tau-bench/token_delta.py" in unsupported
 
 
 def test_fixture_rows_match_dapo_schema() -> None:

@@ -70,8 +70,9 @@ jobs:
             # the shared NPU runner. The supported entry is the
             # self-hosted NPU DNN CANN smoke (projects/opencv/scripts/
             # test_npu_dnn.py); the setup leg still source-builds
-            # opencv-cann on this runner (~25 min cold / cached
-            # after the first run), so serialization matters. The 5
+            # opencv-cann on this runner (~23 min cold @-j2; the
+            # k8s runner pods are ephemeral so this never caches),
+            # so serialization matters. The 5
             # doc-snippet CPU algorithms run as a setup_example.sh
             # step-5 sanity check, not matrix legs.
             max_parallel: 1

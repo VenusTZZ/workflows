@@ -2,17 +2,12 @@ version: 1
 scan:
   # specforge 的 "examples" 形态特殊：训练入口是 specforge CLI（不是各 example
   # 自带 python 脚本），recipe 是 typed YAML，shell wrapper 只是把 CONFIG=
-  # 翻译成 `specforge train --config <path>`。files-only 模型同样适用：
-  # 入口源文件就是 yaml config / sh script / py utility，helper / 实现细节走
-  # exclude 过滤（与 peft 同模式）。
+  # 翻译成 `specforge train --config <path>`。files-only 模型：
+  # 入口源文件 = yaml config / sh script / py utility；include_extensions
+  # 只收 .sh / .py / .yaml，.ipynb / .md / 图像 / 字体天然不进。
+  # YAML recipes 是被消费的入口，不是 helper，所以默认 include 进来。
   root: examples
   include_extensions: ['.sh', '.py', '.yaml']
-  # YAML recipes 在 specforge 里是"被消费的入口"，不是 helper，所以默认
-  # include 进来。.ipynb / .md / 图像 / 字体均不进。
-  exclude:
-    - '**/__pycache__'
-    - '**/assets'             # 全部是 PNG（论文截图），不是 example
-    - '**/README.md'          # 文档
 
 supported:
   # ===== 在 coder sglang-hdc（910B4×4，torch 2.10.0 + torch_npu 2.10.0 +
@@ -61,6 +56,11 @@ supported:
       # trainer 进程数压到 1：recipe 默认 nproc_per_node=8 是按 8 卡 A2 pod 调的，
       # smoke 只用卡 1 跑 trainer，单进程足够；卡 0 给 sglang capture server。
       - deployment.trainer.nproc_per_node=1
+      # receive_buffers 显式回退 pageable：上游把默认值改成 pinned 后，NPU 上
+      # pin 判定走 torch.cuda.is_available() 恒为 False，pageable host buffer
+      # register_buffer 返回 -600 变成硬 RuntimeError；pageable 走 get_into 老路径
+      # 正常。与 Quick-start-Ascend.md smoke-train-launch 保持一致。
+      - deployment.disaggregated.receive_buffers=pageable
       # target model 路径：recipe 默认 Qwen/Qwen3.5-4B（HF Hub，runner 不可达），
       # 覆成 setup_example.sh 从 ModelScope 预下载并 export 的本地路径。
       - model.target_model_path=${SPECFORGE_MODEL_PATH}
@@ -248,3 +248,10 @@ unsupported:
   # 没有意义），所以统一通过 yaml config 条目覆盖；这两个 sh 列为 unsupported 仅作清单完整性。
   - examples/disagg/run_online.sh
   - examples/disagg/run_offline.sh
+
+  # ===== 原 scan.exclude 项迁移（2026-09-20）：三条 glob 规则，引擎从未实现
+  # exclude，下面对应的 include_extensions 命中数为 0（每天 audit 都 0 + new_paths）。
+  # **/__pycache__        — 字节码缓存目录，无 .sh / .py / .yaml 内容
+  # **/assets             — 论文 PNG 截图目录，无 example
+  # **/README.md          — 文档，扩展名不进扫描
+  # 此处仅作迁移完整性留痕；后续若扫描到实际 .py / .sh / .yaml 文件再加 unsupported 行。

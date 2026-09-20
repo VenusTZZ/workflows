@@ -137,7 +137,9 @@ ensure_passthrough "$LAUNCH_PATH"
 #    argument grad_scaler" (gralora/lily/peanut/alora/dora/road, all
 #    repro'd pre-shim; coder npu-5 verified the neutralizer makes them
 #    exit 0). No supported entry relies on fp16=True, so forcing
-#    fp16=False globally is a no-op for every other entry.
+#    fp16=False globally is a no-op for every other entry. Kept as-is
+#    after the 2026-09-20 stack upgrade to 2.12 (not re-verified there;
+#    the neutralizer is a no-op either way).
 prepare_shims() {
   local shim_dir="$GITHUB_WORKSPACE/ci_patch"
   mkdir -p "$shim_dir"

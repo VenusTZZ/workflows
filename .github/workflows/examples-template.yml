@@ -14,10 +14,18 @@ on:
         description: Upstream repo (owner/name) polled for releases; fallback target when dispatch inputs are empty
         type: string
         required: true
-      target_ref:
-        description: Dispatch-only ref under test (defaults to main)
+      target_repo:
+        description: Optional dispatch-only target repo override (owner/name)
         type: string
         default: ''
+      target_ref:
+        description: Dispatch-only ref; empty selects the latest release
+        type: string
+        default: ''
+      default_branch:
+        description: Branch to use when manual latest-release lookup is unavailable
+        type: string
+        default: main
       examples_repo:
         description: Repo containing the example scripts (defaults to upstream_repo)
         type: string
@@ -37,6 +45,7 @@ jobs:
     outputs:
       need_to_run: ${{ steps.decide.outputs.need_to_run }}
       trigger: ${{ steps.decide.outputs.trigger }}
+      target_repo: ${{ steps.decide.outputs.target_repo }}
       target_ref: ${{ steps.decide.outputs.target_ref }}
       workflow_files_hash: ${{ steps.monitor.outputs.workflow_files_hash }}
     env:
@@ -163,7 +172,7 @@ jobs:
 
       # Schedule picks the ref from the release signal; manual runs
       # resolve an empty target_ref to the latest upstream release
-      # (fallback chain: explicit input -> latest release -> main).
+      # (fallback chain: explicit input -> latest release -> default_branch).
       # Without this, manual dispatch always tests upstream `main`,
       # which can pick up in-progress pyproject changes that the
       # supported manifest was not verified against (see torchtitan
@@ -174,6 +183,8 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_REF: ${{ inputs.target_ref }}
+          INPUT_REPO: ${{ inputs.target_repo }}
+          DEFAULT_BRANCH: ${{ inputs.default_branch }}
           UPSTREAM_REPO: ${{ inputs.upstream_repo }}
         run: |
           set -euo pipefail
@@ -200,17 +211,19 @@ jobs:
                 REF="$TAG"
                 REASON="latest-release"
               else
-                REF="main"
-                REASON="main-fallback"
-                echo "::warning::failed to fetch latest release for $UPSTREAM_REPO (HTTP $HTTP_CODE) - falling back to main"
+                REF="$DEFAULT_BRANCH"
+                REASON="branch-fallback"
+                echo "::warning::failed to fetch latest release for $UPSTREAM_REPO (HTTP $HTTP_CODE) - falling back to $DEFAULT_BRANCH"
               fi
             fi
+            REPO="${INPUT_REPO:-$UPSTREAM_REPO}"
             {
               echo "need_to_run=true"
               echo "trigger=workflow_dispatch"
+              echo "target_repo=$REPO"
               echo "target_ref=$REF"
             } >> "$GITHUB_OUTPUT"
-            echo "resolved repo=$UPSTREAM_REPO ref=$REF reason=$REASON (manual)"
+            echo "resolved repo=$REPO ref=$REF reason=$REASON (manual)"
             exit 0
           fi
           NEED="${{ steps.monitor.outputs.need_to_run }}"
@@ -218,6 +231,7 @@ jobs:
           {
             echo "need_to_run=$NEED"
             echo "trigger=schedule"
+            echo "target_repo=$UPSTREAM_REPO"
             echo "target_ref=$REF"
             echo "reason=${{ steps.monitor.outputs.reason }}"
           } >> "$GITHUB_OUTPUT"
@@ -243,7 +257,7 @@ jobs:
       - name: Checkout target
         uses: actions/checkout@v4
         with:
-          repository: ${{ inputs.upstream_repo }}
+          repository: ${{ needs.monitor.outputs.target_repo }}
           ref: ${{ needs.monitor.outputs.target_ref }}
           path: target
 
@@ -319,7 +333,7 @@ jobs:
       - name: Checkout target
         uses: actions/checkout@v4
         with:
-          repository: ${{ inputs.upstream_repo }}
+          repository: ${{ needs.monitor.outputs.target_repo }}
           ref: ${{ needs.monitor.outputs.target_ref }}
           path: target
 
@@ -330,6 +344,12 @@ jobs:
           repository: ${{ inputs.examples_repo }}
           path: examples
 
+      - name: Set declared NPU visibility
+        if: matrix.example.npu_devices
+        env:
+          NPU_DEVICES: ${{ matrix.example.npu_devices }}
+        run: echo "ASCEND_RT_VISIBLE_DEVICES=$NPU_DEVICES" >> "$GITHUB_ENV"
+
       - name: Setup example environment
         env:
           PROFILE: ${{ matrix.example.profile }}
@@ -338,6 +358,7 @@ jobs:
       - name: Run example
         env:
           EXAMPLE_PATH: ${{ matrix.example.path }}
+          EXAMPLE_SOURCE: ${{ matrix.example.source || 'upstream' }}
           EXEC: ${{ matrix.example.exec }}
           LAUNCHER: ${{ matrix.example.launcher || '' }}
           OVERLAY_ARGS: ${{ toJSON(matrix.example.overlay_args) }}
@@ -365,10 +386,11 @@ jobs:
 
       - name: Write result JSON
         env:
-          TARGET_REPO: ${{ inputs.upstream_repo }}
+          TARGET_REPO: ${{ needs.monitor.outputs.target_repo }}
           TARGET_REF: ${{ needs.monitor.outputs.target_ref }}
           TRIGGER: ${{ needs.monitor.outputs.trigger }}
           EXAMPLE_PATH: ${{ matrix.example.path }}
+          EXAMPLE_SOURCE: ${{ matrix.example.source || '' }}
           IMAGE: ${{ matrix.example.image }}
           EXPECTED_JOB_NAME: ${{ matrix.example.name }}
           GH_TOKEN: ${{ github.token }}

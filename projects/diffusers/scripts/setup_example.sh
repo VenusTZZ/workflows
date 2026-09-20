@@ -161,11 +161,34 @@ def export(name: str, path: str) -> None:
     print(f"{name}={path}", flush=True)
 
 
+def corrupt_safetensors(root: Path) -> list[Path]:
+    # A truncated / half-written safetensors file fails to open ("incomplete
+    # metadata, file not fully covered"). snapshot_download trusts files that
+    # already exist, so a corrupt one is never re-fetched on its own: detect it,
+    # delete it, and let the retry loop re-download.
+    from safetensors import safe_open
+
+    bad: list[Path] = []
+    for path in sorted(root.rglob("*.safetensors")):
+        try:
+            with safe_open(path, framework="pt") as handle:
+                handle.keys()
+        except Exception as exc:  # noqa: BLE001
+            print(f"corrupt {path}: {exc}", flush=True)
+            bad.append(path)
+    return bad
+
+
 def snapshot(name: str, ms_id: str, **kwargs) -> None:
     last: Exception | None = None
     for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
         try:
             local = Path(snapshot_download(ms_id, cache_dir=str(MODEL_CACHE), **kwargs))
+            bad = corrupt_safetensors(local)
+            if bad:
+                for path in bad:
+                    path.unlink()
+                raise RuntimeError(f"{len(bad)} corrupt safetensors file(s) removed; re-downloading")
             export(name, str(local))
             return
         except Exception as exc:  # noqa: BLE001 - retry, then report
@@ -339,11 +362,11 @@ setup_diffusers_sd15() {
   download_assets sd15,3d-icon
 }
 
-# diffusers-dreambooth: SD1.4 dreambooth / dreambooth-LoRA training examples.
-# The dataset is the fixture image (fixtures/DOG.jpg), so no dataset download.
+# diffusers-dreambooth: SD1.5 dreambooth / dreambooth-LoRA training examples.
+# The model is pulled online (hf-mirror) by the example; the dataset is the
+# fixture image (fixtures/DOG.jpg), so no download here.
 setup_diffusers_dreambooth() {
   install_example_stack
-  download_assets sd14
 }
 
 # diffusers-instruct-pix2pix: SD1.5 InstructPix2Pix. The dataset

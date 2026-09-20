@@ -3,8 +3,7 @@
 # $1 is the manifest entry path. EXEC, when set, names the launchable
 # file relative to the target root; otherwise path itself must be a
 # launchable file. Overlay CLI args come from OVERLAY_ARGS (JSON array,
-# possibly []). Shell examples that do not pass "$@" get it attached
-# in this working copy only (last command line). Never git add/commit/push.
+# possibly []). Never git add/commit/push.
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
@@ -80,107 +79,18 @@ if ((${#EXTRA_ARGS[@]})); then
   printf 'overlay arg: %q\n' "${EXTRA_ARGS[@]}"
 fi
 
-ensure_passthrough() {
-  # Shell examples that already forward "$@" need no patch; otherwise
-  # attach it in this CI working copy only, on the last non-comment
-  # line (the tail of the example's main command). Python entry points
-  # take the overlay args directly on their own command line.
-  local script="$1"
-  [[ "$script" == *.sh ]] || return 0
-  if grep -qE '"\$@"' "$script"; then
-    echo "example already has \"\$@\"; skipping patch"
-    return
-  fi
-  "$PYTHON" - "$script" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-lines = path.read_text(encoding='utf-8').splitlines(keepends=True)
-for i in range(len(lines) - 1, -1, -1):
-    stripped = lines[i].strip()
-    if stripped and not stripped.startswith('#'):
-        raw = lines[i]
-        newline = ''
-        if raw.endswith('\r\n'):
-            newline = '\r\n'
-            raw = raw[:-2]
-        elif raw.endswith('\n'):
-            newline = '\n'
-            raw = raw[:-1]
-        lines[i] = raw.rstrip() + ' "$@"' + newline
-        path.write_text(''.join(lines), encoding='utf-8')
-        print(f'patched {path} to pass "$@" on last command line')
-        raise SystemExit(0)
-raise SystemExit(f'{path}: cannot find a command line to attach "$@"')
-PY
-}
-
-ensure_passthrough "$LAUNCH_PATH"
-
-# One sitecustomize.py, two layers of robustness, injected at interpreter
-# startup:
-#   1) CUDA->NPU: torch_npu's transfer_to_npu maps torch.cuda onto
-#      torch.npu, so any framework code that hardcodes `device="cuda"`
-#      or `torch.cuda.is_available()` transparently routes to NPU.
-#      xtuner itself has utils.device.get_device_name() that picks
-#      cuda/npu/cpu correctly, but Trainer + transformers still touch
-#      torch.cuda for autocast / DataParallel paths; shim covers those.
-#   2) Dataset: xtuner.apis.datasets.alpaca_dataset calls
-#      load_dataset(path) with `--dataset_name_or_path` pointing at a
-#      local .jsonl fixture. datasets 3.x cannot infer a builder from a
-#      single file path - rewrite to load_dataset(<builder>,
-#      data_files={"train": path, "test": path}) (mirrors peft /
-#      accelerate's shim; the alpaca pipeline only reads the "train"
-#      split, but mirroring both is harmless).
-prepare_shims() {
-  local shim_dir="$GITHUB_WORKSPACE/ci_patch"
-  mkdir -p "$shim_dir"
-  cat > "$shim_dir/sitecustomize.py" <<'PY'
-from torch_npu.contrib import transfer_to_npu  # noqa: F401  (cuda->npu)
-
-import os
-
-import datasets as _datasets
-
-_original_load_dataset = _datasets.load_dataset
-
-_BUILDERS = {
-    ".json": "json",
-    ".jsonl": "json",
-    ".json.gz": "json",
-    ".csv": "csv",
-    ".tsv": "csv",
-    ".parquet": "parquet",
-    ".txt": "text",
-}
-
-
-def _patched_load_dataset(path, *args, **kwargs):
-    if isinstance(path, str) and os.path.isfile(path):
-        ext = os.path.splitext(path)[1].lower()
-        if ext in _BUILDERS and "data_files" not in kwargs:
-            name = kwargs.pop("name", None)
-            if args and name is None:
-                name = args[0]
-                args = args[1:]
-            if name is not None:
-                kwargs["name"] = name
-            # Map the single file onto both splits: xtuner's
-            # alpaca_dataset calls load_dataset(path) and reads only
-            # the "train" split; the {"train","test"} mapping keeps
-            # parity with peft / accelerate shims.
-            kwargs["data_files"] = {"train": path, "test": path}
-            return _original_load_dataset(_BUILDERS[ext], *args, **kwargs)
-    return _original_load_dataset(path, *args, **kwargs)
-
-
-_datasets.load_dataset = _patched_load_dataset
-PY
-  export PYTHONPATH="$shim_dir:${PYTHONPATH:-}"
-}
-
-prepare_shims
+# No sitecustomize shim. Both supported families run natively on NPU:
+#   - train_hf.py: transformers 4.48 auto-selects npu via
+#     is_torch_npu_available(); its dataset is tatsu-lab/alpaca, delivered
+#     by the cache-seed workflow (cache-seed/xtuner/ms_seeds.yaml), so
+#     alpaca_dataset's load_dataset("tatsu-lab/alpaca") hits the local hub
+#     cache (a former load_dataset shim + 8-row fixture were removed here
+#     2026-09-20 for this reason).
+#   - demo_data/*/config.py: xtuner.tools.train is natively npu-aware, and
+#     its cfg already loads data via load_dataset("json", data_files=...).
+# (transfer_to_npu was also dropped: it broke bitsandbytes 0.50.2, whose
+# `if torch.cuda.is_available(): import cuda backend` got tricked into
+# loading the CUDA backend on cpu-only torch.)
 
 # Shell examples that invoke `python train.py` with a path relative to
 # their own directory run with cwd = the example's directory; python

@@ -2,13 +2,7 @@ version: 1
 scan:
   root: examples
   include_extensions: ['.sh', '.py']
-  exclude:
-    - examples/demo_data/single_turn/map_fn.py
-    - examples/demo_data/multi_turn_1/map_fn.py
-    - examples/demo_data/multi_turn_2/map_fn.py
-    - examples/demo_data/pretrain/map_fn.py
 
-# ===== supported（npu-2 910B4 / torch2.11 / torch_npu2.11 / CANN9.1 实跑 exit 0） =====
 supported:
   # HF Trainer 版 SFT：绕开 xtuner 自己的模型封装，直接用 transformers
   # Trainer 训 plain 模型（1 步 / Qwen2.5-0.5B / 8 行 alpaca fixture）。
@@ -18,7 +12,7 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --model_name_or_path ${LLM_MODEL_PATH}        # 必须：不传时脚本拿 None 去加载模型，直接报错；注入 setup 预下载的本地 Qwen2.5-0.5B
-      - --dataset_name_or_path ${TARGET_ROOT}/fixtures/ci_alpaca_8.jsonl   # 必须：不传时报错；该参数默认值还会去 HF 拉 tatsu-lab/alpaca 全量数据（runner 连不上 HF），换成仓内 8 行 fixture
+      - --dataset_name_or_path tatsu-lab/alpaca       # 必须：不传时报错（dataclass 默认 None → load_dataset(None)）；传 HF id，靠 cache-seed（cache-seed/xtuner/ms_seeds.yaml）种进本地缓存，load_dataset 原生命中，不再需要 load_dataset shim 或仓内 fixture
       # 可选调优项（不传也能跑通，仅按默认值执行）：
       - --output_dir ${CI_OUTPUT_DIR}                  # 默认 ./work_dirs：显式指定，把训练产物隔离到 CI 输出目录
       - --max_steps 1                                  # 默认跑满 3 epochs（24 步）：压到 1 步省时间
@@ -112,21 +106,29 @@ supported:
       - --cfg-options save_steps=100000                # 默认每 500 步存 checkpoint：调大跳过
     timeout_minutes: 60
 
-# ===== unsupported（npu-2 2026-09-15/17 实跑复现，exit!=0） =====
 unsupported:
-  # LoRA 版被上游 bug 卡死：build_lora_model 先用 from_pretrained 拿到模型
-  # 实例，再传给 SupervisedFinetune；而 sft.py:143 的 build_llm_from_cfg
-  # 只在收到 dict 形态的模型配置时才给 llm 变量赋值，收到模型实例时不赋值
-  # 却直接引用 → UnboundLocalError，任何后端必崩（CUDA 同样，非 NPU 问题）。
-  # v0.2.0 是最新 release 且 main 分支同样未修（2026-09-17 确认），应提
-  # issue。技术上可在 CI shim 里补一行 else: llm = llm_cfg 绕过（实测 NPU
-  # 跑通 exit 0），但会掩盖上游缺陷，故保持 unsupported。
+  # LoRA / QLoRA 两个 HF Trainer 例子死因是同一个上游 bug：xtuner/model/sft.py
+  # 的 build_llm_from_cfg 只在 llm_cfg 是 dict（cfg 配方）时给 llm 赋值；而
+  # build_lora_model / build_qlora_model 都是 AutoModelForCausalLM.from_pretrained
+  # 拿到模型实例再 SupervisedFinetune(llm, lora=...)，实例不是 dict → 引用未赋值的
+  # llm → UnboundLocalError。纯 Python 作用域 bug，任何后端 / 任何模型必崩；
+  # 加 overlay / 换模型都无法规避，只能修上游（补 else: llm = llm_cfg）。
+  # npu-1 2026-09-20 实测（xtuner 0.2.0 / Qwen2.5-0.5B / 8 行 fixture / 仅 overlay）。
+
+  # LoRA 版：build_lora_model → SupervisedFinetune(llm, lora) → sft.py UnboundLocalError。
   - examples/huggingface_trainer/train_lora_hf.py
 
-  # QLoRA 版三重死路：build_qlora_model 无条件构造 BitsAndBytesConfig 开
-  # 4bit 量化，无 NPU 分支；而 bitsandbytes 在此环境完全不可用——xtuner
-  # 锁定的 0.45.0 无 aarch64 wheel（PyPI 仅 x86_64）装不上；0.46.1+ 虽有
-  # aarch64 wheel，实测 0.47.0 import 即卡死（反复探测 Habana 后端不
-  # 返回）；且 bitsandbytes 本身不支持 NPU。即使量化这关能过，后面还会
-  # 撞上面 train_lora_hf.py 的同一个 UnboundLocalError。
+  # QLoRA 版：与 LoRA 撞同一个 UnboundLocalError。旧注释归因的"bitsandbytes 三重死路"
+  # 已过时——实测 bitsandbytes==0.50.2 现能装 aarch64 wheel、import 不卡死（旧说 0.47
+  # import 卡死），4bit 量化在 from_pretrained 加载阶段（low_cpu_mem_usage CPU 打包）
+  # 也跑过了；真正的立即阻塞仍是上面那个 UnboundLocalError，本例到不了 4bit 训练内核那步
+  # （bnb 的 fused 4bit 训练内核在 NPU 是否可用未验证，但当前不必验证）。
   - examples/huggingface_trainer/train_qlora_hf.py
+
+  # ===== 非 example：demo_data 各配方的 map_fn 辅助模块 =====
+  # config.py 里 with read_base(): from .map_fn import ... 的 import 目标，非可启动入口；
+  # 对应 config.py 已在上方 supported 正常跑。
+  - examples/demo_data/single_turn/map_fn.py
+  - examples/demo_data/multi_turn_1/map_fn.py
+  - examples/demo_data/multi_turn_2/map_fn.py
+  - examples/demo_data/pretrain/map_fn.py

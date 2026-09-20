@@ -1,28 +1,15 @@
 version: 1
 scan:
   root: examples
-  include_extensions: ['.sh', '.py', '.yaml']
-  # files-only 模型（docs/examples-guard-engine.md §2.7）。exclude 项为目录
-  # 路径（递归剪枝）或 glob（`**` 跨目录，匹配相对 target root 的路径），
-  # 排除"不是 example 的配套物"：共享 helper 模块、上游自测、运行配置、
-  # 入口脚本背后的实现文件。扫描工具的 exclude 支持随发现 workflow 的
-  # PR 落地；examples 引擎不扫描，本段当前只是声明。
-  exclude:
-    - examples/sft/configs           # deepspeed/fsdp 配置，被 run_peft_*.sh 引用
-    - examples/sft/train.py          # run_peft.sh 背后的实现，入口是 .sh
-    - '**/utils'                    # 各 example 的共享 helper 模块目录
-    - '**/__init__.py'
-    - '**/utils.py'                 # 单文件版 helper
-    - '**/datautils.py'
-    - '**/preprocess.py'            # 数据预处理脚本
-    - '**/test_*'                   # 上游自测（.py / .sh）
-    - '**/*config*.yaml'            # accelerate 等运行配置
+  include_extensions: ['.sh', '.py']  # 仅 .sh/.py；peft/examples 下的所有 .yaml 都是 accelerate/deepspeed/fsdp 运行配置，非 training recipe，不纳入审计
+  # files-only 模型（docs/examples-guard-engine.md §2.7）。扫描范围是 examples/
+  # 下的 .sh/.py；所有被发现的文件必须在 supported[*].path 或 unsupported
+  # 列表里。不再使用 exclude 字段——所有"非 supported 但存在"的 .sh/.py
+  # 都归 unsupported(末尾的"非 example utility"子段)，与 audit_examples_manifest.py
+  # 的 listed_paths() 语义一致(它只 union supported + unsupported)。
 
 supported:
-  # ===== 已在 coder npu-3（910B4×2, torch2.9/torch_npu2.9.0.post2, CANN9.1）
-  # 逐例验证通过（exit 0），依赖线 pin 见 setup_example.sh 注释 =====
-
-  # CI 首跑已绿（run 34818091939）：TRL SFTTrainer LoRA，1 卡 1 step
+  # TRL SFTTrainer LoRA，1 卡 1 step
   - path: examples/sft/run_peft.sh
     profile: peft
     runner: linux-aarch64-a2-1
@@ -46,19 +33,6 @@ supported:
       - --report_to none                # 关闭 wandb 等外部上报（未装会报错）
       - --output_dir ${CI_OUTPUT_DIR}   # 默认仓内相对路径：输出必须进 CI 输出目录
     timeout_minutes: 90
-
-  # ===== sft 多卡脚本 ×5（a2-8 原样跑；coder npu-5 2026-09-18 2×910B4
-  # 逐条实跑 exit 0，train_loss 4.63-4.64 / eval_loss 4.37-4.39——但 coder
-  # 只有 2 卡，只能预验证 2 rank 配方，8 rank 跑在 CI a2-8 上）。
-  # 统一配方：0.5B + ci_sft_8 fixture + bnb/flash_attn/grad_ckpt/packing 全关
-  # + bs 2 + grad_accum 1 + max_steps 1。上游脚本/配置硬编码的进程数
-  # （torchrun --nproc_per_node 8、accelerate num_processes: 8）在 a2-8 上
-  # 原样生效，不做任何改写（8 进程在 2 卡 coder 上实跑报
-  # SetDevice(rank) invalid device id：rank 2-7 无卡可绑，无法本地复现）。
-  # deepspeed_config.yaml 硬编码 gradient_accumulation_steps: 4，overlay
-  # 必须跟 4（transformers 硬校验 ds 配置与 TrainingArguments 一致）。
-  # 这些 .sh 无 "$@"，靠引擎 ensure_passthrough 尾部挂载 "$@" + overlay
-  # 追加（train.py 参数全部走 SFTConfig/ModelArguments） =====
 
   # SFT + FSDP1（Llama-2-70b 换 0.5B）：fsdp_config.yaml num_processes: 8
   # 原样跑 a2-8；npu-5 2 rank 实跑 1m07s exit 0
@@ -647,8 +621,8 @@ supported:
   #   的 torchvision 0.22-0.29 与 torch 2.9.0+cpu ABI 不匹配，见 [[torchvision-v29-stable-abi]]）。
   # 以上 3 patch 均为 coder 验证机本地补丁，CI 不需要：(1) 脚本不 .to()，get_peft_model
   #   时权重在 CPU 上做 SVD（等价），Trainer 再搬 NPU；(2) evaluate.load 走 hf-mirror
-  #   小文件（glue_adamss_asa 同用法已过）；(3) CI 装 aarch64 torchvision 0.24.0 与
-  #   torch 2.9.0 ABI 匹配。
+  #   小文件（glue_adamss_asa 同用法已过）；(3) CI 装 aarch64 torchvision 0.27.0 与
+  #   torch 2.12.0 ABI 匹配（2026-09-20 随整栈升 2.12 同步，见 setup_example.sh）。
   # CI 资产（run 35222723526 302 cas-bridge 超时根因）：脚本 DATASET_CONFIGS["cifar10"]
   #   硬编码 Multimodal-Fatima/CIFAR10_train + CIFAR10_test（不是 uoft-cs/cifar10），
   #   模型默认 google/vit-base-patch16-224-in21k —— ModelScope 均无镜像，走
@@ -669,28 +643,6 @@ supported:
       # ~/.cache/huggingface/datasets（同 glue 例）。
     timeout_minutes: 30
 
-# ===== unsupported（每条附理由：coder npu-3 2026-09-14 逐例验证 / 静态分析；
-# 2026-09-17 对照上游 main db7d68a 源码逐条审计 + 实测复跑取证；
-# 2026-09-18 复审（peft HEAD = a5526d2 复测后；2026-09-18 二次校正对照 v0.21.0）：
-#   - 删 9 条 utility 误收录（convert_*/eval/load-only/HTTP client/synth 等
-#     非 training example——audit 工具按 .py/.sh 文件名扫描，不区分
-#     utility 与 example，误将 9 条非训练脚本纳入 unsupported，现移到末尾
-#     「Archived」段以备查）
-#   - 复审中曾**误判** kasa/shadow 为 "upstream 已删"（仅看 a5526d2 sparse
-#     checkout），二次校验发现 main HEAD `3a1f888` + v0.21.0 都还在，**已
-#     恢复**至 unsupported 主列表（详见底部 A2 段教训）
-#   - 修 3 条过期注释（idx 8/10/25，详见条目）
-# 行号以 db7d68a 为准；"待复跑取证" = 实测挂但源码找不到对应阻塞点，
-# "翻案候选" = 无后端硬编码，换模型/换数据/多卡 runner 即可能转 supported，
-# "翻案前置 patch" = NPU 实测可通，但需要源码侧 patch 才能进 supported
-#  （如硬编码 fp16=True、pin_memory=True、network 依赖）；
-# 已迁移：corda / glora / hira / olora / waveft / adamss_image /
-# pissa / deft / delora / randlora / dora_caching /
-# (lora/oft/deft/hra/stable_diffusion)_dreambooth → supported，
-# 详见 entry 备注；
-# sft_(fsdp/multigpu/qlora_fsdp) 曾误迁 supported（run 35303810367 实测
-# 12 失败例之三），已退回 unsupported C-多卡脚本段：launcher flag 无法经
-# 引擎 overlay 通道传递 + a2-1 单卡） =====
   # PiSSA：Qwen2.5-0.5B + ci_alpaca_10 fixture + trl 1.12 NLL loss，
   # 1 epoch 5.17s exit 0（loss 5.33→1.59）。
   # 关键 overlay：--loss_type nll 绕开 [[trl-chunked-nll-functools-partial-bug]]
@@ -912,265 +864,120 @@ supported:
       - --checkpointing_steps 1000000
     timeout_minutes: 30
 
+  # ShiRA（稀疏 mask LoRA）：0.5B + ci_alpaca_10 fixture，同 gralora 族
+  # 配方（vanilla transformers.Trainer + device_map=auto 单卡全落 npu:0，
+  # 无 trl/bnb/fp16 硬编码）。
+  # 硬前提：torch/torch_npu 2.12.0——torch_npu 2.9 在
+  # torch.sparse_coo_tensor 构造处 INTERNAL ASSERT 崩（layer.py:222），
+  # 2.12 上构造 + dense+=sparse 前向反向均实测通过（2026-09-20 npu-1
+  # 微基准；setup_example.sh 2026-09-20 整栈升 2.12，全部 supported
+  # 随之在 2.12 复跑）。
+  - path: examples/shira_finetuning/shira_finetuning.py
+    profile: peft
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+    overlay_args:
+      - --base_model ${SFT_MODEL_PATH}
+      - --data_path ${TARGET_ROOT}/fixtures/ci_alpaca_10   # 默认 yahma/alpaca-cleaned 52k：换 fixture（instruction/output 字段，脚本 :169-174 拼模板）
+      - --num_epochs 1
+      - --batch_size 1
+      - --cutoff_len 256
+      - --val_set_size 1
+      - --learning_rate 1e-4
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --eval_step 100
+      - --save_step 100
+    timeout_minutes: 30
+
 unsupported:
-  # ===== A. 翻案前置 patch（NPU 实测可通，缺 1-2 行源码改） =====
-  # 注释已写明缺什么 patch；不继续验证。
-  # 2026-09-18 已迁出 4 条（gralora/lily/peanut/lora_ga → supported）：
-  # fp16=True 硬编码由 sitecustomize 中性化、lora_ga 设备分支由
-  # transfer_to_npu 覆盖，均不再需要源码 patch（见 supported 段）。
-  # 2026-09-20 又迁出 2 条（feature_extraction / monteclora → supported）：
-  # 原判的 pin_memory+accelerator.prepare 挂与 evaluate.load 离线挂均为
-  # npu-3 裸跑环境假象，标准 CI 环境（shim + hf-mirror）下原样通过。
-
-  # ===== B. 翻案候选（无后端硬编码，换模型/数据/多卡 runner 即可） =====
-  # 不在 simple 翻案范围；B 组内按换模型难度低 → 多卡 runner 排序。
-
-  # t5-base（0.22B）+ FSDP1：脚本零 CUDA 假设、torch_npu 2.9 对 FSDP1 有适配；
-  # unsupported 仅因未在 NPU 验证（FSDP config 需自备，仓库未随附）——多卡翻案
-  # 最易候选
   - examples/conditional_generation/peft_lora_seq2seq_accelerate_fsdp.py
-
-  # bloomz-7b1（模块级常量，accelerate launch 可换）+ deepspeed ZeRO-3：随附
-  # config 实为无 offload、单进程 fp32（文件名 cpu_offload 名不副实）；
-  # 仅剩 deepspeed-NPU 构建未验证（环境级）
   - examples/causal_language_modeling/peft_lora_clm_accelerate_ds_zero3_offload.py
-
-  # 默认模型已是 bart-large（:107，T0_3B 已注释）——原"T0_3B"过时；deepspeed
-  # ZeRO-3 无 offload + 1 进程，仅剩 deepspeed-NPU 构建未验证，翻案候选
   - examples/conditional_generation/peft_lora_seq2seq_accelerate_ds_zero3_offload.py
-
-  # AdaLoRA 已迁 supported（2026-09-18 npu-5 原样实跑 8 epochs exit 0，
-  # 见 supported 段）；bart-base 由 cache-seed 补种（ModelScope 原 id 有镜像）
-  # 实测（2026-09-17 coder npu-3）：fork 副本 + gpt2（ModelScope 预下）+ ScienceQA
-  # 任务 1 走本地 parquet（derek-thomas/ScienceQA 数据集 xet 401 不可走，MS 镜像
-  # 替代；multimodal image 列已 drop），其余任务 stub 空集跳过。**不迁 supported**：
-  # OSF 训练循环在 gpt2 + bf16=false + effective_rank=1.0 下首步即
-  # `RuntimeError: element 0 of tensors does not require grad and does not have a
-  # grad_fn`（OSF 算法本身对 gpt2 这种小 base + 全部 effective_rank 的分解路径，
-  # 残差冻结 + adapter 极小 → 完整 loss 不在 autograd 图上）。这是 OSF 算法与
-  # 模型规模不匹配的硬阻塞，不是 NPU 问题；全量 llama-3.1-8B 是 OSF 设计的本意
-  # 体量，8B 单卡 32G 跑不动需要多卡 + 该训练循环挂 3 个任务数小时——CI 翻案成本
-  # 远超 B 组其他条目
   - examples/orthogonal_subspace_learning/osf_continual_learning.py
-
-  # 实测（2026-09-17 coder npu-3）：gpt2 + imdb 1%（ModelScope 镜像 + HF 缓存）
-  # + trl 1.12 SFTTrainer + --loss_type=nll 绕开 chunked_nll。
-  # **不迁 supported**，gpt2 + imdb 1% 路径仍有 NPU 镜像 torch.linalg.svd 极慢
-  # 阻塞（单次 2304×768 SVD >90s 未返回，CPU SVD fallback）：PiSSA 在 init
-  # 阶段对每层 Conv1D 做 SVD 分解（gpt2 有 12 层 × c_attn + 12 × c_proj = 24
-  # 次），等待 >30 min 仍未完成 init 之前的 print。翻案前置需 NPU 镜像补
-  # torch.linalg.svd 优化或 CPU 加速 fallback。注：Qwen2.5-0.5B + alpaca 配方
-  # 已迁 supported（见 path: examples/pissa_finetuning/pissa_finetuning.py）；
-  # 本条目仅标 gpt2 + imdb 1% 默认路径的归类
-
-  # ===== C. 阻塞（架构/bnb/xformers/7B+FA/SD 时长/trl 版本） =====
-
-  # ---- C-bnb：BitsAndBytesConfig 硬编码（load_in_4bit/int8/nf4），无 NPU 后端 ----
-
-  # bnb 4bit nf4 必经（:69-78 无条件，baseline 同路径）：无 NPU 后端，换模型救不了；
-  # 脚本未设 attn_implementation，"FA 内核问题"不适用；Mixtral bf16 ~94GB 超 2×32G
-  # 仅为次要（4/8 卡可容，bnb 先崩）
   - examples/KappaTune/experiments_kappatune_peft.py
-
-  # bnb 4bit nf4 硬编码（:304-317 对 base/arrow/gks 所有策略无条件构造
-  # BitsAndBytesConfig）：主因不是"未验证"，删量化才可跑（须改源码）；
-  # device_map=auto 在 accelerate-NPU 机制本身可用
   - examples/arrow_multitask/arrow_phi3_mini.py
-
-  # bitsandbytes NF4 硬编码（:50-56 无开关，无 NPU 后端）
   - examples/fp4_finetuning/finetune_fp4_opt_bnb_peft.py
-
-  # bnb int8 硬编码（:32 load_in_8bit 无开关；另 :85 硬编码 50 epoch、无 argparse）
   - examples/int8_training/fine_tune_blip2_int8.py
-
-  # bnb int8 硬编码（:538；:542-543 显式拒绝 cpu/disk device_map）+ whisper-large-v2
   - examples/int8_training/peft_adalora_whisper_large_training.py
-
-  # 同上（包装脚本；accelerate config 为 Intel MULTI_XPU，requirements 直装 bnb
-  # git 主干）
   - examples/int8_training/run_adalora_whisper_int8.sh
-
-  # bnb 最硬路径：:55 顶层 import + :127-136 直调 int8_vectorwise_quant/dequant
-  # kernel + :170-173 load_in_8bit 硬编码 + :162 默认 --device cuda
   - examples/loftq_finetuning/int8_correction.py
-
-  # LoftQ 经 peft 运行时硬依赖 bnb（loftq_utils.py:54-57 无 bnb 直接 raise，
-  # :78-84 调 bnb kernel；coder 实测确认属实）
   - examples/loftq_finetuning/quantize_save_load.py
-
-  # bnb NF4 硬编码（:453-458）——原"send_example_telemetry 已移除"过时：
-  # transformers.utils 4.56 仍导出（实测可 import）
   - examples/loftq_finetuning/train_gsm8k_llama.py
-
-
-  # ---- C-SD-dreambooth：50k 步全量 + prior preservation 200 类图生成 ----
-  # SD-2.1 全量 50k 步超 CI 预算；:340 无条件用 wandb_init（仅 report_to=="wandb"
-  # 时定义）→ 关 wandb 即 NameError；bnb/xformers 在 .py 均为可选 flag 默认关
-  # ——原"bnb/xformers 无 NPU 后端"仅对 .sh 成立（见下条）
   - examples/boft_controlnet/train_controlnet.py
-
-  # .sh:36 显式 --enable_xformers_memory_efficient_attention（无 NPU 后端）+
-  # 50k 步全量训练；bnb（use_8bit_adam）未启用
   - examples/boft_controlnet/train_controlnet.sh
-
-  # 源 bug：train_dreambooth.py:391
-  #   `accelerator.init_trackers(args.wandb_project_name, config=vars(args), init_kwargs=wandb_init)`
-  # 但 `wandb_init` 仅在 `if args.report_to == "wandb":` 分支定义（:347-359）。
-  # 父函数流程：无条件构造 Accelerator(:83) → wandb_project_name 必传 →
-  # init_trackers(:391) 必走 → 即便 report_to=tensorboard 也 UnboundLocalError。
-  # 5 例 dreambooth + controlnet 中仅 boft_dreambooth/boft_controlnet 触发，其余
-  # lora/oft/deft/hra/stable_diffusion_dreambooth 走不同 init_trackers 调用，
-  # 已实测 exit 0。**翻案前置 1 处源码 patch**：:391 init_kwargs=wandb_init
-  # 改成 init_kwargs=None（或 guard 在 if args.report_to=="wandb" 内才传）
   - examples/boft_dreambooth/train_dreambooth.py
-
-  # 同上 + .sh 显式启用 xformers（无 NPU 后端）；1010 步 + 200 类图仍超预算
   - examples/boft_dreambooth/train_dreambooth.sh
-
-  # .sh:36 显式 --enable_xformers_memory_efficient_attention（无 NPU 后端）+
-  # 1010 步 + 200 类 prior-preservation 图生成（仍超 CI 预算）。
-  # 注：原 "wandb_init UnboundLocalError 也踩坑" 注释**已校正**——
-  # hra_dreambooth/train_dreambooth.py:389-392 在 upstream HEAD 已加
-  # `if args.report_to == "wandb": ... else: ...` guard，且该 .sh 默认
-  # `--report_to="none"` 根本不引用 wandb_init。wandb_init bug 仅影响
-  # boft_dreambooth / boft_controlnet 两条路径
   - examples/hra_dreambooth/train_dreambooth.sh
-
-  # .sh 包装：lora_dreambooth + xformers；前者已实测过，后者仅超 CI 预算
-  # 注：upstream peft HEAD 已删除该 .sh（2026-09 audit 标 stale）
-
-  # .sh 包装：oft_dreambooth + xformers
-  # 注：upstream peft HEAD 已删除该 .sh（2026-09 audit 标 stale）
-
-  # .sh 包装：deft_dreambooth + xformers
-  # 注：upstream peft HEAD 已删除该 .sh（2026-09 audit 标 stale）
-
-  # .sh 包装：stable_diffusion_dreambooth + xformers
-  # 注：upstream peft HEAD 已删除该 .sh（2026-09 audit 标 stale）
-
-
-  # ---- C-7B-FA-family（2026-09-18 已迁 3/3 → supported：fp16=True 硬编码
-  # 由 sitecustomize 中性化；road 的 device_map="auto" 在 a2-1 单卡上全部落
-  # npu:0，实测通过；2 卡会把模型切开必崩）----
-  # 历史根因（留档）：accelerate.optimizer 把 grad_scaler 作为 kwarg 透传给
-  # Adam.step()，torch_npu 2.9 amp.GradScaler 与 accelerate 1.15 接口不齐：
-  # optimizer.step(grad_scaler=scaler) → Adam.step 拒收 "grad_scaler" →
-  # TypeError。无需源码 patch：shim 强制 fp16=False（见 supported 段）。
-
-  # ---- C-多卡脚本：已迁 5/6 → supported（sft ×5，见 supported 段）----
-  # 2026-09-18 翻案落定：runner 用 a2-8（上游脚本硬编码 8 进程，原样跑，
-  # 不做任何改写——运行时改写被否掉，等同 patch）+ setup_peft_ds
-  # （deepspeed 0.19.7 自动识别 NPU）。coder npu-5 2×910B4 只能预验证
-  # 2 rank 配方（8 进程在 2 卡上 rank 2-7 SetDevice 报 invalid device
-  # id），8 rank 实跑在 CI a2-8。逐条 2-rank exit 0：fsdp 1m07s /
-  # multigpu 56s / qlora_fsdp 1m18s / deepspeed 1m40s / qlora_ds_z3 1m38s
-  # （统一 0.5B + ci_sft_8 配方）。
-  # 历史教训（run 35303810367 曾误迁 3 条）：launcher flag 不能走 overlay
-  # 通道——overlay 只追加在 train.py 参数尾部，--nproc_per_node/
-  # --num_processes 必须位于 train.py 之前；且 a2-1 单卡容不下 2 进程。
-
-  # GPTQ INT4 预量化模型（8B 非 70B，容量无忧）：GPTQ 内核 exllama/marlin 仅
-  # CUDA——换普通模型即失去条目意义，不支持
   - examples/sft/run_peft_fsdp_gptq.sh
-
-
-  # ---- C-架构级硬阻塞（peft 源码 / 数据路径 / 设备分支） ----
-  # 2026-09-20 复测定案（npu-1 标准 CI 环境 + --bf16 True 走 layer.py:265-268
-  # dense 分支）：forward 的 torch.sparse.mm 绕过了，但 backward 仍死在
-  # aten::mul.out（torch_npu 2.9.0.post2 无该 kernel）——frod 的 sparse COO
-  # 参数化在反向传播必经，属 kernel 级缺口，overlay/shim/runner 均无解
   - examples/frod_finetuning/frod_image_classification.py
-
-  # 同上（同一 layer 实现；npu-1 实测 bf16 dense 分支 forward 通过、
-  # backward aten::mul.out 崩，cola + bert-base 复现）
   - examples/frod_finetuning/frod_text_classification.py
-
-  # NPU 硬阻塞：shira/layer.py:222-226 每次 forward 构造 sparse COO，:245/:255
-  # dense += sparse 混合布局加法——无 dtype 绕过分支（比 frod 更硬；frod 的
-  # backward mul.out 缺口同判死）
-  - examples/shira_finetuning/shira_finetuning.py
-
-  # 2026-09-20 已迁 supported（kasa/unilora/psoft/shadow/lorafa ×5）：原
-  # "backward ERR00100 归因待复跑"在标准 CI 环境（shim + hf-mirror +
-  # --loss_type nll + 0.5B）下全部证伪，npu-1 逐条 exit 0，见 supported 段。
-
-  # GPTQ 现场量化必经（:86-98，无关闭开关；exllama/marlin 仅 CUDA，torch 内核慢）
   - examples/qalora_finetuning/qalora_gptq_finetuning.py
-
-  # :27 硬编码 Llama-3.1-8B + 全脚本零 CLI 参数（无注入点）+ fp32 加载 8B≈32GB
-  # → :72 .to(DEVICE) 处必 OOM（FA 前向到不了）；修复须改源码
   - examples/eva_finetuning/eva_finetuning.py
-
-  # 分布式后端仅 nccl(cuda)/xccl(xpu)（:48-60），NPU 落 else 分支 local_rank=-1
-  # → :94-95 .to(-1) + DDP(device_ids=[-1]) 必崩；另叠加 7B + MetaMathQA 全量
   - examples/eva_finetuning/eva_finetuning_multi_accelerator.py
-
-  # lorafa / shadow 已迁 supported（2026-09-20 npu-1 实测：shim 下 cuda 分支
-  # 直通 NPU + 0.5B 换掉 8B，见 supported 段）。原"落 CPU / 主机 RAM OOM"
-  # 归因是裸跑无 shim + 默认 8B 模型的组合。
-
-  # （历史条目：upstream peft HEAD a5526d2 曾删除 shadow 目录后恢复，详见
-  # 底部 A2 段归档记录）
-
-
-  # ---- C-产物/服务依赖（外部 checkpoint + HTTP 服务） ----
-  # 依赖上游训练产物（eval.sh:13-16 要 checkpoint-50000 + controlnet/unet 权重，
-  # pred 图由 test_controlnet.py 生成）；:36-40 cuda:0 有 CPU 回退，非硬编码
   - examples/boft_controlnet/eval.py
-
-  # 同上（依赖 checkpoint-50000 训练产物）
   - examples/boft_controlnet/eval.sh
-
-  # ===== D. CPU-only / 非 NPU（CPU 转换工具 / HPU/TE 容器锁死 / 骨架占位） =====
-  # 明确不涉及 NPU 看护。
-
-  # Intel Gaudi HPU（neural-compressor + optimum-habana；:32-35 无 HPU 直接 raise）
   - examples/stable_diffusion/inc_flux_lora_hpu.py
-
-  # NVIDIA TransformerEngine（经 trust_remote_code 的 TE 模型 remote code 引入，
-  # 仅 CUDA；:16 CUDA_VISIBLE_DEVICES，README 要求 nvcr.io 容器）
   - examples/lora_finetuning_transformer_engine/lora_finetuning_te.py
-
-  # unsloth 硬依赖（仅 CUDA；utils.py:87-88 惰性 import，:98 禁分布式单进程）
   - examples/sft/run_unsloth_peft.sh
-
-  # 多阶段研究管线 stage 2 trainer：--device choices=[cpu,mps,cuda,xpu] 无 npu，
-  # NPU 上只能 --device cpu（synthesize 已被 utility 排除），train_distill 真做
-  # 训练但 device 分支锁死
+  # xlora/xlora_inference_mistralrs.py：upstream README 标题 "X-LoRA examples" + 章节
+  # `## xlora_inference_mistralrs.py` 把它文档化为 X-LoRA 的官方 example（不是 stage 子脚本）。
+  # 实际是 mistralrs（Rust/CUDA 推理引擎）调用代码：model_id / xlora_model_id / order 三个
+  # 关键参数硬编 `...` Ellipsis 占位，文件本身不能直接跑（README 也注明 "Runnable example"
+  # 链接指 mistralrs 自己仓 https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/xlora_zephyr.py）。
+  # 无 NPU 后端，NPU 上无解。
+  - examples/xlora/xlora_inference_mistralrs.py
+  # cartridge_self_study：train_distill.py 是 README 文档化的"Train cartridge"主入口，arxiv_train.py 是它的 arxiv-default 平行入口（from train_distill import ...），两者 NPU 锁死同根因（device choices=[cpu,mps,cuda,xpu] 无 npu）。synthesize.py / arxiv_synthesize.py 是 stage-1 数据合成（vLLM），无 trainer.train，归 exclude（不是 training example）
   - examples/cartridge_self_study/train_distill.py
+  - examples/cartridge_self_study/arxiv_train.py
 
 
-# ===== Archived（不计入 unsupported 计数的真/伪 unsupported 备忘） =====
-# 这些条目已从 unsupported: 主列表移除，但保留此处作为历史归档，
-# 防止 audit 工具下次再把它们当作新增误报：
+  # ----- SFT 配套物：train.py 实现（入口是 run_peft_*.sh ×7；configs/*.yaml 不纳入审计）-----
+  - examples/sft/train.py          # run_peft*.sh 共同调用的实现（hfArgumentParser + SFTTrainer），入口是 .sh
 
-# ---- A1. 9 条 utility 误收录（已从 unsupported 主列表删除，2026-09-18 复审）：
-#   - examples/ephemeral_gpu_offloading/load_with_dora.py
-#     load-only benchmark，无训练循环；底层 peft variants.py:156 lora_B.to("cuda")
-#     是真 source bug 但本脚本用不到。
-#   - examples/bdlora_finetuning/chat.py
-#     HTTP 客户端（POST localhost:8000/v1/completions），无训练，依赖外部 vLLM 服务。
-#   - examples/lora_dreambooth/convert_kohya_ss_sd_lora_to_peft.py
-#   - examples/lora_dreambooth/convert_peft_sd_lora_to_kohya_ss.py
-#   - examples/stable_diffusion/convert_sd_adapter_to_peft.py
-#     三个 CPU state_dict 格式转换（kohya_ss/LoHa/LoKr 键名映射），无 GPU。
-#   - examples/xlora/xlora_inference_mistralrs.py
-#     Rust/CUDA 推理引擎；:7-10 是 Ellipsis 占位骨架。
-#   - examples/cartridge_self_study/arxiv_synthesize.py
-#   - examples/cartridge_self_study/arxiv_train.py
-#   - examples/cartridge_self_study/synthesize.py
-#     三条 stage-1 准备（synthesize 产 distill.jsonl，train 包装 distill）；无独立训练循环。
-#   → audit 工具若再标这 9 条 +new 是已知 false-positive，下次可忽略或写 .audit-exclude。
+  # ----- 各 example 的 utils/ 目录内 helper 模块（目录下无独立 example；逐文件展开）-----
+  # boft_controlnet/utils/（被 train_controlnet.py 通过 from utils.X import Y 引用）
+  - examples/boft_controlnet/utils/__init__.py
+  - examples/boft_controlnet/utils/args_loader.py
+  - examples/boft_controlnet/utils/dataset.py
+  - examples/boft_controlnet/utils/light_controlnet.py
+  - examples/boft_controlnet/utils/pipeline_controlnet.py
+  - examples/boft_controlnet/utils/tracemalloc.py
+  - examples/boft_controlnet/utils/unet_2d_condition.py
+  # boft_dreambooth/utils/（被 train_dreambooth.py 引用）
+  - examples/boft_dreambooth/utils/__init__.py
+  - examples/boft_dreambooth/utils/args_loader.py
+  - examples/boft_dreambooth/utils/dataset.py
+  - examples/boft_dreambooth/utils/tracemalloc.py
+  # hra_dreambooth/utils/（adapted from boft_dreambooth/utils/，结构相同）
+  - examples/hra_dreambooth/utils/__init__.py
+  - examples/hra_dreambooth/utils/args_loader.py
+  - examples/hra_dreambooth/utils/dataset.py
+  - examples/hra_dreambooth/utils/tracemalloc.py
 
-# ---- A2. 【已校正】早期错误归类（2026-09-18 复审时把 kasa/shadow 误删）：
-#   复审时 Explore agent 在 audit-cache 的 sparse-checkout at commit `a5526d2`
-#   没看到 kasa_finetuning/、shadow_finetuning/，**误归类为 upstream 已删**。
-#   实际验证（2026-09-18 v0.21.0 + main HEAD `3a1f888`）：
-#     - examples/kasa_finetuning/    HEAD ✓ / v0.21.0 ✓ / v0.20.0 ✓ 全部存在
-#     - examples/shadow_finetuning/  HEAD ✓ / v0.21.0 ✓ / v0.20.0 ✓ 全部存在
-#   两条都是真 training example，**已恢复至 unsupported 主列表**（恢复时连同原
-#   归因注释一起放回：kasa 走 unilora 段、shadow 走 lorafa 段）。
-#   教训：判断 "upstream 已删" 必须 anchor 到 latest release tag 或 main HEAD，
-#   不能只看 sparse-checkout 中间 commit——peft 这种日更仓的中间状态可能不
-#   代表最终发布。
+  # ----- __init__.py 包标记（boft_* 子包 init）-----
+  - examples/boft_controlnet/__init__.py
+  - examples/boft_dreambooth/__init__.py
 
+  # ----- 上游自测（peft 仓内 test_*.py / test_*.sh，不是 user-facing example）-----
+  - examples/adamss_finetuning/test_adamss_quick.py
+  - examples/boft_controlnet/test_controlnet.py
+  - examples/boft_controlnet/test_controlnet.sh
+
+  # ----- 单文件 helper 模块（utils.py / datautils.py，每个 example 各列）-----
+  - examples/corda_finetuning/datautils.py
+  - examples/eva_finetuning/utils.py
+  - examples/orthogonal_subspace_learning/utils.py
+  - examples/sft/utils.py
+
+  # ----- 数据预处理脚本（preprocess.py）-----
+  - examples/corda_finetuning/preprocess.py          # SVD 产物预处理
+  - examples/pissa_finetuning/preprocess.py          # 主成分预处理
+
+  # ----- 非 training utility（HTTP client / state_dict 转换 / 多 stage 子脚本）-----
+  - examples/bdlora_finetuning/chat.py               # HTTP client（POST localhost:8000/v1/completions），无训练循环
+  - examples/cartridge_self_study/arxiv_synthesize.py # stage-1 数据合成（vLLM prefix caching，无 trainer.train）
+  - examples/cartridge_self_study/synthesize.py      # stage-1 数据合成（vLLM prefix caching，无 trainer.train）
+  - examples/ephemeral_gpu_offloading/load_with_dora.py # load-only benchmark（from_pretrained + merge + save_pretrained，无训练循环）
+  - examples/lora_dreambooth/convert_kohya_ss_sd_lora_to_peft.py  # CPU state_dict 格式转换（kohya_ss 键名映射）
+  - examples/lora_dreambooth/convert_peft_sd_lora_to_kohya_ss.py  # CPU state_dict 格式转换
+  - examples/stable_diffusion/convert_sd_adapter_to_peft.py       # CPU state_dict 格式转换

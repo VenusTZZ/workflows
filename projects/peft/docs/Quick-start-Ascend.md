@@ -35,8 +35,8 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | --- | --- |
 | Python | 3.12 |
 | CANN | 9.1.0 |
-| torch | 2.9.0+cpu |
-| torch_npu | 2.9.0.post2 |
+| torch | 2.12.0+cpu |
+| torch_npu | 2.12.0 |
 | transformers | `<5.0` |
 | peft | 最新 release 的源码/二进制 |
 | modelscope | 1.37.0 |
@@ -89,8 +89,8 @@ python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f
 输出结果如下：
 
 ```shell #test-result id="check-npu-runtime"
-torch=2.9.0+cpu
-torch_npu=2.9.0.post2
+torch=2.12.0+cpu
+torch_npu=2.12.0
 is_available: True
 count: 1
 ```

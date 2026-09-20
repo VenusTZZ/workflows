@@ -104,6 +104,13 @@ def plant(ms_id: str, hf_id: str, kind: str, root: Path,
     for item in src.rglob("*"):
         if not item.is_file():
             continue
+        if item.name == "dataset_infos.json":
+            # datasets 3.x deprecates dataset_infos.json (replaced by the
+            # README YAML frontmatter). ModelScope mirrors often carry a
+            # stale 1.x/2.x copy whose features lack `dtype` — datasets
+            # 3.x then crashes parsing it (Value missing dtype). Drop it
+            # so load_dataset falls back to the README config instead.
+            continue
         dest = snap_dir / item.relative_to(src)
         dest.parent.mkdir(parents=True, exist_ok=True)
         if dest.is_symlink():
