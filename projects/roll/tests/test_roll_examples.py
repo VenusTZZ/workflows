@@ -48,29 +48,52 @@ class RollProjectTests(unittest.TestCase):
             for p in UPSTREAM_EXAMPLES.rglob('*.yaml')
         }
         self.assertEqual(len(all_yaml), 117)
-        excluded = set(CHECKOUT_EXCLUDED)
-        excluded |= {
-            p for p in all_yaml if p.startswith('examples/config/')
-        }
-        candidates = all_yaml - excluded
-        self.assertEqual(len(candidates), 107)
+        # scan.exclude was retired 2026-09-20; examples/config/* is covered
+        # by a single `examples/config` directory entry in `unsupported`
+        # (its N descendant .yaml files are shared fragments that other
+        # configs inherit from, not independent entries), and
+        # agentic_val_webshop.yaml is now an explicit unsupported entry.
+        # candidates = all yaml minus the webshop file (still actively
+        # tracked for follow-up work).
+        candidates = all_yaml - set(CHECKOUT_EXCLUDED)
+        self.assertEqual(len(candidates), 116)
         supported = [entry['path'] for entry in manifest['supported']]
         unsupported = list(manifest['unsupported'])
+        # examples/config is a directory aggregate entry, not a file; it
+        # doesn't need to appear in the candidate set itself, but it is
+        # the ledger's catch-all for every examples/config/*.yaml file.
+        for path in supported + unsupported:
+            self.assertNotEqual(path, 'examples/config')
+            self.assertFalse(
+                path.startswith('examples/config/'),
+                f'{path}: examples/config/* must remain covered by the '
+                'directory-level aggregate entry, not re-enumerated',
+            )
         self.assertEqual(set(supported) - candidates, set())
         self.assertEqual(set(unsupported) - candidates, set())
         self.assertEqual(candidates - set(supported) - set(unsupported), set())
         self.assertEqual(candidates, set(supported) | set(unsupported))
         self.assertEqual(len(supported), 3)
-        self.assertEqual(len(unsupported), 104)
+        self.assertEqual(len(unsupported), 106)
 
     def test_manifest_scan_reflects_ledger_semantics(self) -> None:
         manifest = load_manifest()
         self.assertEqual(manifest['scan']['root'], 'examples')
+        self.assertEqual(
+            set(manifest['scan'].keys()),
+            {'root', 'include_extensions'},
+            'scan schema is now {root, include_extensions}; exclude was '
+            'retired 2026-09-20',
+        )
         self.assertIn('.yaml', manifest['scan']['include_extensions'])
-        self.assertIn('examples/config', manifest['scan']['exclude'])
+        # The two former scan.exclude items are now in `unsupported`
+        # ledger entries (directory aggregate for examples/config + the
+        # single webshop file).
+        unsupported = list(manifest['unsupported'])
+        self.assertIn('examples/config', unsupported)
         self.assertIn(
             'examples/qwen2.5-0.5B-agentic/agentic_val_webshop.yaml',
-            manifest['scan']['exclude'],
+            unsupported,
         )
 
     def test_supported_shape(self) -> None:
