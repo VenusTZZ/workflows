@@ -5,7 +5,7 @@
 
 本文档覆盖上游官方 release 中**尚未包含**的 Ascend NPU 支持：构建、安装、
 启动与推理验证使用
-[cosdt-ci-test/text-generation-inference](https://github.com/cosdt-ci-test/text-generation-inference)
+[cosdt/text-generation-inference](https://github.com/cosdt/text-generation-inference)
 （TGI 官方仓库的 fork，Ascend 适配以 release 形式发布在该 fork 上）。
 
 ## 前置条件
@@ -178,9 +178,9 @@ echo "${UPSTREAM_REF}"
 
 ```shell #test-setup load="upstream_ref>>ref"
 git clone --depth 1 --branch "<ref>" \
-  https://github.com/cosdt-ci-test/text-generation-inference.git tgi \
+  https://github.com/cosdt/text-generation-inference.git tgi \
   || { git clone --depth 1 \
-         https://github.com/cosdt-ci-test/text-generation-inference.git tgi \
+         https://github.com/cosdt/text-generation-inference.git tgi \
        && git -C tgi fetch --depth 1 origin "<ref>" \
        && git -C tgi checkout -q FETCH_HEAD; }
 ```

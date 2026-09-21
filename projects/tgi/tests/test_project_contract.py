@@ -38,7 +38,7 @@ class TestTgiProjectContract(unittest.TestCase):
         self.assertEqual(len(projects), 1)
         project = projects[0]
         self.assertEqual(
-            project["upstream_repo"], "cosdt-ci-test/text-generation-inference"
+            project["upstream_repo"], "cosdt/text-generation-inference"
         )
         self.assertEqual(project["runner"], "linux-aarch64-a2-2")
         self.assertEqual(
@@ -55,7 +55,7 @@ class TestTgiProjectContract(unittest.TestCase):
         self.assertIn("linux-aarch64-a2-2", workflow)
         self.assertIn("--device=/dev/davinci1", workflow)
         self.assertIn("--device=/dev/hisi_hdc", workflow)
-        self.assertIn("cosdt-ci-test/text-generation-inference", workflow)
+        self.assertIn("cosdt/text-generation-inference", workflow)
 
     def test_doc_label_contract_parses_and_ids_pair_up(self) -> None:
         text = _DOC.read_text(encoding="utf-8")
@@ -83,7 +83,7 @@ class TestTgiProjectContract(unittest.TestCase):
             "| transformers | 4.57.6 |",
             "| kernels | 0.5.0 |",
             # the fork under guard + ref checkout
-            "https://github.com/cosdt-ci-test/text-generation-inference.git",
+            "https://github.com/cosdt/text-generation-inference.git",
             'git clone --depth 1 --branch "<ref>"',
             # source build: rust toolchain mirror + cargo profile + pyo3/protoc
             "https://rsproxy.cn/rustup-init.sh",

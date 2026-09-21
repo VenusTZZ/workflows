@@ -7,7 +7,7 @@ Qwen3-0.6B 做端到端 `/generate` 验证——**单卡基线 + 双卡 HCCL 张
 
 ## 看护对象与前提
 
-- **上游仓库**：`cosdt-ci-test/text-generation-inference`（TGI 官方仓库的
+- **上游仓库**：`cosdt/text-generation-inference`（TGI 官方仓库的
   fork，Ascend 适配在 `feat/ascend-npu` 分支开发、已合入 fork 的 `main`，
   以 release 形式发布在该 fork 上）。
 - **看护信号**（与 peft/ms-swift 相同）：quick-start 引擎轮询 fork 的
