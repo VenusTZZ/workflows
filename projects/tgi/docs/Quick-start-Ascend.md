@@ -6,7 +6,7 @@
 本文档覆盖上游官方 release 中**尚未包含**的 Ascend NPU 支持：构建、安装、
 启动与推理验证使用
 [cosdt-ci-test/text-generation-inference](https://github.com/cosdt-ci-test/text-generation-inference)
-（TGI 官方仓库的 fork，Ascend 适配已合入该 fork 的 `main`）。
+（TGI 官方仓库的 fork，Ascend 适配以 release 形式发布在该 fork 上）。
 
 ## 前置条件
 
@@ -167,8 +167,8 @@ python -c "from modelscope import snapshot_download; print(snapshot_download('Qw
 
 ### 获取源码
 
-克隆 fork 并 checkout 到本次看护的 ref（工作流注入 `UPSTREAM_REF`，`<ref>`
-为该 ref；fork 上未打 release 时引擎按 fallback 链解析为 `main` HEAD）：
+克隆 fork 并 checkout 到本次看护的 release tag（工作流注入 `UPSTREAM_REF`，
+`<ref>` 为该 tag）：
 
 <!--
 ```shell #test-setup store="upstream_ref"
@@ -185,9 +185,8 @@ git clone --depth 1 --branch "<ref>" \
        && git -C tgi checkout -q FETCH_HEAD; }
 ```
 
-> `<ref>` 为要安装的 release tag 或 commit SHA（也可替换为任意分支名）。
-> 手工执行时无需 `UPSTREAM_REF`，直接把 `<ref>` 换成分支名（如 `main`）
-> 或 commit SHA。
+> `<ref>` 为要安装的 release tag（也可替换为任意分支名或 commit SHA）。
+> 手工执行时无需 `UPSTREAM_REF`，直接把 `<ref>` 换成 tag，如 `v3.3.7-npu`。
 
 ### 编译 Rust 二进制
 
