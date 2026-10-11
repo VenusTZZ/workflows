@@ -92,6 +92,10 @@ Sokoban 的交互模板直接继承上游 defaults，CI 只覆盖环境数量和
 
 ## 已知边界
 
+- [roll-examples #105](https://github.com/cosdt-ci-test/workflows/actions/runs/38128320886)
+  的 20 条任务均在 setup 的 vLLM 依赖解析阶段缺少 `packaging`，尚未进入 example。
+  setup 现先显式安装 `packaging==25.0` 并检查解析 API，再读取 wheel 元数据；
+  不再假设基础镜像或 `--no-deps` 安装会提供该依赖。完整 NPU 运行仍待下一轮验证。
 - v0.4.0 的配置兼容：所有 supported 条目显式覆盖 `transfer_backend.backend_name=null`，
   使用本地 DataProto 传输。该 release 默认启用 TransferQueue（16 个存储单元），
   单卡 runner 的空闲 CPU 不足；即使 CPU 足够，`protocol.py` 也明确禁止 NPU 使用 RemoteBatch。

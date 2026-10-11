@@ -113,6 +113,16 @@ PY
 
 install_npu_vllm_dependencies() {
   local requirements_file="$1"
+  # --no-deps wheel installs do not provide packaging. Bootstrap the parser
+  # in this interpreter before using it, even on a minimal CANN image.
+  python -m pip install -q "packaging==25.0"
+  python - <<'PY'
+from importlib.metadata import version
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+assert canonicalize_name(Requirement('torch_npu>=2.10').name) == 'torch-npu'
+print('vLLM metadata parser ready: packaging', version('packaging'))
+PY
   # Read metadata without importing vLLM. Its PyPI wheel declares CUDA
   # kernels and torch 2.11; Ascend uses its own pinned torch/kernel stack.
   python - "$requirements_file" <<'PY'
