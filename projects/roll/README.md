@@ -12,12 +12,12 @@ release-only 监控、matrix 调度、结果校验与状态写回，本仓不修
 - 对账单位是「完整运行配置」`.yaml`；根目录 `start_*_pipeline.py` 与各目录 `run_*.sh`
   是公共 launcher / 别名，不重复登记。
 - `examples/` 快照共 146 个 YAML：`examples/config/` 的 9 个共享片段由一个
-  unsupported 目录条目汇总，其余 137 个文件登记为 `20 supported` + `117 unsupported`；
-  加上目录汇总项，manifest 共 `20 supported` + `118 unsupported`。
+  unsupported 目录条目汇总，其余 137 个文件登记为 `19 supported` + `118 unsupported`；
+  加上目录汇总项，manifest 共 `19 supported` + `119 unsupported`。
   相对旧 117-YAML 快照：新增 34 个上游文件全部登记；5 个 distill/onpolicy 旧路径
   在 v0.4.0 已迁移到 `examples/distill/` 下新路径，按新路径重新登记。
 
-## Supported：二十条昇腾链路
+## Supported：十九条昇腾链路
 
 | Example | CI 参数 | Runner | 覆盖 |
 |---|---|---|---|
@@ -29,15 +29,14 @@ release-only 监控、matrix 调度、结果校验与状态写回，本仓不修
 | `examples/qwen2.5-0.5B-agentic/agent_val_frozen_lake-pg_var_is_correct.yaml` | manifest `overlay_args` | `linux-aarch64-a2-2` | TOPR + 训推一致性校正（train_infer_correction），待实跑 |
 | `examples/qwen2.5-0.5B-agentic/agent_val_frozen_lake_gigpo.yaml` | manifest `overlay_args` | `linux-aarch64-a2-2` | FrozenLake GiGPO 步进优势（StepEnvManager），待实跑 |
 | `examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_gigpo.yaml` | manifest `overlay_args` | `linux-aarch64-a2-2` | Sokoban GiGPO（step_envs 片段），待实跑 |
-| `examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_lora.yaml` | manifest `overlay_args` | `linux-aarch64-a2-2` | LoRA 微调（all-linear/rank32，fsdp2 is_lora 分支），待实跑 |
+| `examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_lora.yaml` | manifest `overlay_args` | `linux-aarch64-a2-2` | LoRA 微调（显式七类投影/rank32，fsdp2 is_lora 分支），#107 已通过 |
 | `examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_dynamic_batching.yaml` | manifest `overlay_args` | `linux-aarch64-a2-2` | 训练/推理动态 batching（reference 覆盖回 hf_infer），待实跑 |
 | `examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_native.yaml` | manifest `overlay_args` | `linux-aarch64-a2-2` | 原生 Sokoban 环境步进 REINFORCE（AgentNativeStepEnvManager），关闭异步，待实跑 |
 | `examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_ppo.yaml` | manifest `overlay_args` | `linux-aarch64-a2-2` | PPO（gae + FSDP2 critic 与 train 共置卡 0），待实跑 |
 | `examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_sao.yaml` | manifest `overlay_args` | `linux-aarch64-a2-2` | SAO（skip_obs_gae + sao pg_variant + critic），待实跑 |
-| `examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_agent_runner.yaml` | manifest `overlay_args` | `linux-aarch64-a2-2` | AgentRunner 2.0（ProxyEnvManager + GEMRunner，gem-llm 已随 setup 安装），待实跑 |
 | `examples/docs_examples/example_grpo.yaml` | manifest `overlay_args` | `linux-aarch64-a2-4` | 文档 GRPO，保留算法，数学奖励域，待实跑 |
 | `examples/docs_examples/example_gspo.yaml` | manifest `overlay_args` | `linux-aarch64-a2-4` | GSPO 序列级重要性比率（importance_sampling=seq），待实跑 |
-| `examples/docs_examples/example_ppo.yaml` | manifest `overlay_args` | `linux-aarch64-a2-4` | GAE + critic，与 actor_train 共置卡 0-1，warmup=0，待实跑 |
+| `examples/docs_examples/example_ppo.yaml` | manifest `overlay_args` | `linux-aarch64-a2-4` | GAE + critic，actor/critic/infer/reference 各一张卡，warmup=0，待复验 |
 | `examples/docs_examples/example_topr.yaml` | manifest `overlay_args` | `linux-aarch64-a2-4` | 用公开配置补全权重与 GAE critic，原生 ActorPGWorker/topr，待实跑 |
 | `examples/qwen2.5-7B-rlvr_megatron/rlvr_config_dynamic_batching.yaml` | manifest `overlay_args` | `linux-aarch64-a2-4` | actor/reference 保留 token 动态 batching，待实跑 |
 | `examples/qwen2.5-7B-rlvr_megatron/rlvr_lora_fsdp2.yaml` | manifest `overlay_args` | `linux-aarch64-a2-4` | REINFORCE + rank32 LoRA，保留 train/infer 低秩权重，待实跑 |
@@ -69,7 +68,7 @@ ROLL release 的三个 launcher 只接受 `--config_path` / `--config_name`，
 临时配置生成在上游 `examples/` 下的唯一目录中，运行结束后自动清理；
 解析后的副本保存在 `$CI_OUTPUT_DIR/resolved_config.yaml`，可在 runner 日志对应路径诊断。
 Sokoban 的交互模板直接继承上游 defaults，CI 只覆盖环境数量和动作/token 上限。
-二十条任务共用 `Qwen/Qwen2.5-0.5B-Instruct`，ModelScope 使用当前 runner 可用缓存：
+十九条任务共用 `Qwen/Qwen2.5-0.5B-Instruct`，ModelScope 使用当前 runner 可用缓存：
 
 - 单卡 rollout：单环境、最多两次动作、序列 256。
 - 两卡 Agentic train：单步 2 环境组、序列 256；FSDP2 train 占卡 0，vLLM 卡 1，hf reference 与 train 同卡。
@@ -92,6 +91,23 @@ Sokoban 的交互模板直接继承上游 defaults，CI 只覆盖环境数量和
 
 ## 已知边界
 
+- [roll-examples #107](https://github.com/cosdt-ci-test/workflows/actions/runs/38141709005)
+  20 条中 17 条通过，上一轮两条 GiGPO、两条 LoRA 与 TOPR 的调整均已通过实跑。
+  本轮只处理三个失败项：
+  - Sokoban native：`async_generation_ratio=0.0` 虽通过 float 配置校验，但
+    `GroupQueue.advance_step` 直接将该值交给 `range()`，必须保留整数表示 `0`。
+    dacite 接受该整数作为 float 字段，且不将其转换成 float。日志还显示首次
+    prompt 有 258 token，超过 256 上限，导致空轨迹；序列/vLLM 上限同步升到 512，
+    动作数与生成上限不变。这是上一轮只检查配置类型、未覆盖调度器的遗漏。
+  - 文档 PPO：actor/critic 共卡并行训练出现 EmbeddingDenseBackward/Vector Core
+    timeout。采用 #107 已通过的 TOPR 隔离布局：actor=0、critic=1、vLLM=2、reference=3，
+    actor/critic 各使用 FSDP size 1，保留 PPO、GAE 与 critic 更新；超时根因未由日志完全证明。
+  - Sokoban GEM AgentRunner：依赖安装与模块导入已通过，但 v0.4.0 的
+    `ProxyEnvManager.run_rollout_loop` 无条件调用 `set_episode_context`，
+    `GEMRunner` 及其 `AgentRunner` 基类均未实现该方法。只有另一种 Rock runner
+    实现，不能用它替换 GEM 来冒充同一 example。在不打补丁的约束下移回
+    unsupported，并删除不再使用的 `agentic_gem_npu` 专用安装分支。
+  当前 supported 为 19 条：17 条已通过，两条待本轮修复后的 NPU 验证。
 - [roll-examples #106](https://github.com/cosdt-ci-test/workflows/actions/runs/38133267677)
   环境准备全部通过，20 条中 13 条成功。七条失败配方按日志调整，已通过配方不改：
   - FrozenLake GiGPO：完成训练后，详细日志 `json.dumps(metrics)` 无法序列化

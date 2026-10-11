@@ -3,8 +3,8 @@ version: 1
 # 对账单位是「完整运行配置」（.yaml）：根目录 start_*_pipeline.py 与各目录 run_*.sh
 # 是公共 launcher / 别名，不重复登记；examples/config/ 是被其他配置继承的共享片段。
 #
-# supported 二十条链路：单卡 rollout、七条四卡 RLVR、以及十二条两卡 Agentic train
-# （Agentic 共十二条，含原有 Sokoban）：GRPO/TOPR/训推校正/GiGPO/LoRA/动态 batching/native/PPO/SAO/GEM。
+# supported 十九条链路：单卡 rollout、七条四卡 RLVR、以及十一条两卡 Agentic train
+# （Agentic 共十一条，含原有 Sokoban）：GRPO/TOPR/训推校正/GiGPO/LoRA/动态 batching/native/PPO/SAO。
 # 国内 CANN 镜像 + setup 动态装栈；基于 release 上游 YAML，用 overlay_args 声明 CI 覆盖项。
 # ++ 添加或覆盖字段，~ 删除字段；项目 runner 使用 Hydra 组合配置，不修改上游源码。
 # unsupported 的语义是「本看护体系当前不跑它」：注释区分硬阻塞与待实测项。
@@ -632,7 +632,7 @@ supported:
       - '++eval_steps=1000'
       - '++rollout_batch_size=2'
       - '++val_batch_size=2'
-      - '++sequence_length=256'
+      - '++sequence_length=512'
       - '++pretrain="${oc.env:ROLL_MODEL_PATH}"'
       - '++reward_pretrain="${oc.env:ROLL_MODEL_PATH}"'
       - '++actor_train.training_args.per_device_train_batch_size=1'
@@ -646,7 +646,7 @@ supported:
       - '++actor_train.infer_batch_size=1'
       - '++actor_infer.generating_args.max_new_tokens=32'
       - '~actor_infer.strategy_args.strategy_config'
-      - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:256,enforce_eager:true}'
+      - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:512,enforce_eager:true}'
       - '++actor_infer.device_mapping="list(range(1,2))"'
       - '++reference.strategy_args.strategy_name="hf_infer"'
       - '++reference.device_mapping="list(range(0,1))"'
@@ -663,7 +663,7 @@ supported:
       - '++render_save_dir=""'
       - '++train_env_manager.tags=["SokobanNativeEnv"]'
       - '++val_env_manager.tags=["SokobanNativeEnv"]'
-      - '++async_generation_ratio=0.0'
+      - '++async_generation_ratio=0'
     timeout_minutes: 240
 
   # Sokoban PPO（gae + FSDP2 critic 同卡共置）；track/checkpoint 覆盖为 stdout/file_system，1 步冒烟，待实跑。
@@ -804,66 +804,6 @@ supported:
       - '++critic_epochs=1'
     timeout_minutes: 240
 
-  # Sokoban AgentRunner（ProxyEnvManager + GEMRunner，gem-llm 已由 setup 安装）；两卡 FSDP2，1 步冒烟，待实跑。
-  - path: examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_agent_runner.yaml
-    profile: agentic_gem_npu
-    runner: linux-aarch64-a2-2
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    exec: examples/start_agentic_pipeline.py
-    overlay_args:
-      - '--config_path'
-      - 'qwen2.5-0.5B-agentic'
-      - '--config_name'
-      - 'agentic_val_sokoban_agent_runner'
-      - '++exp_name="roll-ci-agentic_val_sokoban_agent_runner"'
-      - '++transfer_backend.backend_name=null'
-      - '++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"'
-      - '++output_dir="${oc.env:CI_OUTPUT_DIR}/output"'
-      - '++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"'
-      - '++checkpoint_config.type="file_system"'
-      - '++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"'
-      - '++track_with="stdout"'
-      - '~tracker_kwargs'
-      - '++num_gpus_per_node=2'
-      - '++max_steps=1'
-      - '++save_steps=10'
-      - '++eval_steps=1000'
-      - '++rollout_batch_size=2'
-      - '++val_batch_size=2'
-      - '++sequence_length=256'
-      - '++pretrain="${oc.env:ROLL_MODEL_PATH}"'
-      - '++reward_pretrain="${oc.env:ROLL_MODEL_PATH}"'
-      - '++actor_train.training_args.per_device_train_batch_size=1'
-      - '++actor_train.training_args.gradient_accumulation_steps=1'
-      - '++actor_train.training_args.warmup_steps=0'
-      - '++actor_train.training_args.lr_scheduler_type="constant"'
-      - '++actor_train.strategy_args.strategy_name="fsdp2_train"'
-      - '~actor_train.strategy_args.strategy_config'
-      - '++actor_train.strategy_args.strategy_config={fsdp_size:1,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false}'
-      - '++actor_train.device_mapping="list(range(0,1))"'
-      - '++actor_train.infer_batch_size=1'
-      - '++actor_infer.generating_args.max_new_tokens=32'
-      - '~actor_infer.strategy_args.strategy_config'
-      - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:256,enforce_eager:true}'
-      - '++actor_infer.device_mapping="list(range(1,2))"'
-      - '++reference.strategy_args.strategy_name="hf_infer"'
-      - '++reference.device_mapping="list(range(0,1))"'
-      - '++reference.infer_batch_size=1'
-      - '++train_env_manager.max_env_num_per_worker=2'
-      - '++train_env_manager.num_env_groups=1'
-      - '++train_env_manager.group_size=2'
-      - '++train_env_manager.num_groups_partition=[1]'
-      - '++val_env_manager.max_env_num_per_worker=1'
-      - '++val_env_manager.num_env_groups=1'
-      - '++val_env_manager.num_groups_partition=[1]'
-      - '++max_tokens_per_step=32'
-      - '++max_actions_per_traj=2'
-      - '++render_save_dir=""'
-      - '~custom_envs'
-      - '++custom_envs={SimpleSokoban:"${custom_env.SimpleSokoban}"}'
-      - '++train_env_manager.tags=["SimpleSokoban"]'
-      - '++val_env_manager.tags=["SimpleSokoban"]'
-    timeout_minutes: 240
   # 文档 GRPO 数学 RLVR；原生 FSDP2/vLLM + 本地数学数据替换默认 Megatron/7B，保留 GRPO 算法，待实跑。
   - path: examples/docs_examples/example_grpo.yaml
     profile: rlvr_npu
@@ -1041,8 +981,8 @@ supported:
     - ++actor_train.data_args.file_name=["${oc.env:FIXTURE_DIR}/ci_math_8.jsonl"]
     - ++actor_train.data_args.preprocessing_num_workers=1
     - ~actor_train.strategy_args.strategy_config
-    - ++actor_train.strategy_args.strategy_config={fsdp_size:2,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false,use_batched_model_update:false}
-    - ++actor_train.device_mapping="list(range(0,2))"
+    - ++actor_train.strategy_args.strategy_config={fsdp_size:1,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false,use_batched_model_update:false}
+    - ++actor_train.device_mapping="list(range(0,1))"
     - ++actor_infer.model_args.flash_attn="fa2"
     - ++actor_infer.generating_args.max_new_tokens=64
     - ++actor_infer.data_args.template="qwen2_5"
@@ -1070,13 +1010,13 @@ supported:
     - ++actor_train.data_args.domain_interleave_probs={math_rule:1.0}
     - ++critic_warmup=0
     - ++critic_epochs=1
-    - ++critic.device_mapping="list(range(0,2))"
+    - ++critic.device_mapping="list(range(1,2))"
     - ++critic.model_args.flash_attn="fa2"
     - ++critic.training_args.per_device_train_batch_size=1
     - ++critic.training_args.gradient_accumulation_steps=1
     - ++critic.training_args.warmup_steps=0
     - ~critic.strategy_args.strategy_config
-    - ++critic.strategy_args.strategy_config={enable_mix_precision:true,fsdp_size:2,reshard_after_forward:true,offload_policy:false,wrap_policy:{transformer_layer_cls_to_wrap:["Qwen2DecoderLayer"]}}
+    - ++critic.strategy_args.strategy_config={enable_mix_precision:true,fsdp_size:1,reshard_after_forward:true,offload_policy:false,wrap_policy:{transformer_layer_cls_to_wrap:["Qwen2DecoderLayer"]}}
     - ++critic.infer_batch_size=1
     timeout_minutes: 240
 
@@ -1317,6 +1257,8 @@ supported:
     - ++reward_clip=10.0
     timeout_minutes: 240
 unsupported:
+  # Sokoban GEM AgentRunner：ProxyEnvManager 调用 set_episode_context，但 v0.4.0 的 GEMRunner 未实现；无补丁无法运行。
+  - examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_agent_runner.yaml
   # RLVR 序列 packing；worker_config.py 仅允许 Megatron，改用 FSDP2/HF 会强制关闭 packing，不能保留核心功能。
   - examples/qwen2.5-7B-rlvr_megatron/rlvr_config_sequence_packing.yaml
   # DeepEyes 图文缺陷检测 Agentic 训练（Qwen2.5-VL-7B）；不支持：Megatron 训练后端在昇腾当前不支持，且 7B VLM 规模超单卡 CI。
@@ -1353,7 +1295,7 @@ unsupported:
   - examples/qwen2_5-vl-3B-rlvr_fsdp2/rlvr_fsdp2_offload.yaml
   # FrozenLake AMD 变体（0.5B，Megatron）；不支持：AMD 平台配置（rocm）+ Megatron。
   - examples/qwen2.5-0.5B-agentic/agent_val_frozen_lake_amd.yaml
-  # FrozenLake 的异步变体；CI 需 ++async_generation_ratio=0.0 关闭异步才可单节点稳定运行，关闭后与已接入的 frozen_lake 主配置等价，不单独登记。
+  # FrozenLake 的异步变体；CI 需 ++async_generation_ratio=0 关闭异步才可单节点稳定运行，关闭后与已接入的 frozen_lake 主配置等价，不单独登记。
   - examples/qwen2.5-0.5B-agentic/agent_val_frozen_lake_async.yaml
   # FrozenLake 异步 AMD 变体；不支持：AMD + Megatron。
   - examples/qwen2.5-0.5B-agentic/agent_val_frozen_lake_async_amd.yaml
@@ -1540,7 +1482,7 @@ unsupported:
   - examples/qwen-image-diffusion/flow_grpo_geneval_fsdp2_80GB.yaml
   # Qwen-Image 仅 rollout；vllm_omni 推理后端无昇腾适配 + 私有 ocr 数据。
   - examples/qwen-image-diffusion/qwen_image_rollout.yaml
-  # Sokoban PPO 的异步变体；CI 需 ++async_generation_ratio=0.0 关闭异步，关闭后与已接入的 ppo 主配置等价，不单独登记。
+  # Sokoban PPO 的异步变体；CI 需 ++async_generation_ratio=0 关闭异步，关闭后与已接入的 ppo 主配置等价，不单独登记。
   - examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_ppo_as1.yaml
   # Sokoban SAO 的异步变体；CI 关闭异步后与已接入的 sao 主配置等价，不单独登记。
   - examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_sao_as1.yaml
