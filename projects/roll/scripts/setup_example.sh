@@ -111,6 +111,47 @@ print(f"roll import path ok: {source}")
 PY
 }
 
+install_npu_vllm_dependencies() {
+  local requirements_file="$1"
+  # Read metadata without importing vLLM. Its PyPI wheel declares CUDA
+  # kernels and torch 2.11; Ascend uses its own pinned torch/kernel stack.
+  python - "$requirements_file" <<'PY'
+from importlib.metadata import requires
+from pathlib import Path
+import sys
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+
+managed = {'torch', 'torch-npu', 'torchvision', 'torchaudio', 'triton',
+           'triton-ascend', 'vllm', 'transformers'}
+cuda_only = {'flashinfer-python', 'flashinfer-cubin', 'flash-attn',
+             'humming-kernels', 'quack-kernels', 'tokenspeed-mla',
+             'tilelang', 'fastsafetensors', 'helion'}
+selected = []
+for package in ('vllm', 'vllm-ascend'):
+    for value in requires(package) or []:
+        requirement = Requirement(value)
+        if requirement.marker and not requirement.marker.evaluate({'extra': ''}):
+            continue
+        name = canonicalize_name(requirement.name)
+        if name in managed or name in cuda_only or name.startswith('nvidia-'):
+            print(f'NPU recipe omits {package} dependency: {requirement}')
+            continue
+        if name == 'opencv-python-headless':
+            # Video inputs are not supported by this project's text recipes.
+            requirement = Requirement('opencv-python-headless==4.11.0.86')
+        elif name == 'mistral-common':
+            # The image extra pulls NumPy-2-only OpenCV. Text tokenizers remain.
+            requirement.extras.discard('image')
+        selected.append(str(requirement))
+selected += ['transformers==4.57.6', 'scipy==1.16.3',
+             'opencv-python-headless==4.11.0.86']
+Path(sys.argv[1]).write_text('\n'.join(sorted(set(selected))) + '\n', encoding='utf-8')
+print('NPU vLLM dependency recipe:', sys.argv[1])
+PY
+  python -m pip install -q -r "$requirements_file"
+}
+
 install_rollout_stack() {
   local target_root="${TARGET_ROOT:?TARGET_ROOT is required}"
   local requirements_file
@@ -121,19 +162,20 @@ install_rollout_stack() {
   echo "=> installing matched torch 2.10 / torch_npu 2.10 runtime"
   python -m pip install -q \
     "torch==2.10.0" "torchvision==0.25.0" "torchaudio==2.10.0" \
-    "numpy==1.26.4"
+    "numpy==1.26.4" "scipy==1.16.3"
   pip_ascend -q --no-deps "torch-npu==2.10.0.post4"
 
   echo "=> installing vLLM 0.23.0 / vLLM-Ascend 0.23.0rc1 from domestic indexes"
-  python -m pip install -q --index-url "$HUAWEICLOUD_PIP_INDEX" \
-    "vllm==0.23.0"
+  # Never resolve the CUDA dependency graph from these generic wheels.
+  # Install their non-CUDA dependencies explicitly using the Ascend recipe.
+  python -m pip install -q --no-deps --index-url "$HUAWEICLOUD_PIP_INDEX" \
+    "vllm==0.23.0" "vllm-ascend==0.23.0rc1"
+  install_npu_vllm_dependencies "$target_root/.ci-requirements-vllm-npu.txt"
   python -m pip uninstall -y -q triton triton-ascend || true
   python -m pip install -q --index-url "$HUAWEICLOUD_PIP_INDEX" \
     "triton==3.5.0"
   python -m pip install -q --no-deps --index-url "$ASCEND_PIP_INDEX" \
     "triton-ascend==3.2.1"
-  python -m pip install -q --index-url "$HUAWEICLOUD_PIP_INDEX" \
-    "vllm-ascend==0.23.0rc1"
 
   # Generic vLLM metadata can select a CUDA torch build.  Restore the exact
   # NPU pair after installing vLLM, exactly as the v0.3.0 Ascend guide
@@ -170,10 +212,17 @@ install_rollout_stack() {
 import tempfile
 from pathlib import Path
 
-import numpy, pandas, pyarrow, datasets
+import numpy, pandas, pyarrow, datasets, scipy
+from scipy.sparse import csr_matrix
+from scipy.optimize import linear_sum_assignment
 from datasets import Dataset, load_dataset
 print('data stack:', 'numpy', numpy.__version__, 'pandas', pandas.__version__,
-      'pyarrow', pyarrow.__version__, 'datasets', datasets.__version__)
+      'pyarrow', pyarrow.__version__, 'datasets', datasets.__version__,
+      'scipy', scipy.__version__)
+assert scipy.__version__ == '1.16.3'
+assert csr_matrix(numpy.eye(2)).sum() == 2
+rows, columns = linear_sum_assignment([[0, 1], [1, 0]])
+assert rows.tolist() == columns.tolist() == [0, 1]
 with tempfile.TemporaryDirectory(prefix='roll-data-probe-') as work:
     path = Path(work) / 'train.parquet'
     Dataset.from_list([{'text': 'ROLL NPU CI dependency probe'}]).to_parquet(str(path))
@@ -187,6 +236,12 @@ print("torch_npu", torch_npu.__version__)
 print("vllm", vllm.__version__)
 print("triton", triton.__version__)
 print("NPU available", torch.npu.is_available(), "count", torch.npu.device_count())
+from vllm.platforms import current_platform
+from vllm_ascend.platform import NPUPlatform
+if not isinstance(current_platform, NPUPlatform):
+    raise SystemExit(f'vLLM did not select Ascend NPU: {type(current_platform)}')
+from transformers import AutoModelForCausalLM, Trainer
+print('vLLM NPU platform and Transformers imports passed')
 PY
   rm -f "$requirements_file"
 }

@@ -127,3 +127,20 @@ Hydra 参数展开、配置组合、路径检查与上游 launcher 调用全部�
 没有删除运行功能。tests/ 仅保留 test_quick_start_ascend.py 与必要的 __init__.py，
 独立 quick-start workflow 不变。supported 仍为 20 条，公共引擎、上游源码及
 其他项目均未修改；schedule 保持原配置。
+
+## Run #101 安装修复
+
+20 条任务都在 vLLM 安装阶段失败，尚未进入 example。通用 vLLM 0.23.0
+wheel 的 CUDA 依赖图包含 humming-kernels[cu13]、nvidia-cutlass-dsl 等，
+不能直接用于昇腾环境。setup 现在用 --no-deps 安装固定版本 vLLM 与
+vLLM-Ascend，再从其 metadata 生成非 CUDA 依赖清单；torch/torch_npu 与
+Triton 沿用项目的独立 NPU 配方，避免被通用 wheel 替换。
+
+这是一套仅针对当前文本 CI 用例的依赖配方，不宣称满足通用 CUDA wheel
+的所有 metadata：Transformers 保持 4.57.6，OpenCV 保持兼容 NumPy 1 的
+4.11.0.86，Mistral common 不安装 image extra。视频/多模态和 CUDA 专用
+kernel 仍不在支持范围；没有修改这些包或上游 example 的源码。
+全程约束同时补齐 SciPy 1.16.3，避免 SciPy 1.18 与 NumPy 1.26.4 冲突。
+setup 检查 SciPy sparse/optimize、Parquet 读写、Transformers 导入，以及
+vLLM 实际选择的 NPU platform。20 条配方与并行上限 4 保持不变，
+真实 NPU 训练仍需后续手动 Actions 验证。
