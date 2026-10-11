@@ -414,6 +414,9 @@ supported:
       - '++custom_envs={FrozenLake:"${custom_env.FrozenLake}"}'
       - '++train_env_manager.tags=["FrozenLake"]'
       - '++val_env_manager.tags=["FrozenLake"]'
+      - '++logging_steps=0'
+      - '++track_with="tensorboard"'
+      - '++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"'
     timeout_minutes: 240
 
   # Sokoban GiGPO 步进优势（StepEnvManager + step_envs）；两卡 FSDP2，1 步冒烟，待实跑。
@@ -442,7 +445,7 @@ supported:
       - '++eval_steps=1000'
       - '++rollout_batch_size=2'
       - '++val_batch_size=2'
-      - '++sequence_length=256'
+      - '++sequence_length=512'
       - '++pretrain="${oc.env:ROLL_MODEL_PATH}"'
       - '++reward_pretrain="${oc.env:ROLL_MODEL_PATH}"'
       - '++actor_train.training_args.per_device_train_batch_size=1'
@@ -456,7 +459,7 @@ supported:
       - '++actor_train.infer_batch_size=1'
       - '++actor_infer.generating_args.max_new_tokens=32'
       - '~actor_infer.strategy_args.strategy_config'
-      - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:256,enforce_eager:true}'
+      - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:512,enforce_eager:true}'
       - '++actor_infer.device_mapping="list(range(1,2))"'
       - '++reference.strategy_args.strategy_name="hf_infer"'
       - '++reference.device_mapping="list(range(0,1))"'
@@ -475,9 +478,12 @@ supported:
       - '++custom_envs={SimpleSokoban:"${custom_env.SimpleSokoban}"}'
       - '++train_env_manager.tags=["SimpleSokoban"]'
       - '++val_env_manager.tags=["SimpleSokoban"]'
+      - '++logging_steps=0'
+      - '++track_with="tensorboard"'
+      - '++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"'
     timeout_minutes: 240
 
-  # Sokoban LoRA 微调（all-linear, rank 32，fsdp2 is_lora 分支）；两卡 FSDP2，1 步冒烟，待实跑。
+  # Sokoban LoRA 微调（显式七类线性投影、rank 32）；两卡 FSDP2，避免上游 all-linear 未定义函数。
   - path: examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_lora.yaml
     profile: agentic_train_npu
     runner: linux-aarch64-a2-2
@@ -536,6 +542,8 @@ supported:
       - '++custom_envs={SimpleSokoban:"${custom_env.SimpleSokoban}"}'
       - '++train_env_manager.tags=["SimpleSokoban"]'
       - '++val_env_manager.tags=["SimpleSokoban"]'
+      - '++actor_train.model_args.lora_target="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"'
+      - '++actor_infer.model_args.lora_target="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"'
     timeout_minutes: 240
 
   # Sokoban 训练/推理动态 batching；reference 覆盖回 hf_infer，两卡 FSDP2，1 步冒烟，待实跑。
@@ -655,7 +663,7 @@ supported:
       - '++render_save_dir=""'
       - '++train_env_manager.tags=["SokobanNativeEnv"]'
       - '++val_env_manager.tags=["SokobanNativeEnv"]'
-      - '++async_generation_ratio=null'
+      - '++async_generation_ratio=0.0'
     timeout_minutes: 240
 
   # Sokoban PPO（gae + FSDP2 critic 同卡共置）；track/checkpoint 覆盖为 stdout/file_system，1 步冒烟，待实跑。
@@ -798,7 +806,7 @@ supported:
 
   # Sokoban AgentRunner（ProxyEnvManager + GEMRunner，gem-llm 已由 setup 安装）；两卡 FSDP2，1 步冒烟，待实跑。
   - path: examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_agent_runner.yaml
-    profile: agentic_train_npu
+    profile: agentic_gem_npu
     runner: linux-aarch64-a2-2
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     exec: examples/start_agentic_pipeline.py
@@ -1210,6 +1218,7 @@ supported:
     - ~rewards.ifeval
     - ~rewards.code_sandbox
     - ~rewards.llm_judge
+    - ++lora_target="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
     timeout_minutes: 240
   # 文档 TOPR；用公开配置补全 GAE critic、数值权重并显式选择原生 ActorPGWorker/topr，四卡单步，待实跑。
   - path: examples/docs_examples/example_topr.yaml
@@ -1248,8 +1257,8 @@ supported:
     - ++actor_train.data_args.file_name=["${oc.env:FIXTURE_DIR}/ci_math_8.jsonl"]
     - ++actor_train.data_args.preprocessing_num_workers=1
     - ~actor_train.strategy_args.strategy_config
-    - ++actor_train.strategy_args.strategy_config={fsdp_size:2,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false,use_batched_model_update:false}
-    - ++actor_train.device_mapping="list(range(0,2))"
+    - ++actor_train.strategy_args.strategy_config={fsdp_size:1,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false,use_batched_model_update:false}
+    - ++actor_train.device_mapping="list(range(0,1))"
     - ++actor_infer.model_args.flash_attn="fa2"
     - ++actor_infer.generating_args.max_new_tokens=64
     - ++actor_infer.data_args.template="qwen2_5"
@@ -1277,12 +1286,12 @@ supported:
     - ++actor_train.data_args.domain_interleave_probs={math_rule:1.0}
     - ++critic_warmup=0
     - ++critic_epochs=1
-    - ++critic.device_mapping="list(range(0,2))"
+    - ++critic.device_mapping="list(range(1,2))"
     - ++critic.model_args.flash_attn="fa2"
     - ++critic.training_args.per_device_train_batch_size=1
     - ++critic.training_args.gradient_accumulation_steps=1
     - ++critic.training_args.warmup_steps=0
-    - ++critic.strategy_args.strategy_config={enable_mix_precision:true,fsdp_size:2,reshard_after_forward:true,offload_policy:false,wrap_policy:{transformer_layer_cls_to_wrap:["Qwen2DecoderLayer"]}}
+    - ++critic.strategy_args.strategy_config={enable_mix_precision:true,fsdp_size:1,reshard_after_forward:true,offload_policy:false,wrap_policy:{transformer_layer_cls_to_wrap:["Qwen2DecoderLayer"]}}
     - ++critic.infer_batch_size=1
     - ++exp_name="roll-ci-docs-example_topr"
     - ~rewards.crossthinkqa
@@ -1344,7 +1353,7 @@ unsupported:
   - examples/qwen2_5-vl-3B-rlvr_fsdp2/rlvr_fsdp2_offload.yaml
   # FrozenLake AMD 变体（0.5B，Megatron）；不支持：AMD 平台配置（rocm）+ Megatron。
   - examples/qwen2.5-0.5B-agentic/agent_val_frozen_lake_amd.yaml
-  # FrozenLake 的异步变体；CI 需 ++async_generation_ratio=null 关闭异步才可单节点稳定运行，关闭后与已接入的 frozen_lake 主配置等价，不单独登记。
+  # FrozenLake 的异步变体；CI 需 ++async_generation_ratio=0.0 关闭异步才可单节点稳定运行，关闭后与已接入的 frozen_lake 主配置等价，不单独登记。
   - examples/qwen2.5-0.5B-agentic/agent_val_frozen_lake_async.yaml
   # FrozenLake 异步 AMD 变体；不支持：AMD + Megatron。
   - examples/qwen2.5-0.5B-agentic/agent_val_frozen_lake_async_amd.yaml
@@ -1531,7 +1540,7 @@ unsupported:
   - examples/qwen-image-diffusion/flow_grpo_geneval_fsdp2_80GB.yaml
   # Qwen-Image 仅 rollout；vllm_omni 推理后端无昇腾适配 + 私有 ocr 数据。
   - examples/qwen-image-diffusion/qwen_image_rollout.yaml
-  # Sokoban PPO 的异步变体；CI 需 ++async_generation_ratio=null 关闭异步，关闭后与已接入的 ppo 主配置等价，不单独登记。
+  # Sokoban PPO 的异步变体；CI 需 ++async_generation_ratio=0.0 关闭异步，关闭后与已接入的 ppo 主配置等价，不单独登记。
   - examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_ppo_as1.yaml
   # Sokoban SAO 的异步变体；CI 关闭异步后与已接入的 sao 主配置等价，不单独登记。
   - examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_sao_as1.yaml

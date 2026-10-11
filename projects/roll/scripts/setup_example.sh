@@ -311,6 +311,27 @@ case "$PROFILE" in
     check_npu_devices 2
     export ASCEND_RT_VISIBLE_DEVICES="0,1"
     ;;
+  agentic_gem_npu)
+    echo "profile: agentic_gem_npu (2 NPUs: GEM AgentRunner + vLLM rollout)"
+    check_npu_devices 2
+    export ASCEND_RT_VISIBLE_DEVICES="0,1"
+    # message_tracker imports SGLang's OpenAI protocol even with vLLM inference.
+    # Match ROLL requirements_torch280_sglang.txt, but do not install its CUDA
+    # runtime extras or replace the tested torch/vLLM/Transformers stack.
+    python -m pip install -q --no-deps "sglang==0.5.2"
+    python -m pip install -q "openai==2.6.1" pybase64 ipython aiohttp cloudpickle Pillow partial-json-parser json-repair
+    python - <<'PY'
+from pydantic import TypeAdapter
+from sglang.srt.entrypoints.openai.protocol import ChatCompletionMessageParam
+from sglang.srt.function_call.function_call_parser import FunctionCallParser
+from roll.pipeline.agentic.env_manager.message_tracker import MessageTracker
+from roll.pipeline.agentic.env_manager.proxy_env_manager import ProxyEnvManager
+from roll.pipeline.agentic.agent_runner.gem_runner import GEMRunner
+message = TypeAdapter(ChatCompletionMessageParam).validate_python(
+    {'role': 'user', 'content': 'GEM protocol dependency probe'})
+print('GEM MessageTracker/runner and SGLang protocol imports ready:', message)
+PY
+    ;;
   rlvr_npu)
     echo "profile: rlvr_npu (4 NPUs: FSDP2 train x2 + vLLM + reference)"
     check_npu_devices 4

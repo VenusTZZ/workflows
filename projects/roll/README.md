@@ -92,6 +92,27 @@ Sokoban 的交互模板直接继承上游 defaults，CI 只覆盖环境数量和
 
 ## 已知边界
 
+- [roll-examples #106](https://github.com/cosdt-ci-test/workflows/actions/runs/38133267677)
+  环境准备全部通过，20 条中 13 条成功。七条失败配方按日志调整，已通过配方不改：
+  - FrozenLake GiGPO：完成训练后，详细日志 `json.dumps(metrics)` 无法序列化
+    NumPy int64。两条 GiGPO 关闭详细 JSON 输出（`logging_steps=0`），指标改走
+    原生 TensorBoard，避免 stdout tracker 的同类序列化问题；不关闭训练或 GiGPO。
+  - Sokoban GiGPO：首个 prompt 已有 288～293 token，256 的序列预算导致没有任何
+    action 就进入空轨迹 concat。序列和 vLLM 上限改为 512，仍限制两次动作、每次 32 token。
+  - Sokoban LoRA：上游 `all-linear` 分支调用未定义的 `find_all_linear_modules`。
+    训练/推理显式列出 Qwen 七类线性投影（q/k/v/o/gate/up/down），保留 rank 32。
+  - RLVR LoRA：冻结基础权重同步在 vLLM 的 gate_up_proj 名称匹配处失败；训练侧
+    只给 attention 注入 LoRA，推理侧还包装 MLP。两侧统一为相同七类投影，
+    保留基础权重与 adapter 的实际同步；该路径仍须 NPU 复验，不能仅凭静态检查判定解决。
+  - Sokoban native：`async_generation_ratio=null` 不符合 float 类型，改为 `0.0`，
+    原生环境与同步训练语义不变。
+  - AgentRunner：ProxyEnvManager/MessageTracker 依赖 SGLang 的协议和工具解析 API，
+    即使推理走 vLLM 也不能缺包。专用 `agentic_gem_npu` 安装上游指定的
+    `sglang==0.5.2`（无 CUDA extras）及前端依赖，setup 检查真实模块导入；其他 profile 不变。
+  - 文档 TOPR：actor/critic 在同两卡上并行训练时出现 AI Core timeout。
+    四卡重新隔离为 actor=0、critic=1、vLLM=2、reference=3，训练各用 FSDP size 1，
+    保留 ActorPGWorker/TOPR、GAE 和 critic 更新。这是隔离共卡影响的缓解方案，
+    日志不足以证明超时根因，仍需真实运行确认。
 - [roll-examples #105](https://github.com/cosdt-ci-test/workflows/actions/runs/38128320886)
   的 20 条任务均在 setup 的 vLLM 依赖解析阶段缺少 `packaging`，尚未进入 example。
   setup 现先显式安装 `packaging==25.0` 并检查解析 API，再读取 wheel 元数据；
