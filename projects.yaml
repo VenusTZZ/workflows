@@ -593,6 +593,23 @@ projects:
     dir: projects/modelscope
     workflows:
       quick_start: .github/workflows/modelscope-quick-start.yml
+  # funasr quickstart exercises the FunASR speech toolkit on Ascend NPU:
+  # source install at the latest release tag, then 5 AutoModel(device="npu:0")
+  # smokes covering the core features -- paraformer-zh production pipeline
+  # (fsmn-vad + ct-punc + cam++), SenseVoiceSmall multilingual ASR with
+  # emotion/event tags, paraformer-zh-streaming chunked streaming,
+  # emotion2vec_plus_large standalone emotion, plus the `funasr` CLI.
+  # FunASR's AutoModel natively accepts device="npu:0" (is_npu_available
+  # imports torch_npu), unlike modelscope's verify_device which rejects npu.
+  - name: funasr
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: modelscope/FunASR
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/funasr
+    workflows:
+      quick_start: .github/workflows/funasr-quick-start.yml
   # axolotl quickstart installs the latest GitHub release from PyPI
   # (--no-build-isolation --no-deps, no CUDA extras) on CANN 9.1.0 +
   # torch 2.11 / torch_npu 2.11, then runs a 3-step LoRA SFT of
