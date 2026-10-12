@@ -124,6 +124,18 @@ supported:
       - +actor.fsdp.offload_params=true
       - ++actor.weight_update_mode=disk
       - actor.path=${AREAL_MODEL_PATH}
+      # Online mode consumes ONE rewarded trajectory per step, but openclaw's
+      # config diverges from hermes' here: train_dataset.batch_size=4 makes
+      # rollout.consumer_batch_size=4, so the trainer waits for FOUR exported
+      # trajectories before its first step. The demo only ever exports one
+      # (episode N's refresh exports episode N-1; the last episode is never
+      # refreshed), so the trainer hangs forever -> run never exits. Drop to 1
+      # (== hermes). Also null the actor's reward/adv norm, exactly as hermes'
+      # yaml does: group/batch normalization on a singleton group (n_samples=1)
+      # erases the reward signal (cli_args.py:1900 warns on this exact case).
+      - train_dataset.batch_size=1
+      - actor.reward_norm=null
+      - actor.adv_norm=null
       # openclaw 的对话很短（demo_lifecycle 只发一句数学题，没有 hermes 那种
       # 11.5K token 的 system prompt），KV 需求极小：0.2 已足够，且给同卡的
       # FSDP actor 让出更多 PPO 峰值余量（hermes 因长 prompt 取 0.25）。
