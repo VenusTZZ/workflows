@@ -7,13 +7,13 @@
 # run-example matrix / validate-results / save-monitor-state) lives in the
 # engine. See docs/examples-guard-engine.md for the design.
 #
-# Guard state: projects/areno/examples_manifest.yaml registers five agentic
-# RLVR examples as supported (bash_game, codebreaker, coding, duelgrid,
-# shopping), each anchored on its run_agent.py entry. bash_game / codebreaker
-# / coding / duelgrid are already green and are currently commented off to
-# save NPU time (their run_agent.py is parked under unsupported); shopping is
-# active. The run-example matrix schedules one 1-card NPU leg per active
-# supported entry (linux-aarch64-a2-1), each running
+# Guard state: projects/areno/examples_manifest.yaml registers examples as
+# supported - bash_game, codebreaker, coding, duelgrid (already green,
+# currently commented off to save NPU time; their run_agent.py is parked under
+# unsupported) plus active shopping, terminal_hacking, tictactoe (tool-call +
+# XML no-tool variants) and math (non-agentic GSPO-on-GSM8K, no entry file),
+# each anchored on its manifest path. The run-example matrix schedules one
+# 1-card NPU leg per active supported entry (linux-aarch64-a2-1), each running
 # projects/areno/scripts/setup_example.sh (source build of
 # areno.accel._areno_accel_npu) + run_example.sh.
 # Refs: latest release v0.0.8 already ships the full examples/ tree

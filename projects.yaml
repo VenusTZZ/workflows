@@ -732,12 +732,14 @@ projects:
   # 冒烟。Examples 走共享引擎 examples-template.yml：release 线 v0.0.8
   # 已带全部用例（examples/ 树与 main 一致），manifest 已把 bash_game
   # （单轮）、codebreaker（多轮）、coding（多轮 + shell 工具）、duelgrid
-  # （单轮 JSON 动作）、shopping（固定 4 轮工具序列）五条 agentic 链路（各锚在
-  # run_agent.py）登记 supported；bash_game/codebreaker/coding/duelgrid 已跑绿、
-  # 当前注释禁用省卡（其 run_agent.py 暂列 unsupported），shopping 生效；其余
-  # 共 58 个 .py 逐文件登记 unsupported 待验证。生效的 supported 在单卡 a2-1
-  # 上由 projects/areno/scripts/{setup,run}_example.sh 现场装 main（v0.0.8 无
-  # NPU 后端，同 quick-start 的临时处理）跑 1 步 agentic GSPO。
+  # （单轮 JSON 动作）、shopping（固定 4 轮工具序列）、terminal_hacking（单步
+  # 候选词）、tictactoe（tool-call + XML no-tool 两变体）、math（非 agentic
+  # GSPO-on-GSM8K）等链路登记 supported；bash_game/codebreaker/coding/duelgrid
+  # 已跑绿、当前注释禁用省卡（其 run_agent.py 暂列 unsupported），生效的有
+  # shopping、terminal_hacking、tictactoe 两变体、math；其余共 54 个 .py 逐文件
+  # 登记 unsupported 待验证。生效的 supported 在单卡 a2-1 上由
+  # projects/areno/scripts/{setup,run}_example.sh 现场装 main（v0.0.8 无 NPU
+  # 后端，同 quick-start 的临时处理）跑 1 步 GSPO。
   # category/support_level 按姊妹项目 areal 的口径暂记，如与项目
   # 表不符以表为准。
   - name: areno
