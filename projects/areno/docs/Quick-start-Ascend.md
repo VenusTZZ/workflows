@@ -124,7 +124,7 @@ echo "${UPSTREAM_REF}"
 ```shell #test id="install-areno" load="upstream_ref>>ref"
 git clone --depth 1 https://github.com/inclusionAI/AReno.git
 cd AReno
-git checkout main
+git checkout main >/dev/null
 source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1
 uv pip install -e . --no-build-isolation
 python -c "from importlib.metadata import version; print('areno', version('areno'))"
