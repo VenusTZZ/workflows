@@ -16,7 +16,7 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-align"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-openclaw-grpo areal-align"
 AIME_PREP=0
 BOBA_PREP=0
 COUNTDOWN_PREP=0
@@ -47,6 +47,10 @@ case "$PROFILE" in
   # hermes/train.py: online RL; agent runtime package installed in
   # section 1c, orchestration in run_example.sh's hermes branch.
   areal-hermes-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HERMES_PREP=1 ;;
+  # openclaw/train.py: online RL through the OpenAI-compatible proxy gateway;
+  # no agent runtime package to install (demo_lifecycle.py is pure HTTP), so
+  # no *_PREP flag. Reuses hermes' model, already in the cache-seed volume.
+  areal-openclaw-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct" ;;
   # hhrlhf_dpo.py: DPO pipeline is model-agnostic; upstream yaml's 7B swapped
   # for 1.5B (7B fp32 init OOMs the 32GB cards in the pool, 15GB per run).
   areal-align) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HHRLHF_PREP=1 ;;

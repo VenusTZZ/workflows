@@ -55,48 +55,79 @@ supported:
   #     - +total_train_steps=1
   #     - vllm.max_model_len=8576
   #   timeout_minutes: 60
-  # Hermes 在线 RL（唯一覆盖 online 模式 + agent service + per-session key
-  # 链路的例子）。config.yaml 默认 CUDA 栈，NPU 全部 overlay：rollout sglang
-  # （NPU 无 SGLang，换 config 自带的 vllm 段）、actor megatron（换 fsdp 与
-  # 其余条目同构）、weight_update_mode xccl（NPU 共卡建不起 HCCL 组，换
-  # disk）。**另需 _version=v1 回退**：config 的 _version:v2 会强制非 LoRA
-  # 走 awex 权重同步（rl_trainer.py:380-399，v2 忽略 weight_update_mode），
-  # 而 awex 的推理侧 /awex/report_parallelism 端点上游只有 SGLang 实现
-  # （inference_service/vllm/ 无此路由），vLLM 后端必 404；回 v1 后
-  # weight_update_mode=disk 生效（与 ascend 时代配方同路径）。
-  # train.py 在线模式阻塞等外部会话，run_example.sh 的 hermes 分支编排完整
-  # 生命周期：start_session → 管道驱动 hermes_loop → set_reward → refresh
-  # 结束导出轨迹 → 1 步训练退出；agent 运行时 hermes-agent 由 setup §1c 安装。
-  - path: examples/hermes/train.py
-    profile: areal-hermes-grpo
+  # # Hermes 在线 RL（唯一覆盖 online 模式 + agent service + per-session key
+  # # 链路的例子）。config.yaml 默认 CUDA 栈，NPU 全部 overlay：rollout sglang
+  # # （NPU 无 SGLang，换 config 自带的 vllm 段）、actor megatron（换 fsdp 与
+  # # 其余条目同构）、weight_update_mode xccl（NPU 共卡建不起 HCCL 组，换
+  # # disk）。**另需 _version=v1 回退**：config 的 _version:v2 会强制非 LoRA
+  # # 走 awex 权重同步（rl_trainer.py:380-399，v2 忽略 weight_update_mode），
+  # # 而 awex 的推理侧 /awex/report_parallelism 端点上游只有 SGLang 实现
+  # # （inference_service/vllm/ 无此路由），vLLM 后端必 404；回 v1 后
+  # # weight_update_mode=disk 生效（与 ascend 时代配方同路径）。
+  # # train.py 在线模式阻塞等外部会话，run_example.sh 的 hermes 分支编排完整
+  # # 生命周期：start_session → 管道驱动 hermes_loop → set_reward → refresh
+  # # 结束导出轨迹 → 1 步训练退出；agent 运行时 hermes-agent 由 setup §1c 安装。
+  # - path: examples/hermes/train.py
+  #   profile: areal-hermes-grpo
+  #   runner: linux-aarch64-a2-1
+  #   npu_devices: '0'
+  #   image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+  #   overlay_args:
+  #     - --config examples/hermes/config.yaml
+  #     # Single card / DP=1: online RL feeds ONE session trajectory per step
+  #     # ("online mode consumes one independently rewarded trajectory per
+  #     # group"), but a 2-card actor (fsdp:d2p1t1, dp=2) makes
+  #     # train_controller.balanced_greedy_partition(items=1, K=2) raise
+  #     # "Number of items (1) must be >= K (2)". One card avoids the split;
+  #     # rollout colocated on the same card keeps colocate valid.
+  #     - rollout.backend=vllm:d1p1t1
+  #     - rollout._version=v1
+  #     - actor.backend=fsdp:d1p1t1
+  #     - actor._version=v1
+  #     - +actor.fsdp.offload_params=true
+  #     - ++actor.weight_update_mode=disk
+  #     - actor.path=${AREAL_MODEL_PATH}
+  #     - rollout.admin_api_key=sk-areal-ci
+  #     # The proxy gateway's /rl/start_session (and the session lifecycle)
+  #     # authenticates with AgentConfig.admin_api_key, NOT
+  #     # rollout.admin_api_key (see rollout_controller.start_proxy_gateway:
+  #     # create_proxy_gateway_app(admin_api_key=agent_cfg.admin_api_key));
+  #     # left unset it defaults to "areal-admin-key" and the run_example.sh
+  #     # start_session/set_reward calls get HTTP 401. Align both to the same
+  #     # value (+ = add the missing key under rollout.agent).
+  #     - +rollout.agent.admin_api_key=sk-areal-ci
+  #     - vllm.gpu_memory_utilization=0.25
+  #     - vllm.max_model_len=16384
+  #     - gconfig.max_new_tokens=256
+  #     - +rollout.setup_timeout=1800
+  #     - total_train_steps=1
+  #     - total_train_epochs=1
+  #   timeout_minutes: 90
+  # OpenClaw 在线 RL（覆盖"任意 OpenAI 兼容 agent runtime"的通用在线路径，
+  # 与 hermes 互补：hermes 绑定 hermes-agent 包，本条目走纯 OpenAI
+  # chat-completions 协议）。config.yaml 无 _version（默认 v1），且
+  # rollout.agent.admin_api_key 与 rollout.admin_api_key 都已在 config 里设成
+  # sk-test123456（无需 hermes 那样的 401 对齐修复）。**不需要 ZeroClaw 外部
+  # 二进制**：上游自带 examples/openclaw/demo_lifecycle.py 就是无头全生命周期
+  # 驱动（health → rl/start_session → chat/completions → rl/set_reward →
+  # refresh），由 run_example.sh 的 openclaw 分支后台调用。单卡 DP=1（在线
+  # 单轨迹约束，同 hermes）。
+  - path: examples/openclaw/train.py
+    profile: areal-openclaw-grpo
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
     overlay_args:
-      - --config examples/hermes/config.yaml
-      # Single card / DP=1: online RL feeds ONE session trajectory per step
-      # ("online mode consumes one independently rewarded trajectory per
-      # group"), but a 2-card actor (fsdp:d2p1t1, dp=2) makes
-      # train_controller.balanced_greedy_partition(items=1, K=2) raise
-      # "Number of items (1) must be >= K (2)". One card avoids the split;
-      # rollout colocated on the same card keeps colocate valid.
+      - --config examples/openclaw/config.yaml
       - rollout.backend=vllm:d1p1t1
-      - rollout._version=v1
       - actor.backend=fsdp:d1p1t1
-      - actor._version=v1
       - +actor.fsdp.offload_params=true
       - ++actor.weight_update_mode=disk
       - actor.path=${AREAL_MODEL_PATH}
-      - rollout.admin_api_key=sk-areal-ci
-      # The proxy gateway's /rl/start_session (and the session lifecycle)
-      # authenticates with AgentConfig.admin_api_key, NOT
-      # rollout.admin_api_key (see rollout_controller.start_proxy_gateway:
-      # create_proxy_gateway_app(admin_api_key=agent_cfg.admin_api_key));
-      # left unset it defaults to "areal-admin-key" and the run_example.sh
-      # start_session/set_reward calls get HTTP 401. Align both to the same
-      # value (+ = add the missing key under rollout.agent).
-      - +rollout.agent.admin_api_key=sk-areal-ci
-      - vllm.gpu_memory_utilization=0.25
+      # openclaw 的对话很短（demo_lifecycle 只发一句数学题，没有 hermes 那种
+      # 11.5K token 的 system prompt），KV 需求极小：0.2 已足够，且给同卡的
+      # FSDP actor 让出更多 PPO 峰值余量（hermes 因长 prompt 取 0.25）。
+      - vllm.gpu_memory_utilization=0.2
       - vllm.max_model_len=16384
       - gconfig.max_new_tokens=256
       - +rollout.setup_timeout=1800
@@ -392,8 +423,6 @@ unsupported:
   - examples/scaffolding/search_scaffolding.py
   # README 要求 SERPER/JINA key，且需先起 72B judge SGLang 服务
   - examples/search_agent/tongyi_deepresearch/train.py
-  # online RL：外部流量经 gateway 驱动，无固定终点
-  - examples/openclaw/train.py
   # gateway 起后等外部流量（rollout_batch(data=None)），无人交互永久挂起
   - examples/experimental/inference_service/online_rollout.py
   # 依赖 zeroclaw fork + 改写其 home 配置；默认 SGLang（Ascend 不支持）
@@ -480,16 +509,20 @@ unsupported:
   # SWE 的 rollout 过滤函数（按组内 reward 方差过滤全对/全错样本并打点统计）
   - examples/swe/filter_function.py
   # 其它被调用的实现 / 环境 / 演示（agent_service 的 agent、
-  # openclaw 生命周期演示、sandbox_daytona 奖励示例、
-  # tau2 的 agent、docs/debug 调试脚本）。
+  # sandbox_daytona 奖励示例、tau2 的 agent、docs/debug 调试脚本）。
   - examples/agent_service/agent.py
   - examples/docs/debug/cmp_rollout.py
+  - examples/sandbox_daytona/reward_example.py
+  - examples/tau2/agent.py
+  # OpenClaw 在线 RL 的驱动文件：demo_lifecycle.py 是无头全生命周期驱动
+  # （health → rl/start_session → chat/completions → rl/set_reward → refresh），
+  # 由 supported 的 examples/openclaw/train.py 看护编排调用（run_example.sh 的
+  # openclaw 分支后台拉起）；_fmt.py 是它的输出格式化依赖。start_session.py /
+  # set_reward.py 是等价的独立 CLI（人工交互调试用），非入口。
   - examples/openclaw/_fmt.py
   - examples/openclaw/demo_lifecycle.py
   - examples/openclaw/set_reward.py
   - examples/openclaw/start_session.py
-  - examples/sandbox_daytona/reward_example.py
-  - examples/tau2/agent.py
   # Hermes 的 AgentRunnable 实现（Agent Service 进程内每 session 加载，
   # 需 hermes-agent 包 + 上游 LLM key，同 agent_service/agent.py 类）
   - examples/hermes/hermes.py
