@@ -5,6 +5,8 @@
 # CI base image is ghcr.io/hwvanici/areal_npu, which already has the full stack:
 # CANN, torch, vLLM-Ascend, Megatron, MindSpeed, huggingface_hub etc.
 # We should NOT reinstall these; just install the target AReaL source and assets.
+# Exception (section 1b): the vllm/vllm-ascend pair is swapped to the 0.22.1
+# line to match the guarded v2.x code's vllm layout.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -14,7 +16,7 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-align"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-openclaw-grpo areal-align"
 AIME_PREP=0
 BOBA_PREP=0
 COUNTDOWN_PREP=0
@@ -22,6 +24,8 @@ HHRLHF_PREP=0
 TORL_PREP=0
 SCAFFOLD_PREP=0
 CLEVR_SUBSET_PREP=0
+HERMES_PREP=0
+OPENCLAW_PREP=0
 case "$PROFILE" in
   areal-vlm-grpo) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct" ;;
   areal-vlm-mt-grpo) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
@@ -41,6 +45,14 @@ case "$PROFILE" in
   areal-math-aime) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; AIME_PREP=1 ;;
   areal-math-boba) MODEL_ID="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"; BOBA_PREP=1 ;;
   areal-countdown-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; COUNTDOWN_PREP=1 ;;
+  # hermes/train.py: online RL; agent runtime package installed in
+  # section 1c, orchestration in run_example.sh's hermes branch.
+  areal-hermes-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HERMES_PREP=1 ;;
+  # openclaw/train.py: online RL through the OpenAI-compatible proxy gateway;
+  # no agent runtime package to install (demo_lifecycle.py is pure HTTP).
+  # OPENCLAW_PREP only patches demo_lifecycle.py's HTTP timeouts (section 1f).
+  # Reuses hermes' model, already in the cache-seed volume.
+  areal-openclaw-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; OPENCLAW_PREP=1 ;;
   # hhrlhf_dpo.py: DPO pipeline is model-agnostic; upstream yaml's 7B swapped
   # for 1.5B (7B fp32 init OOMs the 32GB cards in the pool, 15GB per run).
   areal-align) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HHRLHF_PREP=1 ;;
@@ -62,6 +74,183 @@ fi
 # -------------------------------------------------------
 command -v uv >/dev/null 2>&1 || pip install -q uv
 uv pip install --no-deps -e "$TARGET_ROOT" --system
+
+# -------------------------------------------------------
+# 1b. vLLM stack: swap the image's 0.23 line for 0.22.1.
+# The image ships the ascend-v1.0.5 branch stack (vllm/vllm-ascend
+# 0.23.0). The guarded v2.x code imports the pre-0.23 vllm layout
+# (vllm.entrypoints.openai.utils / vllm.entrypoints.utils exist
+# through 0.22.1, removed in 0.23) - without this swap every
+# rollout-backed entry dies on
+#   ModuleNotFoundError: No module named 'vllm.entrypoints.openai.utils'
+#
+# Recipe per vllm-ascend's own Dockerfile at v0.22.1rc1:
+#   - vllm-ascend 0.22.1rc1 PyPI wheel with --no-deps: its pins would
+#     re-resolve the frozen image stack (torch_npu 2.10.0.post2 etc);
+#   - vllm 0.22.1 from SOURCE with VLLM_TARGET_DEVICE=empty (pure
+#     Python, no compiled kernels - the ascend plugin supplies the
+#     device layer). NEVER install vllm from PyPI here: the wheel is
+#     built against torch==2.11.0, incompatible with the image's
+#     torch 2.10.0 and areal's torch<2.11 pin. --no-deps keeps the
+#     image stack untouched, --no-build-isolation lets setup.py see
+#     the system torch;
+#   - triton-ascend stays as the image's 3.2.2 (same 3.2.x generation
+#     as this line's 3.2.1);
+#   - the source build additionally needs setuptools-rust/setuptools-scm
+#     in the system env: --no-build-isolation skips the declared
+#     build-system requires, but setup.py imports both unconditionally.
+#     The optional rust extension is skipped when cargo is absent (same
+#     as vllm-ascend's own image, which ships no rust toolchain).
+# Applies to ALL profiles: fsdp-only entries (gsm8k_sft) double as
+# the control that the swap does not disturb the vllm-free path.
+# TODO(vllm-0.23): drop this block once upstream ships a v2.x NPU
+# image or vllm-ascend catches up with mainline's target layout.
+# -------------------------------------------------------
+VLLM_SRC="$GITHUB_WORKSPACE/vllm-0.22.1-src"
+git clone --depth 1 --branch v0.22.1 https://github.com/vllm-project/vllm.git "$VLLM_SRC"
+uv pip install --system --no-deps \
+  --index-url https://mirrors.aliyun.com/pypi/simple \
+  vllm-ascend==0.22.1rc1
+uv pip install --system \
+  --index-url https://mirrors.aliyun.com/pypi/simple \
+  "setuptools-rust>=1.9.0" "setuptools-scm>=8.0"
+VLLM_TARGET_DEVICE=empty uv pip install --system --no-deps --no-build-isolation \
+  -e "$VLLM_SRC"
+python -c "import torch, torch_npu, vllm, vllm_ascend; from vllm.entrypoints.openai.utils import validate_json_request; print(f'vllm {vllm.__version__} + vllm-ascend 0.22.1rc1 layout OK; torch {torch.__version__}, torch_npu {torch_npu.__version__}')"
+
+# -------------------------------------------------------
+# 1c. hermes profile: the agent runtime package. The model is the
+# standard shared-cache Qwen2.5-1.5B-Instruct (hermes-agent itself is
+# model-agnostic - it drives whatever OpenAI-compatible endpoint the
+# rollout engine serves); the Agent Service imports
+# examples.hermes.hermes.HermesAgent from the target checkout.
+# Index: tsinghua (not aliyun) - aliyun's PEP 658 .metadata sidecar for
+# hermes-agent's python-dotenv dep 404s intermittently; tuna mirrors the
+# metadata reliably (same mirror as transformers-quick-start.yml).
+# -------------------------------------------------------
+if [[ "$HERMES_PREP" == 1 ]]; then
+  uv pip install --system \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    hermes-agent==0.19.0
+fi
+
+# -------------------------------------------------------
+# 1d. NPU portability patch: lazy MegatronEngine import.
+# areal/v2/training_service/worker/awex.py:_create_training_adapter
+# imports areal.engine.megatron_engine (and the megatron weight-update
+# adapter) unconditionally, so even FSDP-only runs load megatron.bridge ->
+# peft/lora_layers.py -> `import transformer_engine`, a CUDA-only package
+# with no Ascend wheel (same class as bitsandbytes on aarch64). Defer both
+# imports until the engine is known to be Megatron - behaviour-preserving;
+# the editable install reads the patched file live.
+# TODO(npu-upstream): drop once upstream guards the import.
+# -------------------------------------------------------
+python3 - <<'PY'
+import os
+
+path = os.path.join(
+    os.environ["TARGET_ROOT"],
+    "areal", "v2", "training_service", "worker", "awex.py",
+)
+with open(path, encoding="utf-8") as fh:
+    text = fh.read()
+
+old = '''    from areal.engine.fsdp_engine import FSDPEngine
+    from areal.engine.megatron_engine import MegatronEngine
+    from areal.v2.weight_update.awex.fsdp_adapter import AwexFSDPAdapter
+    from areal.v2.weight_update.awex.megatron_adapter import (
+        AwexMegatronAdapter,
+    )
+
+    if isinstance(engine, FSDPEngine):
+        return AwexFSDPAdapter(engine)
+'''
+new = '''    from areal.engine.fsdp_engine import FSDPEngine
+    from areal.v2.weight_update.awex.fsdp_adapter import AwexFSDPAdapter
+
+    if isinstance(engine, FSDPEngine):
+        return AwexFSDPAdapter(engine)
+
+    # NPU: defer the Megatron imports - megatron.bridge drags the CUDA-only
+    # transformer_engine, which has no Ascend wheel.
+    from areal.engine.megatron_engine import MegatronEngine
+    from areal.v2.weight_update.awex.megatron_adapter import (
+        AwexMegatronAdapter,
+    )
+'''
+assert text.count(old) == 1, "awex.py layout changed; update the NPU patch"
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write(text.replace(old, new))
+print("patched awex.py: MegatronEngine import is now lazy", flush=True)
+PY
+
+# -------------------------------------------------------
+# 1e. hermes profile: raise hermes_loop's httpx timeout.
+# The CLI hardcodes httpx.AsyncClient(timeout=120.0) for the
+# /v1/responses round trip; the Hermes agent's system prompt alone is
+# ~11.5K tokens, and prefilling 16K context + generating up to 512 tokens
+# on a 1.5B model over NPU can exceed 120s -> httpx.ReadTimeout kills the
+# orchestration before the agent ever answers. Raise to 600s (hermes
+# profile only - other examples never call this script).
+# -------------------------------------------------------
+if [[ "$HERMES_PREP" == 1 ]]; then
+python3 - <<'PY'
+import os
+
+path = os.path.join(
+    os.environ["TARGET_ROOT"], "examples", "hermes", "hermes_loop.py"
+)
+with open(path, encoding="utf-8") as fh:
+    text = fh.read()
+
+old = "httpx.AsyncClient(timeout=120.0)"
+new = "httpx.AsyncClient(timeout=600.0)"
+assert text.count(old) == 1, "hermes_loop.py timeout layout changed"
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write(text.replace(old, new))
+print("patched hermes_loop.py: httpx timeout 120s -> 600s", flush=True)
+PY
+fi
+
+# -------------------------------------------------------
+# 1f. openclaw profile: raise demo_lifecycle's HTTP timeouts.
+# The bundled driver (examples/openclaw/demo_lifecycle.py, the headless
+# lifecycle client) hardcodes requests.post(..., timeout=30) on the
+# /chat/completions call. A real generation of up to 512 tokens on a 1.5B
+# model served by NPU vLLM far exceeds 30s, so the client times out, never
+# sends set_reward, and the trainer's online rollout then waits forever
+# (observed as a 900s hang, then "Server disconnected" on teardown). Raise
+# the read timeout to 600s and cap max_tokens at 256 to bound the slow
+# generation (the demo answer needs far fewer tokens).
+# -------------------------------------------------------
+if [[ "$OPENCLAW_PREP" == 1 ]]; then
+python3 - <<'PY'
+import os
+
+path = os.path.join(
+    os.environ["TARGET_ROOT"], "examples", "openclaw", "demo_lifecycle.py"
+)
+with open(path, encoding="utf-8") as fh:
+    text = fh.read()
+
+old = "timeout=30,"
+new = "timeout=600,"
+assert text.count(old) == 1, "demo_lifecycle.py chat timeout layout changed"
+text = text.replace(old, new)
+
+old_mt = '"max_tokens": 512,'
+new_mt = '"max_tokens": 256,'
+assert text.count(old_mt) == 1, "demo_lifecycle.py max_tokens layout changed"
+text = text.replace(old_mt, new_mt)
+
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write(text)
+print(
+    "patched demo_lifecycle.py: chat timeout 30s -> 600s, max_tokens 512 -> 256",
+    flush=True,
+)
+PY
+fi
 
 # -------------------------------------------------------
 # 2. Runtime Environment setup.
@@ -299,7 +488,7 @@ fi
 # harmless-base subset online (via HF_ENDPOINT mirror) into a flat local
 # dir; load_dataset(<dir>, split="train"/"test") then infers splits from
 # the file names. Exposed to overlay args via AREAL_HHRLHF_DATA.
-# NOTE: the dir is deliberately named "hh-rlhf" — areal's dataset dispatch
+# NOTE: the dir is deliberately named "hh-rlhf" 鈥?areal's dataset dispatch
 # matches the literal substring "hh-rlhf" in the path; a dir named
 # "hhrlhf" falls through to the load_from_disk fallback and errors out.
 if [[ "$HHRLHF_PREP" == 1 ]]; then

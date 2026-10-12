@@ -2,12 +2,9 @@
 # Run one supported Liger-Kernel example, unmodified.
 #
 # $1 is the manifest entry path (relative to EXAMPLES_ROOT/TARGET_ROOT).
-# The two entries are plain single-process scripts that do sibling imports
-# (callback / medusa_util), so we cd into the example directory and run the
-# file with the CI overlay appended. Device placement is the upstream
-# code's own job: liger's infer_device() returns "npu" and accelerate
-# places the model there, so a CPU fallback would mean the stack is broken -
-# the post-check below refuses to call that a pass.
+# Python entries run from their example directory for sibling imports.
+# run_qwen.sh fixes a 7B model and four processes, so we reproduce its
+# torchrun/FSDP recipe with the CI-sized overlay on two NPU devices.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -16,12 +13,23 @@ if [[ $# -lt 1 ]]; then
 fi
 
 EXAMPLE_REL="$1"
+export EXAMPLE_REL
 : "${TARGET_ROOT:?TARGET_ROOT is required}"
 : "${CI_OUTPUT_DIR:?CI_OUTPUT_DIR is required}"
 EXAMPLES_ROOT="${EXAMPLES_ROOT:-$TARGET_ROOT}"
+export EXAMPLES_ROOT
+
+if [[ "$EXAMPLE_REL" == examples/alignment/run_orpo.py ]]; then
+  source /usr/local/Ascend/ascend-toolkit/set_env.sh
+  PYTHON="$(command -v python3 || command -v python)"
+  export PYTHON
+  mkdir -p "$CI_OUTPUT_DIR"
+  bash "$(dirname "${BASH_SOURCE[0]}")/run_orpo.sh"
+  exit 0
+fi
 
 case "$EXAMPLE_REL" in
-  examples/huggingface/training.py|examples/medusa/train.py) ;;
+  examples/huggingface/training.py|examples/huggingface/run_qwen.sh|examples/medusa/train.py|examples/huggingface/training_multimodal.py) ;;
   *)
     echo "unsupported Liger-Kernel example entry: $EXAMPLE_REL" >&2
     exit 2
@@ -35,7 +43,11 @@ if [[ ! -f "$entry_path" ]]; then
 fi
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
-export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
+if [[ "$EXAMPLE_REL" == examples/huggingface/run_qwen.sh ]]; then
+  export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0,1}"
+else
+  export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
+fi
 mkdir -p "$CI_OUTPUT_DIR"
 
 if command -v python3 >/dev/null 2>&1; then
@@ -83,9 +95,13 @@ fi
 import torch
 import torch_npu
 
-if not torch.npu.is_available() or torch.npu.device_count() < 1:
-    raise SystemExit("NPU is unavailable; refusing CPU fallback")
-print(f"NPU devices visible: {torch.npu.device_count()}")
+import os
+
+required = 2 if os.environ["EXAMPLE_REL"] == "examples/huggingface/run_qwen.sh" else 1
+count = torch.npu.device_count()
+if not torch.npu.is_available() or count < required:
+    raise SystemExit(f"{os.environ['EXAMPLE_REL']} requires {required} NPU devices, found {count}")
+print(f"NPU devices visible: {count} (required: {required})")
 PY
 
 entry_dir="$(dirname "$entry_path")"
@@ -98,8 +114,13 @@ export PYTHONPATH="$entry_dir:${PYTHONPATH:-}"
 # reading train.log from inside this script would race; a redirect closes
 # the file before we inspect it.
 run_log="$CI_OUTPUT_DIR/example_run.log"
+if [[ "$EXAMPLE_REL" == examples/huggingface/run_qwen.sh ]]; then
+  command=("$PYTHON" -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node=2 training.py)
+else
+  command=("$PYTHON" "$(basename "$entry_path")")
+fi
 set +e
-"$PYTHON" "$(basename "$entry_path")" "${EXTRA_ARGS[@]}" >"$run_log" 2>&1
+"${command[@]}" "${EXTRA_ARGS[@]}" >"$run_log" 2>&1
 run_status=$?
 set -e
 cat "$run_log"
@@ -122,7 +143,9 @@ entry, run_log = sys.argv[1], sys.argv[2]
 out = Path(os.environ["CI_OUTPUT_DIR"])
 prefix = {
     "examples/huggingface/training.py": "hf_trainer",
+    "examples/huggingface/run_qwen.sh": "hf_fsdp",
     "examples/medusa/train.py": "medusa",
+    "examples/huggingface/training_multimodal.py": "multimodal",
 }[entry]
 matches = sorted(p for p in out.glob(f"{prefix}*") if p.is_dir())
 if not matches:

@@ -1,0 +1,88 @@
+# funasr quick start guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/quick-start-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, runner, container image + options, upstream repo,
+# monitored doc, and the test entry command. The guard loop, cache
+# I/O, state relay and publishing all live in the engine. See the
+# engine's `workflow_call.inputs` block for the full input contract.
+#
+# Cache keys (quick-start-monitor-state-funasr_*) and artifact names are
+# derived from project=funasr, not from the workflow name.
+#
+# No device mounts: the self-hosted NPU runner (`linux-aarch64-a2-1`,
+# 1-card) auto-passes `/dev/davinci*` into the container via the
+# cluster device-plugin, so container_options stays empty for device
+# binds (same convention as modelscope / lightx2v / torchtune / slime /
+# tensordict / accelerate / ray / torchtitan / transformers / diffusers /
+# mooncake).
+#
+# One bind mount beyond the defaults:
+#   1. modelscope hub cache -> /root/.cache/modelscope (the location
+#      FunASR's snapshot_download writes model weights to by default).
+#      FunASR downloads paraformer-zh / SenseVoiceSmall / fsmn-vad /
+#      ct-punc / cam++ / paraformer-zh-streaming / emotion2vec_plus_large
+#      (~3.3 GB total) here; bind-mount covers persistence + the
+#      cold-run download cost.
+
+name: funasr-quick-start
+
+concurrency:
+  # format() is load-bearing: a '||' between 'manual-' and
+  # github.run_id would short-circuit on the truthy literal and
+  # every dispatch would share one 'manual-' group.
+  group: ${{ github.event_name == 'schedule' && 'funasr-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  # cancel-in-progress: false because (1) a schedule run cancelled
+  # mid-way loses its outcome writeback - the outcome is what makes
+  # the retry mechanism work, and the 'if: always()' guard isn't
+  # enough when the container is being torn down; (2) dispatch runs
+  # already live in unique groups so there's nothing to cancel.
+  cancel-in-progress: false
+
+on:
+  schedule:
+    # Daily: '30 4 * * *' fires at 04:30 UTC (12:30 北京时间). FunASR
+    # releases on its own schedule (not per-commit), so a once-a-day
+    # audit matches transformers (the other daily quick-start) and is
+    # enough for doc fixes to propagate within a day.
+    - cron: '30 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  funasr-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      # Namespaces cache keys (quick-start-monitor-state-funasr_*), artifacts
+      # (funasr-quick-start-<run_id>) and the test working dir
+      # (workflows/projects/funasr).
+      project: funasr
+      # Self-hosted NPU runner for the test job only; the engine pins
+      # the cache I/O jobs (restore-cache / publish-and-persist) to
+      # GitHub-hosted ubuntu-latest.
+      test_runner: '["linux-aarch64-a2-1"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      container_options: >-
+        --volume=/data/ci-cache/modelscope/funasr:/root/.cache/modelscope
+      # 2h ceiling: cold run installs torch 2.9.0 + torch_npu + torchaudio,
+      # source-installs funasr (git clone at latest release tag +
+      # `uv pip install -e .`), downloads ~3.3 GB of models from
+      # ModelScope on first run (warm after via the bind-mount), and runs
+      # 5 NPU smokes. Covers several retries on dependency flakes.
+      timeout_minutes: 120
+      upstream_repo: modelscope/FunASR
+      # Contents API URL (NOT raw.githubusercontent.com): raw is
+      # firewalled off the NPU runner, and the engine's monitor
+      # already sends the Contents API auth headers. `?ref=${{ github.sha }}`
+      # is load-bearing: without it the Contents API defaults to the repo
+      # default branch (`main`) and a dispatch on this branch would
+      # silently test main's doc.
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/funasr/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/funasr/docs/Quick-start-Ascend.md
+      # cwd is workflows/projects/funasr; env contract (MONITORED_DOC_URL /
+      # UPSTREAM_REF / NPU_READY) is injected by the engine. All project
+      # env prep (CANN source, CUDA exclusion list, uv install, torch
+      # stack probe) lives in the test subclass's prepare_environment hook.
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

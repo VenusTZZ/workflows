@@ -8,7 +8,12 @@ entry="${1:-}"
 case "$entry" in
   gallery/transforms/plot_custom_transforms.py|\
   gallery/transforms/plot_custom_tv_tensors.py|\
-  references/classification/train.py) ;;
+  gallery/transforms/plot_tv_tensors.py|\
+  gallery/transforms/plot_keypoints_transforms.py|\
+  references/classification/train.py|\
+  references/segmentation/train.py|\
+  references/optical_flow/train.py|\
+  references/video_classification/train.py) ;;
   *) echo "unsupported TorchVision example entry: ${entry:-<missing>}" >&2; exit 2 ;;
 esac
 
@@ -45,7 +50,7 @@ if entry.startswith("gallery/"):
         raise SystemExit("gallery entry does not take CLI overlay arguments")
     torch.set_default_device("npu:0")
     sys.argv = [str(script)]
-else:
+elif entry == "references/classification/train.py":
     data_root = os.environ.get("VISION_DATA_ROOT")
     if not data_root or not Path(data_root, "train").is_dir() or not Path(data_root, "val").is_dir():
         raise SystemExit("five-class ImageFolder fixture missing")
@@ -54,6 +59,31 @@ else:
     output = Path(os.environ["CI_OUTPUT_DIR"]) / "classification"
     output.mkdir(parents=True, exist_ok=True)
     sys.argv = [str(script), *overlay, "--data-path", data_root, "--output-dir", str(output)]
+elif entry == "references/segmentation/train.py":
+    data_root = os.environ.get("VISION_SEG_DATA_ROOT")
+    voc_root = Path(data_root or "") / "VOCdevkit" / "VOC2012"
+    if not data_root or not (voc_root / "ImageSets" / "Segmentation" / "train.txt").is_file():
+        raise SystemExit("three-image VOC segmentation fixture missing")
+    if "--dataset" not in overlay or "voc" not in overlay or "--device" not in overlay or "npu:0" not in overlay:
+        raise SystemExit("segmentation entry requires --dataset voc --device npu:0")
+    output = Path(os.environ["CI_OUTPUT_DIR"]) / "segmentation"
+    output.mkdir(parents=True, exist_ok=True)
+    sys.argv = [str(script), *overlay, "--data-path", data_root, "--output-dir", str(output)]
+else:
+    data_root = os.environ.get("VISION_REFERENCE_DATA_ROOT")
+    if not data_root or not Path(data_root).is_dir():
+        raise SystemExit("local flow/video reference fixture missing")
+    if "--device" not in overlay or "npu:0" not in overlay:
+        raise SystemExit("new reference entry requires --device npu:0")
+    if any(key in os.environ for key in ("RANK", "WORLD_SIZE", "LOCAL_RANK", "SLURM_PROCID")):
+        raise SystemExit("new reference recipes require plain single-process launch; distributed CUDA path is not selected")
+    kind = "optical-flow" if "optical_flow" in entry else "video-classification"
+    output = Path(os.environ["CI_OUTPUT_DIR"]) / kind
+    output.mkdir(parents=True, exist_ok=True)
+    checkpoint = output / ("ci_flow_0.pth" if kind == "optical-flow" else "model_0.pth")
+    checkpoint.unlink(missing_ok=True)  # do not accept a prior run's checkpoint
+    data_flag = "--dataset-root" if kind == "optical-flow" else "--data-path"
+    sys.argv = [str(script), *overlay, data_flag, data_root, "--output-dir", str(output)]
 
 os.chdir(script.parent)
 sys.path.insert(0, str(script.parent))
@@ -74,11 +104,30 @@ elif entry.endswith("plot_custom_tv_tensors.py"):
     require_npu("my_dp")
     require_npu("wrapped")
     require_npu("wrapped_dog")
+elif entry.endswith("plot_tv_tensors.py"):
+    # The tutorial's first Image is a zero-copy wrapper around this tensor.
+    require_npu("tensor")
+elif entry.endswith("plot_keypoints_transforms.py"):
+    require_npu("orig_pts")
+    # Source retains PIL images for documentation rendering; point geometry is
+    # the genuine NPU workload, including rotation/perspective/crop operations.
+    for group in ("rotated_imgs", "padded_imgs_and_points", "resized_imgs", "perspective_imgs", "center_crops_and_points"):
+        values = namespace.get(group)
+        if not values or len(values) != 4:
+            raise SystemExit(f"keypoint tutorial result group missing: {group}")
+        for _, points in values:
+            if not isinstance(points, torch.Tensor) or points.device.type != "npu" or not bool(torch.isfinite(points).all()):
+                raise SystemExit(f"keypoint geometry did not complete on NPU: {group}")
+elif entry in {"references/optical_flow/train.py", "references/video_classification/train.py"}:
+    if not checkpoint.is_file():
+        raise SystemExit(f"{entry}: did not finish the original epoch and save a fresh checkpoint")
+    if torch.npu.max_memory_allocated() <= 0:
+        raise SystemExit(f"{entry}: did not allocate NPU memory")
 else:
     if not (output / "model_0.pth").is_file():
-        raise SystemExit("classification entry did not finish an epoch and save a checkpoint")
+        raise SystemExit(f"{entry}: did not finish an epoch and save a checkpoint")
     if torch.npu.max_memory_allocated() <= 0:
-        raise SystemExit("classification entry did not allocate NPU memory")
+        raise SystemExit(f"{entry}: did not allocate NPU memory")
 
 torch.npu.synchronize()
 print(f"NPU example passed: {entry}")

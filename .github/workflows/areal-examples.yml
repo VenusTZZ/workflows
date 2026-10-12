@@ -5,9 +5,10 @@
 # concurrency, upstream repo, dispatch input forwarding, and matrix
 # parallelism. See docs/examples-guard-engine.md for the design.
 #
-# NOTE: AReaL's NPU support lives on the `ascend-v1.0.5` branch (not main).
-# Dispatch with target_ref=ascend-v1.0.5 (or pin it here) so the checkout has
-# the NPU examples and configs.
+# NOTE: target_ref stays empty so the engine resolves the latest upstream
+# release; dispatch with an explicit ref to override. The image ships the
+# ascend-v1.0.5 branch's vllm stack - setup_example.sh section 1b swaps it
+# to the 0.22.1 line that the guarded v2.x code requires.
 
 name: areal-examples
 
@@ -23,9 +24,9 @@ on:
   workflow_dispatch:
     inputs:
       target_ref:
-        description: Branch, tag, or SHA to test (AReaL NPU support is on ascend-v1.0.5)
+        description: Branch, tag, or SHA to test (empty = latest upstream release)
         required: false
-        default: ascend-v1.0.5
+        default: ''
         type: string
 
 permissions:
@@ -38,5 +39,5 @@ jobs:
     with:
       project: areal
       upstream_repo: areal-project/AReaL
-      target_ref: ${{ inputs.target_ref || 'ascend-v1.0.5' }}
-      max_parallel: 4
+      target_ref: ${{ inputs.target_ref }}
+      max_parallel: 8

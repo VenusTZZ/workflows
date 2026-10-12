@@ -19,6 +19,12 @@ supported:
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     timeout_minutes: 120
+  # TVTensor FAQ 演示 Image/BoundingBoxes 的零拷贝包装与算术；合成张量在 NPU 上运行，仓内图片只供辅助说明。
+  - path: gallery/transforms/plot_tv_tensors.py
+    profile: vision_gallery_npu
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    timeout_minutes: 120
   # ResNet18 ImageFolder 分类训练；本地五类微型图片、单卡 NPU、1 epoch 与 batch 2，避开 CUDA AMP/分布式路径。
   - path: references/classification/train.py
     profile: vision_classification_npu
@@ -26,27 +32,65 @@ supported:
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args: [--model, resnet18, --device, 'npu:0', --epochs, '1', --batch-size, '2', --workers, '0', --train-crop-size, '64', --val-crop-size, '64', --val-resize-size, '72']
     timeout_minutes: 120
+  # VOC 语义分割训练/评估；本地三张带掩码图片、轻量 LR-ASPP/MobileNet、单卡 1 epoch，保留真实 NPU 前后向与混淆矩阵路径。
+  - path: references/segmentation/train.py
+    profile: vision_segmentation_npu
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: [--dataset, voc, --model, lraspp_mobilenet_v3_large, --device, 'npu:0', --epochs, '1', --batch-size, '1', --workers, '0']
+    timeout_minutes: 120
+
+  # 关键点几何变换；单卡 NPU 坐标/PIL 绘图，完整旋转与透视配方，待实跑。
+  - path: gallery/transforms/plot_keypoints_transforms.py
+    profile: vision_gallery_npu
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    timeout_minutes: 120
+  # RAFT-small 光流训练；4 对本地帧/合成 .flo、1 epoch 两步，单卡 NPU，待实跑。
+  - path: references/optical_flow/train.py
+    profile: vision_flow_npu
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: [--model, raft_small, --device, 'npu:0', --train-dataset, chairs, --epochs, '1', --batch-size, '2', --workers, '0', --num_flow_updates, '2', --name, ci_flow]
+    timeout_minutes: 120
+  # R3D-18 视频分类；400 类本地四帧短视频、32×32/50 训练批次，NPU，待实跑。
+  - path: references/video_classification/train.py
+    profile: vision_video_npu
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: [--model, r3d_18, --device, 'npu:0', --epochs, '1', --batch-size, '8', --workers, '0', --clip-len, '4', --frame-rate, '8', --clips-per-video, '1', --lr-warmup-epochs, '0', --lr, '0.001', --train-crop-size, '32', '32', --train-resize-size, '40', '40', --val-crop-size, '32', '32', --val-resize-size, '40', '40']
+    timeout_minutes: 120
 
 unsupported:
-  - examples/cpp/script_model.py  # 将 ResNet18 与 Faster R-CNN 导出为 TorchScript；脚本只保存模型，不执行 NPU 推理，单独运行不能证明设备兼容。
-  - examples/cpp/run_model.cpp  # C++ 加载 TorchScript 模型推理；源码只走 CPU/torch::kCUDA 分支，还需 LibTorch/CMake，未提供 NPU C++ 路径。
-  - gallery/others/plot_optical_flow.py  # RAFT 光流推理与绘图；设备硬选 CUDA/CPU，还下载公开视频及预训练权重，原样运行不覆盖 NPU。
-  - gallery/others/plot_repurposing_annotations.py  # 将分类/检测标注转为新任务并可视化；需预训练 Faster R-CNN 和仓内图片，核心流程在 CPU/PIL 上。
-  - gallery/others/plot_scripted_tensor_transforms.py  # TorchScript 张量预处理与 ResNet18 推理；设备硬选 CUDA/CPU且下载权重，不能在不改源码时证明 NPU。
-  - gallery/others/plot_visualization_utils.py  # 展示检测/分割/关键点可视化工具；依赖多个预训练模型、仓内图片与 NMS/RoIAlign 路径，非轻量 NPU 用例。
-  - gallery/transforms/plot_cutmix_mixup.py  # FakeData 批次上演示 CutMix/MixUp；主流程由 CPU/PIL DataLoader 产生，需设计 NPU 结果断言后再接入。
-  - gallery/transforms/plot_keypoints_transforms.py  # 仓内人物图片上的关键点 v2 变换与绘图；目前以 CPU/PIL 路径演示，尚无 NPU 张量验收。
-  - gallery/transforms/plot_rotated_box_transforms.py  # 旋转框变换和仓内图片可视化；主要是 CPU/PIL 绘图，需验证旋转框 NPU 算子后再接入。
-  - gallery/transforms/plot_transforms_e2e.py  # 小 COCO 数据上的 Mask R-CNN 分割演示；需 pycocotools 且模型用 torchvision.ops NMS/RoIAlign，NPU 适配待验证。
-  - gallery/transforms/plot_transforms_getting_started.py  # v2 图像变换入门与仓内图片绘图；默认走 CPU/PIL，尚无可断言的 NPU 计算结果。
-  - gallery/transforms/plot_transforms_illustrations.py  # 多种 v2 变换的图示；依赖仓内图片和 CPU/PIL/matplotlib，适合文档而非首轮 NPU 冒烟。
-  - gallery/transforms/plot_tv_tensors.py  # TVTensor 图片/框/掩码语义教程；含图片展示和 CPU 构造，需选定 NPU 张量输出再单独验证。
-  - references/classification/train_quantization.py  # 分类 QAT/PTQ 配方；使用 qnnpack/fbgemm 并转换 CPU 量化模型，不等于昇腾 NPU 量化训练。
-  - references/depth/stereo/cascade_evaluation.py  # 双目深度级联评测；引用 v0.29.0 已移除的 torchvision.prototype 深度模型，入口在构造阶段即失效。
-  - references/depth/stereo/train.py  # 双目深度训练；依赖已移除的 torchvision.prototype.models.depth.stereo，非缩数据即可接入。
-  - references/detection/train.py  # COCO 检测训练；Faster R-CNN 等依赖 torchvision.ops.nms/RoIAlign，官方 C++ 扩展未提供 NPU 内核。
-  - references/optical_flow/train.py  # RAFT 光流训练；可传 NPU 设备，但须制备 FlyingChairs 等严格双帧/光流标注，分布式路径还硬编码 CUDA/NCCL。
-  - references/segmentation/train.py  # COCO/VOC 语义分割训练；可传 NPU 设备，待制备分割掩码 fixture 并实测评估中的 NPU bincount。
-  - references/similarity/test.py  # FakeData 上测试 PKSampler 的 CPU 单测；没有 NPU 模型前后向，不应算作 NPU example。
-  - references/similarity/train.py  # FashionMNIST triplet-loss 相似度训练；设备固定为 cuda:0 或 CPU且无 --device，原样执行不能覆盖 NPU。
-  - references/video_classification/train.py  # 视频分类训练；可传 NPU 设备，但需 Kinetics 格式可解码短视频/标注和视频解码依赖，暂未造 fixture。
+  # TorchScript 导出包装；依赖原 Faster R-CNN/NMS，无模型/设备 CLI。
+  - examples/cpp/script_model.py
+  # C++ TorchScript 推理；设备只支持 CPU/kCUDA，无 NPU 路径。
+  - examples/cpp/run_model.cpp
+  # RAFT 光流绘图；显式选择 CPU/CUDA，无 NPU 设备参数。
+  - gallery/others/plot_optical_flow.py
+  # 标注转换与检测演示；最终 Faster R-CNN 必经 NMS 无 NPU 内核。
+  - gallery/others/plot_repurposing_annotations.py
+  # 脚本化变换与分类；显式 CPU/CUDA 设备，无 NPU 参数。
+  - gallery/others/plot_scripted_tensor_transforms.py
+  # 检测/分割可视化；预训练检测模型必经 NMS/RoIAlign。
+  - gallery/others/plot_visualization_utils.py
+  # CutMix/MixUp；默认 NPU 会使 CPU sampler/多进程 DataLoader 设备冲突。
+  - gallery/transforms/plot_cutmix_mixup.py
+  # 旋转框几何绘图；默认 NPU 后 helper 对绘图张量直接 .numpy()。
+  - gallery/transforms/plot_rotated_box_transforms.py
+  # Mask R-CNN 端到端；必经 torchvision C++ NMS/RoIAlign 无 NPU 内核。
+  - gallery/transforms/plot_transforms_e2e.py
+  # v2 变换入门；CPU 解码图像与 NPU 框/绘图 .numpy() 路径不一致。
+  - gallery/transforms/plot_transforms_getting_started.py
+  # v2 变换图示；默认 NPU 图像进入 helper .numpy()，无设备配置接口。
+  - gallery/transforms/plot_transforms_illustrations.py
+  # 分类 QAT/PTQ；量化核心固定 qnnpack/fbgemm CPU，不可替换为 NPU。
+  - references/classification/train_quantization.py
+  # 双目深度评测；当前 release 已删除所导入的 torchvision.prototype。
+  - references/depth/stereo/cascade_evaluation.py
+  # 双目深度训练；当前 release 已删除所导入的 torchvision.prototype。
+  - references/depth/stereo/train.py
+  # COCO 检测训练；标准 C++ 扩展 NMS/RoIAlign 无 NPU 内核。
+  - references/detection/train.py
+  # Triplet 相似度训练；显式 CPU/CUDA，未暴露 NPU 设备参数。
+  - references/similarity/train.py

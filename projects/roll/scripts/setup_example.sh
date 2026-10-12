@@ -198,18 +198,6 @@ print(f"ROLL_MODEL_PATH={local}")
 PY
 }
 
-prepare_ci_configs() {
-  local src="${PROJECT_ROOT:?PROJECT_ROOT is required}/configs"
-  local dst="$TARGET_ROOT/examples/ci_roll"
-  echo "preparing phase-two CI configs: $src -> $dst"
-  mkdir -p "$dst"
-  cp "$src"/ci_agentic_rollout.yaml \
-    "$src"/ci_agentic_train.yaml \
-    "$src"/ci_rlvr.yaml \
-    "$dst/"
-  ls -la "$dst/"
-}
-
 check_npu_devices() {
   local minimum="$1"
   local devices
@@ -231,7 +219,6 @@ export PYTHONNOUSERSITE=1
 install_rollout_stack
 ensure_roll_installed
 ms_download_model "Qwen/Qwen2.5-0.5B-Instruct"
-prepare_ci_configs
 
 case "$PROFILE" in
   agentic_rollout_npu)

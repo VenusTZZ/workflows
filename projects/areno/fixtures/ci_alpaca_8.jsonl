@@ -1,0 +1,8 @@
+{"instruction": "Give a one-sentence definition of photosynthesis.", "input": "", "output": "Photosynthesis is the process by which green plants convert light energy into chemical energy stored in glucose."}
+{"instruction": "Add the two numbers.", "input": "3 and 5", "output": "8"}
+{"instruction": "Name the capital of France.", "input": "", "output": "Paris"}
+{"instruction": "Translate the word to English.", "input": "hola", "output": "hello"}
+{"instruction": "Explain what a variable is in one sentence.", "input": "", "output": "A variable is a named container that stores a value which can change during a program's execution."}
+{"instruction": "Reverse the string.", "input": "abcde", "output": "edcba"}
+{"instruction": "State whether the number is even or odd.", "input": "17", "output": "odd"}
+{"instruction": "List the first three prime numbers.", "input": "", "output": "2, 3, 5"}

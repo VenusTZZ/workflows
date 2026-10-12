@@ -593,6 +593,23 @@ projects:
     dir: projects/modelscope
     workflows:
       quick_start: .github/workflows/modelscope-quick-start.yml
+  # funasr quickstart exercises the FunASR speech toolkit on Ascend NPU:
+  # source install at the latest release tag, then 5 AutoModel(device="npu:0")
+  # smokes covering the core features -- paraformer-zh production pipeline
+  # (fsmn-vad + ct-punc + cam++), SenseVoiceSmall multilingual ASR with
+  # emotion/event tags, paraformer-zh-streaming chunked streaming,
+  # emotion2vec_plus_large standalone emotion, plus the `funasr` CLI.
+  # FunASR's AutoModel natively accepts device="npu:0" (is_npu_available
+  # imports torch_npu), unlike modelscope's verify_device which rejects npu.
+  - name: funasr
+    category: 推理加速
+    support_level: 新兴适配
+    upstream_repo: modelscope/FunASR
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/funasr
+    workflows:
+      quick_start: .github/workflows/funasr-quick-start.yml
   # axolotl quickstart installs the latest GitHub release from PyPI
   # (--no-build-isolation --no-deps, no CUDA extras) on CANN 9.1.0 +
   # torch 2.11 / torch_npu 2.11, then runs a 3-step LoRA SFT of
@@ -692,8 +709,10 @@ projects:
     workflows:
       quick_start: .github/workflows/tgi-quick-start.yml
       examples: .github/workflows/roll-examples.yml
-  # AReaL: RL 训练框架。NPU 支持在 ascend-v1.0.5 分支（非 main），需要专用镜像
-  # ghcr.io/hwvanici/areal_npu:v1.0.5-a2；examples 走共享引擎 examples-template.yml。
+  # AReaL: RL 训练框架。examples 看护 release 线（引擎按 latest release
+  # 解析）；supported 配方用专用镜像 ghcr.io/hwvanici/areal_npu:v1.0.5-a2
+  # （vllm 栈由 setup_example.sh §1b 换装 0.22.1 线以匹配 v2.x 代码）；
+  # 走共享引擎 examples-template.yml。
   - name: areal
     category: 训练加速
     support_level: 基础支持
@@ -717,3 +736,34 @@ projects:
     workflows:
       examples: .github/workflows/liger-kernel-examples.yml
       quick_start: .github/workflows/liger-kernel-quick-start.yml
+  # AReno: inclusionAI 的单机 RL post-training 工具包（SFT/DPO/GRPO/GSPO/
+  # PPO + OpenAI 兼容 serving）。NPU 后端按上游 docs/concepts/npu.rst 的
+  # 目标栈：CANN 9.0.0 + torch 2.10.0+cpu + torch_npu 2.10.0.post2（镜像
+  # 用 9.0.0 线，非多数项目用的 9.1.0）。源码安装时现场编译
+  # areno.accel._areno_accel_npu（Ascend C + CMake，无 Python 回退）。
+  # 安装源临时 checkout main：最新 release v0.0.8 尚未包含 NPU 后端（同
+  # wenet 的临时处理），待上游发布含 NPU 的 release 后回切 release tag。
+  # Quick start 在单卡 910B4 上跑 README「Tiny training smoke test」的
+  # NPU 版：GSPO-on-GSM8K 1 步 RLVR 冒烟（Qwen3-0.6B，ModelScope）+
+  # checkpoint 落盘 + areno serve --backend npu 的 /v1/chat/completions
+  # 冒烟。Examples 走共享引擎 examples-template.yml：release 线 v0.0.8
+  # 已带全部用例（examples/ 树与 main 一致），manifest 已把 bash_game、
+  # codebreaker、coding、duelgrid、shopping、terminal_hacking、tictactoe
+  # （tool-call + XML no-tool 两变体）、math（GSM8K RLVR）、alpaca（SFT）等
+  # 链路登记 supported；其中除 alpaca 外均已跑绿、当前注释禁用省卡（入口暂列
+  # unsupported），alpaca 生效；ave_event_recognition / tictactoe_image 为
+  # 「不支持」（NPU 多模态未支持）；其余共 58 个 .py 逐文件登记 unsupported。
+  # 生效的 supported 在单卡 a2-1 上由 projects/areno/scripts/{setup,run}_example.sh
+  # 现场装 main（v0.0.8 无 NPU 后端，同 quick-start 的临时处理）跑 1 步。
+  # category/support_level 按姊妹项目 areal 的口径暂记，如与项目
+  # 表不符以表为准。
+  - name: areno
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: inclusionAI/AReno
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/areno
+    workflows:
+      quick_start: .github/workflows/areno-quick-start.yml
+      examples: .github/workflows/areno-examples.yml
