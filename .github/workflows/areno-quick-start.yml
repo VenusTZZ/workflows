@@ -9,7 +9,9 @@
 # upstream docs/concepts/npu.rst target stack — CANN 9.0.0 + torch
 # 2.10.0+cpu + torch_npu 2.10.0.post2 — hence the 9.0.0 image (not the
 # 9.1.0 line most other projects use). The doc installs from source at
-# the engine-resolved release tag: the installer detects torch_npu,
+# upstream main (temporary: the latest release tag v0.0.8 predates the
+# NPU backend — same situation as wenet; revert to the engine-resolved
+# release tag once a release ships NPU): the installer detects torch_npu,
 # switches to requirements/npu.txt and compiles the
 # areno.accel._areno_accel_npu Ascend C extension in-place (no Python
 # fallback), which is why timeout covers a full source build.
@@ -17,7 +19,12 @@
 # single card) with checkpoint save, then `areno serve --backend npu` of
 # the saved checkpoint behind a /health poll + /v1/models +
 # /v1/chat/completions checks. Qwen3-0.6B bf16 is ~1.2 GB, so the
-# 1-card linux-aarch64-a2-1 runner is sufficient.
+# 1-card linux-aarch64-a2-1 runner is sufficient. Train and serve both
+# pin `--attn-backend native`: the flash-attn-npu 0.3.0 kvcache path
+# does a sync aclrtMemcpy that is illegal under NPU graph capture
+# (CANN error 107030), which kills the rollout worker. Serve also caps
+# `--max-running-prompts 2` because the default 16 x 32k-context KV
+# pool (~60 GB) fills the card and OOMs the first request.
 name: areno-quick-start
 
 concurrency:
