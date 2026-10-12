@@ -7,19 +7,24 @@
 # run-example matrix / validate-results / save-monitor-state) lives in the
 # engine. See docs/examples-guard-engine.md for the design.
 #
-# Bring-up state: projects/areno/examples_manifest.yaml registers all
-# 11 upstream examples as unsupported pending verification - no example
-# has an NPU-side run record yet (the quick-start smoke covers the same
-# GSPO + math_verify path shape, but not the example entrypoints).
-# has_supported=false, so the engine schedules no matrix leg and uses no
-# NPU runner; manual/scheduled runs still exercise manifest-check
-# against the release checkout, and the daily examples-check
-# reconciliation covers the unsupported set.
-# Refs: latest release v0.0.8 already ships the full examples/ tree
-# (identical to main), so the engine's release-line resolution works
-# unchanged. Note the runnable NPU stack (areno.accel._areno_accel_npu)
-# is still main-only - cf. areno-quick-start.yml - a constraint for the
-# setup scripts once entries graduate to supported.
+# Guard state: projects/areno/examples_manifest.yaml registers agentic/RLVR
+# examples as supported - bash_game, codebreaker, coding, duelgrid, shopping,
+# terminal_hacking, tictactoe (tool-call + XML no-tool variants) and math
+# (GSM8K RLVR) are already green and currently commented off to save NPU time
+# (their entry files are parked under unsupported); alpaca (SFT) is active.
+# ave_event_recognition / tictactoe_image are marked unsupported (NPU
+# multimodal). The run-example matrix schedules one 1-card NPU leg per active
+# supported entry (linux-aarch64-a2-1), each running
+# projects/areno/scripts/setup_example.sh (source build of
+# areno.accel._areno_accel_npu) + run_example.sh.
+# Refs: the guard targets main, not the release. The engine's monitor is
+# release-triggered (it resolves the latest release, v0.0.8), but
+# setup_example.sh's use_npu_capable_source switches the workspace checkout to
+# upstream main whenever the checkout lacks areno/accel/csrc/npu - exactly the
+# case for v0.0.8. So schedule and manual dispatch (empty target_ref, or
+# explicit main) all build and run main. Once a release ships the NPU backend
+# the switch becomes a no-op and the release line is used as-is. (Same pattern
+# as slime: release triggers, main is built; cf. areno-quick-start.yml.)
 
 name: areno-examples
 
@@ -32,10 +37,12 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # Bring-up phase: keep the schedule disabled until a few manual rounds
-  # are green. Re-enable:
-  # schedule:
-  #   - cron: '10 */6 * * *'
+  # Poll the upstream release signal every 6h. The engine's monitor resolves
+  # the target as the latest release (v0.0.8); setup_example.sh then switches
+  # the workspace checkout to upstream main because that release lacks the NPU
+  # backend, so the scheduled run still tests main.
+  schedule:
+    - cron: '10 */6 * * *'
   workflow_dispatch:
     inputs:
       target_ref:
@@ -59,8 +66,6 @@ jobs:
       project: areno
       upstream_repo: inclusionAI/AReno
       target_ref: ${{ inputs.target_ref }}
-      # Bring-up phase: no supported entries yet (all 11 examples are
-      # unsupported pending verification) so the matrix is empty; keep
-      # one leg at a time until entries graduate and the source-install
-      # stack settles.
-      max_parallel: 1
+      # Upper bound on parallel run-example matrix legs (hardware-permitting);
+      # the engine schedules one 1-card leg per active supported entry.
+      max_parallel: 8

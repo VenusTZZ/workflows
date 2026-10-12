@@ -1,0 +1,8 @@
+{"kit_name": "rain commute", "categories": ["jacket", "bottle"], "budget": 140, "required_features_by_category": {"jacket": ["waterproof", "packable"], "bottle": ["insulated", "leakproof"]}, "id": 0}
+{"kit_name": "cold city", "categories": ["jacket", "shoes"], "budget": 230, "required_features_by_category": {"jacket": ["windproof", "warm"], "shoes": ["casual", "water-resistant"]}, "id": 1}
+{"kit_name": "rain commute", "categories": ["jacket", "bottle"], "budget": 140, "required_features_by_category": {"jacket": ["waterproof", "packable"], "bottle": ["insulated", "leakproof"]}, "id": 2}
+{"kit_name": "trail day", "categories": ["shoes", "bottle"], "budget": 170, "required_features_by_category": {"shoes": ["trail", "water-resistant"], "bottle": ["collapsible", "lightweight"]}, "id": 3}
+{"kit_name": "full travel", "categories": ["jacket", "shoes", "bottle"], "budget": 260, "required_features_by_category": {"jacket": ["waterproof", "packable"], "shoes": ["casual", "water-resistant"], "bottle": ["collapsible", "lightweight"]}, "id": 4}
+{"kit_name": "full travel", "categories": ["jacket", "shoes", "bottle"], "budget": 260, "required_features_by_category": {"jacket": ["waterproof", "packable"], "shoes": ["casual", "water-resistant"], "bottle": ["collapsible", "lightweight"]}, "id": 5}
+{"kit_name": "full travel", "categories": ["jacket", "shoes", "bottle"], "budget": 260, "required_features_by_category": {"jacket": ["waterproof", "packable"], "shoes": ["casual", "water-resistant"], "bottle": ["collapsible", "lightweight"]}, "id": 6}
+{"kit_name": "trail day", "categories": ["shoes", "bottle"], "budget": 170, "required_features_by_category": {"shoes": ["trail", "water-resistant"], "bottle": ["collapsible", "lightweight"]}, "id": 7}

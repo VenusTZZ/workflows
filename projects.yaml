@@ -747,10 +747,14 @@ projects:
   # NPU 版：GSPO-on-GSM8K 1 步 RLVR 冒烟（Qwen3-0.6B，ModelScope）+
   # checkpoint 落盘 + areno serve --backend npu 的 /v1/chat/completions
   # 冒烟。Examples 走共享引擎 examples-template.yml：release 线 v0.0.8
-  # 已带全部 11 个用例（examples/ 树与 main 一致），manifest 阶段 A 全部
-  # 登记 unsupported 待验证（NPU 侧尚无任何 example 实跑记录），
-  # has_supported=false 不排 NPU matrix；待上卡验证后逐条升级 supported
-  # （升级时安装源仍需 main-only 的临时处理，同 quick-start）。
+  # 已带全部用例（examples/ 树与 main 一致），manifest 已把 bash_game、
+  # codebreaker、coding、duelgrid、shopping、terminal_hacking、tictactoe
+  # （tool-call + XML no-tool 两变体）、math（GSM8K RLVR）、alpaca（SFT）等
+  # 链路登记 supported；其中除 alpaca 外均已跑绿、当前注释禁用省卡（入口暂列
+  # unsupported），alpaca 生效；ave_event_recognition / tictactoe_image 为
+  # 「不支持」（NPU 多模态未支持）；其余共 58 个 .py 逐文件登记 unsupported。
+  # 生效的 supported 在单卡 a2-1 上由 projects/areno/scripts/{setup,run}_example.sh
+  # 现场装 main（v0.0.8 无 NPU 后端，同 quick-start 的临时处理）跑 1 步。
   # category/support_level 按姊妹项目 areal 的口径暂记，如与项目
   # 表不符以表为准。
   - name: areno
