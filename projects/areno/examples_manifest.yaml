@@ -10,17 +10,18 @@ version: 1
 # 文件 import 的共享模块」（工具依赖）统一挪到末尾；README /
 # dataset.jsonl / 图片资产不进扫描。
 #
-# 阶段 A 接入：manifest 登记 supported 的链路 —— bash_game、codebreaker、
-# coding、duelgrid（已上卡跑绿、当前把 supported 条目注释禁用省卡，其
-# run_agent.py 暂列 unsupported，启用时移回），以及生效的 shopping、
-# terminal_hacking、tictactoe（tool-call 与 XML no-tool 两变体）、math
-# （无入口，非 agentic GSPO-on-GSM8K，与 quick-start 同构）。其余文件共 54 个
-# 写入 unsupported「待验证」。quick-start 已在单卡 910B4 跑通同构的
-# GSPO-on-GSM8K 1 步 RLVR + areno serve 冒烟（NPU 栈 CANN 9.0.0 + torch 2.10
-# + torch_npu 2.10.0.post2，源码装 main 现场编译
-# areno.accel._areno_accel_npu）。unsupported 的语义是「本看护体系当前不跑
-# 它」，不等于「昇腾原理上跑不了」：注释区分待上卡实测后可升级的项与需先解决
-# 外部依赖才能升级的项。
+# 阶段 A 接入：agentic/RLVR 链路已在 manifest 登记 supported —— bash_game、
+# codebreaker、coding、duelgrid、shopping、terminal_hacking、tictactoe
+# （tool-call 与 XML no-tool 两变体）、math（GSM8K RLVR），这些均已上卡跑绿、
+# 当前把 supported 条目注释禁用省卡（入口暂列 unsupported，启用时移回）；
+# alpaca（SFT）当前生效。ave_event_recognition 与 tictactoe_image 明确
+# 「不支持」（NPU 多模态未支持，前者另有外部 judge/数据集依赖）。其余文件共
+# 58 个写入 unsupported。quick-start 已在单卡 910B4 跑通同构的 GSPO-on-GSM8K
+# 1 步 RLVR + areno serve 冒烟（NPU 栈 CANN 9.0.0 + torch 2.10 + torch_npu
+# 2.10.0.post2，源码装 main 现场编译 areno.accel._areno_accel_npu）。
+# unsupported 的语义是「本看护体系当前不跑它」，不等于「昇腾原理上跑不了」：
+# 注释区分待上卡实测后可升级的项与需先解决外部依赖才能升级的项（硬不支持项已
+# 标注）。
 scan:
   root: examples
   include_extensions: ['.py', '.sh']
@@ -155,94 +156,114 @@ supported:
   #     - --mini-bs 1
   #     - --max-steps 1
   #     - --max-new-tokens 128
-  # terminal_hacking：单步候选词演绎 RLVR（GSPO，上下文老虎机式）。条目锚在
-  # agentic 入口 run_agent.py；terminal_hacking_npu 例程跑 1 步训练——
-  # run_agent.py 经本地 rollout 代理做一次 submit_candidates 工具调用（对可
-  # 观测内存转储里的候选词过滤），reward.py 用稠密非对称奖励（多猜重罚、漏猜
-  # 轻罚），覆盖 NPU 上的单步 agentic 工具调用链路。底座用 Qwen3-0.6B（README
-  # 的 ling-3.0-tiny 是 KDA 模型，NPU 未实测）。数据走本仓 fixture
-  # （fixtures/ci_terminal_hacking_8.jsonl，由上游 dataset_generator.py 以
-  # seed 2026 离线生成、schema 一致），经 overlay_args 的 ${FIXTURE_DIR} 传入。
-  # 同一用例的其余文件（dataset_generator/game、dataset_loader/reward 组件与
-  # web_ui 交互）见 unsupported。
-  - path: examples/agentic/terminal_hacking/run_agent.py
-    profile: terminal_hacking_npu
+  # # terminal_hacking：单步候选词演绎 RLVR（GSPO，上下文老虎机式）。条目锚在
+  # # agentic 入口 run_agent.py；terminal_hacking_npu 例程跑 1 步训练——
+  # # run_agent.py 经本地 rollout 代理做一次 submit_candidates 工具调用（对可
+  # # 观测内存转储里的候选词过滤），reward.py 用稠密非对称奖励（多猜重罚、漏猜
+  # # 轻罚），覆盖 NPU 上的单步 agentic 工具调用链路。底座用 Qwen3-0.6B（README
+  # # 的 ling-3.0-tiny 是 KDA 模型，NPU 未实测）。数据走本仓 fixture
+  # # （fixtures/ci_terminal_hacking_8.jsonl，由上游 dataset_generator.py 以
+  # # seed 2026 离线生成、schema 一致），经 overlay_args 的 ${FIXTURE_DIR} 传入。
+  # # 同一用例的其余文件（dataset_generator/game、dataset_loader/reward 组件与
+  # # web_ui 交互）见 unsupported。
+  # - path: examples/agentic/terminal_hacking/run_agent.py
+  #   profile: terminal_hacking_npu
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+  #   timeout_minutes: 90
+  #   overlay_args:
+  #     - --dataset-path ${FIXTURE_DIR}/ci_terminal_hacking_8.jsonl
+  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/terminal_hacking/dataset_loader.py
+  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/terminal_hacking/reward.py
+  #     - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/terminal_hacking/run_agent.py
+  #     - --algo gspo
+  #     - --batch-size 2
+  #     - --n-samples 2
+  #     - --mini-bs 1
+  #     - --max-steps 1
+  #     - --max-new-tokens 256
+  #     - --max-prompt-tokens 4096
+  # # tictactoe（tool-call 变体）：井字棋单步 RLVR（GSPO）。条目锚在 agentic 入口
+  # # run_agent.py；tictactoe_npu 例程跑 1 步训练——run_agent.py 经本地 rollout
+  # # 代理做一次 choose_square 工具调用，reward.py 用 minimax 最优步校验打分，
+  # # 覆盖 NPU 上的单步工具调用链路。数据走本仓 fixture（fixtures/ci_tictactoe_8.jsonl，
+  # # 由上游 dataset_generator.py 以 seed 2026 离线生成、schema 一致），两个变体
+  # # 共用该 fixture，经 overlay_args 的 ${FIXTURE_DIR} 传入。同一用例的其余文件
+  # # 见 unsupported。
+  # - path: examples/agentic/tictactoe/run_agent.py
+  #   profile: tictactoe_npu
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+  #   timeout_minutes: 90
+  #   overlay_args:
+  #     - --dataset-path ${FIXTURE_DIR}/ci_tictactoe_8.jsonl
+  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/tictactoe/dataset_loader.py
+  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/tictactoe/reward.py
+  #     - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/tictactoe/run_agent.py
+  #     - --algo gspo
+  #     - --batch-size 2
+  #     - --n-samples 4
+  #     - --mini-bs 1
+  #     - --max-steps 1
+  #     - --max-new-tokens 32
+  # # tictactoe（XML no-tool 变体）：同一棋盘，改为纯文本 `<move>N</move>` 输出
+  # # （无工具）。覆盖 NPU 上的非工具文本 rollout 形态；reward_no_tool.py 解析
+  # # XML 标签后用同一 minimax 打分。共用上面的 fixture。
+  # - path: examples/agentic/tictactoe/run_agent_no_tool.py
+  #   profile: tictactoe_no_tool_npu
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+  #   timeout_minutes: 90
+  #   overlay_args:
+  #     - --dataset-path ${FIXTURE_DIR}/ci_tictactoe_8.jsonl
+  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/tictactoe/dataset_loader_no_tool.py
+  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/tictactoe/reward_no_tool.py
+  #     - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/tictactoe/run_agent_no_tool.py
+  #     - --algo gspo
+  #     - --batch-size 2
+  #     - --n-samples 4
+  #     - --mini-bs 1
+  #     - --max-steps 1
+  #     - --max-new-tokens 64
+  # # math：数学 RLVR（无独立入口文件——由 areno train 组合 dataset_loader +
+  # # math_verify_reward）。条目锚在 dataset_loader.py；math_npu 例程跑 1 步非
+  # # agentic GSPO：Qwen3-0.6B 在 ModelScope 的 gsm8k:main 上做 RLVR，reward 用
+  # # math_verify 校验 \boxed{}。与 quick-start 的 GSPO-on-GSM8K 冒烟同构（两者会
+  # # 各占一条腿，如嫌重复可注释本条）。同一用例的 math_verify_reward.py 见
+  # # unsupported。
+  # - path: examples/math/dataset_loader.py
+  #   profile: math_npu
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+  #   timeout_minutes: 90
+  #   overlay_args:
+  #     - --dataset-path gsm8k:main
+  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/math/dataset_loader.py
+  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/math/math_verify_reward.py
+  #     - --algo gspo
+  #     - --batch-size 1
+  #     - --max-steps 1
+  #           - --max-new-tokens 256
+  # alpaca：Alpaca 风格 SFT 数据加载器契约示例。条目锚在 dataset_loader.py；
+  # alpaca_npu 例程跑 1 步 SFT——把 instruction/input/output 行规整成
+  # prompt/response，用 Qwen3-0.6B 做监督微调，覆盖 NPU 上的 SFT 算法链路
+  # （quick-start 只覆盖 GSPO RLVR）。数据走本仓 fixture
+  # （fixtures/ci_alpaca_8.jsonl，Alpaca schema，替代 HF 在线
+  # yahma/alpaca-cleaned），经 overlay_args 的 ${FIXTURE_DIR} 传入。
+  - path: examples/sft/alpaca/dataset_loader.py
+    profile: alpaca_npu
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
     timeout_minutes: 90
     overlay_args:
-      - --dataset-path ${FIXTURE_DIR}/ci_terminal_hacking_8.jsonl
-      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/terminal_hacking/dataset_loader.py
-      - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/terminal_hacking/reward.py
-      - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/terminal_hacking/run_agent.py
-      - --algo gspo
+      - --algo sft
+      - --dataset-path ${FIXTURE_DIR}/ci_alpaca_8.jsonl
+      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/sft/alpaca/dataset_loader.py
       - --batch-size 2
-      - --n-samples 2
       - --mini-bs 1
       - --max-steps 1
-      - --max-new-tokens 256
-      - --max-prompt-tokens 4096
-  # tictactoe（tool-call 变体）：井字棋单步 RLVR（GSPO）。条目锚在 agentic 入口
-  # run_agent.py；tictactoe_npu 例程跑 1 步训练——run_agent.py 经本地 rollout
-  # 代理做一次 choose_square 工具调用，reward.py 用 minimax 最优步校验打分，
-  # 覆盖 NPU 上的单步工具调用链路。数据走本仓 fixture（fixtures/ci_tictactoe_8.jsonl，
-  # 由上游 dataset_generator.py 以 seed 2026 离线生成、schema 一致），两个变体
-  # 共用该 fixture，经 overlay_args 的 ${FIXTURE_DIR} 传入。同一用例的其余文件
-  # 见 unsupported。
-  - path: examples/agentic/tictactoe/run_agent.py
-    profile: tictactoe_npu
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
-    timeout_minutes: 90
-    overlay_args:
-      - --dataset-path ${FIXTURE_DIR}/ci_tictactoe_8.jsonl
-      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/tictactoe/dataset_loader.py
-      - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/tictactoe/reward.py
-      - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/tictactoe/run_agent.py
-      - --algo gspo
-      - --batch-size 2
-      - --n-samples 4
-      - --mini-bs 1
-      - --max-steps 1
-      - --max-new-tokens 32
-  # tictactoe（XML no-tool 变体）：同一棋盘，改为纯文本 `<move>N</move>` 输出
-  # （无工具）。覆盖 NPU 上的非工具文本 rollout 形态；reward_no_tool.py 解析
-  # XML 标签后用同一 minimax 打分。共用上面的 fixture。
-  - path: examples/agentic/tictactoe/run_agent_no_tool.py
-    profile: tictactoe_no_tool_npu
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
-    timeout_minutes: 90
-    overlay_args:
-      - --dataset-path ${FIXTURE_DIR}/ci_tictactoe_8.jsonl
-      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/tictactoe/dataset_loader_no_tool.py
-      - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/tictactoe/reward_no_tool.py
-      - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/tictactoe/run_agent_no_tool.py
-      - --algo gspo
-      - --batch-size 2
-      - --n-samples 4
-      - --mini-bs 1
-      - --max-steps 1
+      - --max-prompt-tokens 128
       - --max-new-tokens 64
-  # math：数学 RLVR（无独立入口文件——由 areno train 组合 dataset_loader +
-  # math_verify_reward）。条目锚在 dataset_loader.py；math_npu 例程跑 1 步非
-  # agentic GSPO：Qwen3-0.6B 在 ModelScope 的 gsm8k:main 上做 RLVR，reward 用
-  # math_verify 校验 \boxed{}。与 quick-start 的 GSPO-on-GSM8K 冒烟同构（两者会
-  # 各占一条腿，如嫌重复可注释本条）。同一用例的 math_verify_reward.py 见
-  # unsupported。
-  - path: examples/math/dataset_loader.py
-    profile: math_npu
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
-    timeout_minutes: 90
-    overlay_args:
-      - --dataset-path gsm8k:main
-      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/math/dataset_loader.py
-      - --reward-fn-path ${EXAMPLES_ROOT}/examples/math/math_verify_reward.py
-      - --algo gspo
-      - --batch-size 1
-      - --max-steps 1
-      - --max-new-tokens 256
 unsupported:
   # ===== bash_game：训练链路组件与伴随物；入口 run_agent.py 的 supported
   # 条目已跑绿、当前注释禁用（省卡），启用时把 run_agent.py 移回 supported。 =====
@@ -298,8 +319,10 @@ unsupported:
   - examples/agentic/duelgrid/reward.py
   # 浏览器对玩 UI（键盘操控 + LLM 控制 A 方），人工交互入口。
   - examples/agentic/duelgrid/web_ui.py
-  # ===== shopping 其余文件：训练链路组件，不单独调度（链路锚在 supported 的
-  # run_agent.py，由 shopping_npu 例程读取仓内 fixture 跑 1 步训练）。 =====
+  # ===== shopping：训练链路组件；入口 run_agent.py 的 supported 条目已跑绿、
+  # 当前注释禁用（省卡），启用时把 run_agent.py 移回 supported。 =====
+  # rollout 入口（固定四轮工具序列）。
+  - examples/agentic/shopping/run_agent.py
   # 数据生成器：购物 kit 任务 JSONL；CI 改用仓内 fixtures/ci_shopping_8.jsonl
   # （本脚本离线生成），不在腿里重跑。
   - examples/agentic/shopping/dataset_generator.py
@@ -307,18 +330,24 @@ unsupported:
   - examples/agentic/shopping/dataset_loader.py
   # 奖励：最终 bundle 约束 + 工具序列正确性。
   - examples/agentic/shopping/reward.py
-  # ===== terminal_hacking 其余文件：训练链路组件与伴随物，不单独调度（链路
-  # 锚在 supported 的 run_agent.py，由 terminal_hacking_npu 例程读取仓内
-  # fixture 跑 1 步训练）。 =====
+  # ===== terminal_hacking：训练链路组件与伴随物；入口 run_agent.py 的
+  # supported 条目已跑绿、当前注释禁用（省卡），启用时把 run_agent.py 移回
+  # supported。 =====
+  # rollout 入口（一次 submit_candidates 工具调用）。
+  - examples/agentic/terminal_hacking/run_agent.py
   # 可观测 prompt 构造（隐藏密码不出现在 prompt）。
   - examples/agentic/terminal_hacking/dataset_loader.py
   # 非对称稠密候选集奖励（多猜重罚、漏猜轻罚）。
   - examples/agentic/terminal_hacking/reward.py
   # CRT 风格对玩 WebUI（多端点选择），人工交互入口。
   - examples/agentic/terminal_hacking/web_ui.py
-  # ===== tictactoe 其余文件：两变体的加载器/奖励与交互入口，不单独调度
-  # （链路分别锚在 supported 的 run_agent.py 与 run_agent_no_tool.py，由
-  # tictactoe_npu / tictactoe_no_tool_npu 例程读仓内 fixture 各跑 1 步训练）。 =====
+  # ===== tictactoe：两变体的加载器/奖励与交互入口；两个入口 run_agent.py /
+  # run_agent_no_tool.py 的 supported 条目已跑绿、当前注释禁用（省卡），启用时
+  # 移回 supported。 =====
+  # tool-call 变体 rollout 入口（choose_square 工具调用）。
+  - examples/agentic/tictactoe/run_agent.py
+  # XML no-tool 变体 rollout 入口（<move>N</move> 纯文本）。
+  - examples/agentic/tictactoe/run_agent_no_tool.py
   # XML no-tool 变体加载器（复用 tool 变体 loader 的格式化）。
   - examples/agentic/tictactoe/dataset_loader_no_tool.py
   # tool-call 变体奖励。
@@ -327,15 +356,15 @@ unsupported:
   - examples/agentic/tictactoe/reward_no_tool.py
   # 浏览器对玩 UI（LLM / minimax 双模式），人工交互入口。
   - examples/agentic/tictactoe/web_ui.py
-  # ===== math：数学 RLVR（无独立入口文件；链路锚在 supported 的
-  # dataset_loader.py，由 math_npu 例程以 GSPO-on-GSM8K 组合运行）。 =====
+  # ===== math：数学 RLVR；入口 dataset_loader.py 的 supported 条目已跑绿、
+  # 当前注释禁用（省卡），启用时把 dataset_loader.py 移回 supported。 =====
+  # GSM8K / NuminaMath 行归一化加载器（无独立入口）。
+  - examples/math/dataset_loader.py
   # math_verify 符号验证奖励（\\boxed{} 答案比对）。
   - examples/math/math_verify_reward.py
-  # ===== ave_event_recognition：AVE 音视频事件识别（Gemma 4 多模态
-  # agentic GRPO：report_events 工具调用 + 外部 OpenAI 兼容 judge 模型打分
-  # JUDGE_*，数据来自 HF 镜像 AVE 数据集 + ffmpeg 抽音频）。待验证之外另
-  # 有外部依赖：judge 服务与数据集获取需先落 CI 本地方案，VLM 多模态路径
-  # 在昇腾亦未实测。 =====
+  # ===== ave_event_recognition：不支持——NPU 多模态（音视频）未支持/未文档化，
+  # 且依赖外部 OpenAI 兼容 judge 服务（JUDGE_*）+ HF 镜像 AVE 数据集 + ffmpeg
+  # 抽音频，CI 无法自包含。 =====
   # 数据生成：AVE 下载 + 16 kHz 单声道 WAV 抽取 + 事件区间 manifest。
   - examples/multimodal/ave_event_recognition/dataset_generator.py
   # 视频 + 同步音频的多模态 prompt 构造。
@@ -344,15 +373,8 @@ unsupported:
   - examples/multimodal/ave_event_recognition/reward.py
   # report_events 工具调用 rollout。
   - examples/multimodal/ave_event_recognition/run_agent.py
-  # ===== alpaca：SFT 数据加载器契约示例（instruction/input/output 归一化
-  # 为 prompt/response；推荐数据集 yahma/alpaca-cleaned，HF 在线）。待验证：
-  # SFT 算法在昇腾实测（quick-start 仅覆盖 GSPO RLVR）；接入时数据集换
-  # ModelScope 或本地 fixture。 =====
-  # Alpaca 行 -> SFT trainer schema（prompt/response）加载器。
-  - examples/sft/alpaca/dataset_loader.py
-  # ===== tictactoe_image：Qwen3.5-VL 图像井字棋（视觉语言，SFT / GSPO /
-  # GRPO / PPO / Agentic 五种模式；Pillow 合成板图以 image_base64 内嵌）。
-  # 待验证：Qwen3.5-VL 适配器与 VLM 前向 / rollout 在昇腾实测。 =====
+  # ===== tictactoe_image：不支持——Qwen3.5-VL 图像多模态在昇腾未支持
+  # （多模态文档只覆盖 CUDA/MLX）；待上游 NPU 多模态落地后再评估。 =====
   # 图文行加载（image_base64 / prompt / response，模型无关）。
   - examples/vl/tictactoe_image/dataset_loader.py
   # RL 完成评分（与 agentic 井字棋同一最优步逻辑）。
