@@ -112,7 +112,10 @@ is_available: True
 count: 1
 ```
 
-> 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
+```{admonition} Note
+:class: note
+如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
+```
 
 ## 安装 FunASR
 
@@ -141,7 +144,10 @@ uv pip install -e .
 python -c "import funasr; print('funasr', funasr.__version__)"
 ```
 
-\<ref> 为安装的最新的 release tag
+```{admonition} Note
+:class: note
+`<ref>` 为安装的最新的 release tag。
+```
 
 输出结果类似如下（开头是 FunASR 在 import 时打印的提示行：无 ffmpeg 时回落 `torchaudio` 的 Notice、以及版本号，均无害，被 `...` 吸收）：
 
@@ -150,9 +156,15 @@ python -c "import funasr; print('funasr', funasr.__version__)"
 funasr ...
 ```
 
-- ... 表示最新的版本号
+```{admonition} Note
+:class: note
+`...` 表示最新的版本号。
+```
 
-> 如果机器在国内、无稳定外网，模型下载默认走 ModelScope（`hub="ms"`），比 Hugging Face 更稳；python 包走 [huawei pypi 镜像](https://repo.huaweicloud.com/ascend/repos/pypi) 配 `pip install -i ...`。
+```{admonition} Note
+:class: note
+如果机器在国内、无稳定外网，模型下载默认走 ModelScope（`hub="ms"`），比 Hugging Face 更稳；python 包走 [huawei pypi 镜像](https://repo.huaweicloud.com/ascend/repos/pypi) 配 `pip install -i ...`。
+```
 
 ### CLI 自检：`funasr --version`
 
@@ -169,7 +181,10 @@ funasr --version
 funasr ...
 ```
 
+```{admonition} Note
+:class: note
 其中开头是 FunASR 对音频后端的提示（无 ffmpeg 时自动回落 `torchaudio`），`funasr ...` 是版本号。
+```
 
 ## 语音识别生产级 pipeline（ASR + VAD + 标点 + 说话人）
 
