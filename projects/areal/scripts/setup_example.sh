@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # Prepare the CI environment for one supported AReaL example.
 # $1 is the manifest profile. Unknown profiles fail before any install.
 #
@@ -16,7 +16,7 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-align"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-openclaw-grpo areal-align"
 AIME_PREP=0
 BOBA_PREP=0
 COUNTDOWN_PREP=0
@@ -25,6 +25,7 @@ TORL_PREP=0
 SCAFFOLD_PREP=0
 CLEVR_SUBSET_PREP=0
 HERMES_PREP=0
+OPENCLAW_PREP=0
 case "$PROFILE" in
   areal-vlm-grpo) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct" ;;
   areal-vlm-mt-grpo) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
@@ -47,6 +48,11 @@ case "$PROFILE" in
   # hermes/train.py: online RL; agent runtime package installed in
   # section 1c, orchestration in run_example.sh's hermes branch.
   areal-hermes-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HERMES_PREP=1 ;;
+  # openclaw/train.py: online RL through the OpenAI-compatible proxy gateway;
+  # no agent runtime package to install (demo_lifecycle.py is pure HTTP).
+  # OPENCLAW_PREP only patches demo_lifecycle.py's HTTP timeouts (section 1f).
+  # Reuses hermes' model, already in the cache-seed volume.
+  areal-openclaw-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; OPENCLAW_PREP=1 ;;
   # hhrlhf_dpo.py: DPO pipeline is model-agnostic; upstream yaml's 7B swapped
   # for 1.5B (7B fp32 init OOMs the 32GB cards in the pool, 15GB per run).
   areal-align) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HHRLHF_PREP=1 ;;
@@ -177,6 +183,74 @@ with open(path, "w", encoding="utf-8") as fh:
     fh.write(text.replace(old, new))
 print("patched awex.py: MegatronEngine import is now lazy", flush=True)
 PY
+
+# -------------------------------------------------------
+# 1e. hermes profile: raise hermes_loop's httpx timeout.
+# The CLI hardcodes httpx.AsyncClient(timeout=120.0) for the
+# /v1/responses round trip; the Hermes agent's system prompt alone is
+# ~11.5K tokens, and prefilling 16K context + generating up to 512 tokens
+# on a 1.5B model over NPU can exceed 120s -> httpx.ReadTimeout kills the
+# orchestration before the agent ever answers. Raise to 600s (hermes
+# profile only - other examples never call this script).
+# -------------------------------------------------------
+if [[ "$HERMES_PREP" == 1 ]]; then
+python3 - <<'PY'
+import os
+
+path = os.path.join(
+    os.environ["TARGET_ROOT"], "examples", "hermes", "hermes_loop.py"
+)
+with open(path, encoding="utf-8") as fh:
+    text = fh.read()
+
+old = "httpx.AsyncClient(timeout=120.0)"
+new = "httpx.AsyncClient(timeout=600.0)"
+assert text.count(old) == 1, "hermes_loop.py timeout layout changed"
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write(text.replace(old, new))
+print("patched hermes_loop.py: httpx timeout 120s -> 600s", flush=True)
+PY
+fi
+
+# -------------------------------------------------------
+# 1f. openclaw profile: raise demo_lifecycle's HTTP timeouts.
+# The bundled driver (examples/openclaw/demo_lifecycle.py, the headless
+# lifecycle client) hardcodes requests.post(..., timeout=30) on the
+# /chat/completions call. A real generation of up to 512 tokens on a 1.5B
+# model served by NPU vLLM far exceeds 30s, so the client times out, never
+# sends set_reward, and the trainer's online rollout then waits forever
+# (observed as a 900s hang, then "Server disconnected" on teardown). Raise
+# the read timeout to 600s and cap max_tokens at 256 to bound the slow
+# generation (the demo answer needs far fewer tokens).
+# -------------------------------------------------------
+if [[ "$OPENCLAW_PREP" == 1 ]]; then
+python3 - <<'PY'
+import os
+
+path = os.path.join(
+    os.environ["TARGET_ROOT"], "examples", "openclaw", "demo_lifecycle.py"
+)
+with open(path, encoding="utf-8") as fh:
+    text = fh.read()
+
+old = "timeout=30,"
+new = "timeout=600,"
+assert text.count(old) == 1, "demo_lifecycle.py chat timeout layout changed"
+text = text.replace(old, new)
+
+old_mt = '"max_tokens": 512,'
+new_mt = '"max_tokens": 256,'
+assert text.count(old_mt) == 1, "demo_lifecycle.py max_tokens layout changed"
+text = text.replace(old_mt, new_mt)
+
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write(text)
+print(
+    "patched demo_lifecycle.py: chat timeout 30s -> 600s, max_tokens 512 -> 256",
+    flush=True,
+)
+PY
+fi
 
 # -------------------------------------------------------
 # 2. Runtime Environment setup.
