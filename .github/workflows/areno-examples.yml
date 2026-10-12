@@ -7,10 +7,12 @@
 # run-example matrix / validate-results / save-monitor-state) lives in the
 # engine. See docs/examples-guard-engine.md for the design.
 #
-# Bring-up state: projects/areno/examples_manifest.yaml registers all
-# 11 upstream examples as unsupported pending verification - no example
-# has an NPU-side run record yet (the quick-start smoke covers the same
-# GSPO + math_verify path shape, but not the example entrypoints).
+# Bring-up state: projects/areno/examples_manifest.yaml registers every
+# .py / .sh file under upstream examples/ (59 files today, no .sh yet -
+# the extension stays in the scan for future shell entrypoints) as
+# unsupported pending verification - no example has an NPU-side run
+# record yet (the quick-start smoke covers the same GSPO + math_verify
+# path shape, but not the example entrypoints).
 # has_supported=false, so the engine schedules no matrix leg and uses no
 # NPU runner; manual/scheduled runs still exercise manifest-check
 # against the release checkout, and the daily examples-check

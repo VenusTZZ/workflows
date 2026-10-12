@@ -1,12 +1,12 @@
 version: 1
-# AReno examples 对账快照：以 inclusionAI/AReno release 线为准（v0.0.8 的
-# examples/ 树与 main 一致，11 个用例齐全）。files-only 扫描模型
-# （docs/examples-guard-engine.md 2.7）：对账单位是 .py 入口——areno train
-# 以 --dataset-loader-fn / --reward-fn-path / --agent-fn 引用各 example 的
-# .py 组件；README / dataset.jsonl / 图片资产与交互配套（web_ui / tui /
-# code_cli / eval）不进扫描，由所在目录的 unsupported 条目连带覆盖。
+# AReno examples 对账快照：以 inclusionAI/AReno 最新版本仓 examples/ 为准
+# （v0.0.8 与 main 的 examples/ 树一致：59 个 .py，当前无 .sh——.sh 一并
+# 纳入扫描，为上游将来新增 shell 入口兜底）。files-only 扫描模型
+# （docs/examples-guard-engine.md 2.7）：对账单位是单个 .py / .sh 文件，
+# 每个文件一条 unsupported 记录（按用例目录分组注释）；README /
+# dataset.jsonl / 图片资产不进扫描。
 #
-# 阶段 A 接入：11 个用例全部先写入 unsupported「待验证」。quick-start 已在
+# 阶段 A 接入：全部 59 个用例先写入 unsupported「待验证」。quick-start 已在
 # 单卡 910B4 跑通同构的 GSPO-on-GSM8K 1 步 RLVR + areno serve --backend npu
 # 冒烟（NPU 栈 CANN 9.0.0 + torch 2.10 + torch_npu 2.10.0.post2，源码装
 # main 现场编译 areno.accel._areno_accel_npu），但各 example 的入口形态
@@ -17,60 +17,161 @@ version: 1
 # （同 quick-start 的临时处理，v0.0.8 尚未包含 NPU 后端）。
 scan:
   root: examples
-  include_extensions: ['.py']
+  include_extensions: ['.py', '.sh']
 supported: []
 unsupported:
-  # Bash Game 巴什博弈单轮策略游戏 RLVR：n mod (m+1) 取石子必胜策略，
-  # submit_move 单工具调用 + 确定性奖励（exact 1.0 / dense closeness）。
-  # 待验证：GSPO + --adam-4bit 4bit 优化器与该数据/奖励组合在昇腾单卡
-  # 实测（README 以 Ling-3.0-tiny / GB10 演示）；eval / web_ui 为交互
-  # 配套不进 CI。
-  - examples/agentic/bash_game
-  # Codebreaker 多轮 Bulls and Cows 演绎游戏：guess_code 最多 6 轮，部分
-  # 可观测、状态仅经 tool result 累积。待验证：多轮工具调用 agentic
-  # rollout 路径在昇腾实测；tui 为交互配套不进 CI。
-  - examples/agentic/codebreaker
-  # SWE-bench 风格多轮编码智能体：仓库内 dataset.jsonl 100 条自包含任务，
-  # inspect/read/rg/apply_patch/run_command 等九工具。待验证：多轮长轨迹
-  # 与 run_command 有界 shell 执行在 CI 容器内的稳定性；code_cli 为交互
-  # 配套不进 CI。
-  - examples/agentic/coding
-  # DuelGrid 回合制网格战术游戏多轮 RLVR：结构化 JSON 动作 + 规则引擎
-  # 奖励（README 以 Gemma-E2B-it 演示）。待验证：多轮 agentic 路径与所用
-  # 底座在昇腾实测；web_ui 为交互配套不进 CI。
-  - examples/agentic/duelgrid
-  # Shopping Kit 多轮工具调用任务：search_catalog -> inspect_items ->
-  # check_kit -> submit_bundle 四轮固定序列，奖励校验类别/特征/预算约束。
-  # 待验证：多轮工具调用路径在昇腾实测。
-  - examples/agentic/shopping
-  # Terminal Hacking 单步候选词演绎（上下文老虎机式）：一次
-  # submit_candidates 工具调用 + 非对称稠密奖励（README 以 ling-3.0-tiny +
-  # 8192 上下文演示）。待验证：单步 agentic 路径与该底座在昇腾实测；
-  # web_ui 为交互配套不进 CI。
-  - examples/agentic/terminal_hacking
-  # 井字棋 RLVR 双变体：tool-call（dataset_loader/reward/run_agent）与
-  # XML no-tool（*_no_tool 三件套），minimax 最优步校验。待验证：两种
-  # rollout 形态（工具调用 / 纯文本 XML）在昇腾实测，接入时选其一作
-  # 代表；web_ui 与 DGX 指南为交互/文档配套不进 CI。
-  - examples/agentic/tictactoe
-  # 数学 RLVR 组件：dataset_loader 归一化 GSM8K / NuminaMath 行 +
-  # math_verify_reward 符号验证奖励；无独立入口，由 areno train 以
-  # --dataset-loader-fn / --reward-fn-path 组合引用（quick-start 的
+  # ===== bash_game：巴什博弈单轮策略游戏 RLVR（GSPO + --adam-4bit，
+  # 确定性奖励；README 以 Ling-3.0-tiny / GB10 演示）。待验证：4bit 优化
+  # 器与该数据/奖励组合在昇腾单卡实测。 =====
+  # 数据生成：(n,m) 指纹去重 + 自校验的确定性 train/val/test JSONL。
+  - examples/agentic/bash_game/dataset_generator.py
+  # 训练加载器：附 prompt，oracle 藏于 record。
+  - examples/agentic/bash_game/dataset_loader.py
+  # served 策略 held-out 评测：mean reward / solve rate / 分 m 统计。
+  - examples/agentic/bash_game/eval.py
+  # 规则 oracle + prompt 渲染 + submit_move 解析（训练/奖励/评测/WebUI 共用）。
+  - examples/agentic/bash_game/game.py
+  # 确定性奖励：exact 1.0 / 合法近似 dense / 非法 0。
+  - examples/agentic/bash_game/reward.py
+  # 单工具调用 rollout（无环境循环、无多轮轨迹）。
+  - examples/agentic/bash_game/run_agent.py
+  # 人机对玩 WebUI（LLM 或完美 oracle），需 served 端点，人工交互入口。
+  - examples/agentic/bash_game/web_ui.py
+  # ===== codebreaker：多轮 Bulls and Cows 演绎游戏（guess_code 最多 6 轮，
+  # 部分可观测、状态仅经 tool result 累积）。待验证：多轮工具调用 agentic
+  # rollout 在昇腾实测。 =====
+  # 数据生成：隐藏四位数谜题 JSONL。
+  - examples/agentic/codebreaker/dataset_generator.py
+  # 训练加载器。
+  - examples/agentic/codebreaker/dataset_loader.py
+  # Bulls and Cows 规则与 prompt 渲染。
+  - examples/agentic/codebreaker/game.py
+  # 猜中/失败奖励。
+  - examples/agentic/codebreaker/reward.py
+  # 多轮 guess_code 工具调用 rollout。
+  - examples/agentic/codebreaker/run_agent.py
+  # 终端对玩 TUI（可指向 OpenAI 兼容端点），人工交互入口。
+  - examples/agentic/codebreaker/tui.py
+  # ===== coding：SWE-bench 风格多轮编码智能体（dataset.jsonl 100 条自
+  # 包含任务；inspect/read/rg/apply_patch/run_command 等九工具）。待验证：
+  # 多轮长轨迹与 run_command 有界 shell 执行在 CI 容器内的稳定性。 =====
+  # 多轮 agent 循环共享实现（训练与 CLI 同一循环）。
+  - examples/agentic/coding/agent_loop.py
+  # 交互式编码 CLI（在 --repo 目录内跑同一循环），人工交互入口。
+  - examples/agentic/coding/code_cli.py
+  # 九工具实现（路径解析限制在临时 workspace、rm 拦截、输出截断）。
+  - examples/agentic/coding/coding_tools.py
+  # dataset.jsonl（100 条本地任务）加载器。
+  - examples/agentic/coding/dataset_loader.py
+  # 奖励：patch + 必要测试全过 + submit solved 才满分，含部分分/负分。
+  - examples/agentic/coding/reward.py
+  # 多轮编码 rollout。
+  - examples/agentic/coding/run_agent.py
+  # ===== duelgrid：回合制网格战术游戏多轮 RLVR（结构化 JSON 动作 + 规则
+  # 引擎奖励；README 以 Gemma-E2B-it 演示）。待验证：多轮 agentic 路径与
+  # 所用底座在昇腾实测。 =====
+  # 数据生成：棋盘状态 JSONL。
+  - examples/agentic/duelgrid/dataset_generator.py
+  # 训练加载器。
+  - examples/agentic/duelgrid/dataset_loader.py
+  # 回合制规则引擎（能量/拾取/陷阱）。
+  - examples/agentic/duelgrid/game.py
+  # 规则引擎奖励（含未耗能量惩罚）。
+  - examples/agentic/duelgrid/reward.py
+  # choose_action 工具调用 rollout。
+  - examples/agentic/duelgrid/run_agent.py
+  # 浏览器对玩 UI（键盘操控 + LLM 控制 A 方），人工交互入口。
+  - examples/agentic/duelgrid/web_ui.py
+  # ===== shopping：多轮工具调用购物 kit 任务（search_catalog ->
+  # inspect_items -> check_kit -> submit_bundle 四轮固定序列，奖励校验
+  # 类别/特征/预算约束）。待验证：多轮工具调用路径在昇腾实测。 =====
+  # 数据生成：购物 kit 任务 JSONL。
+  - examples/agentic/shopping/dataset_generator.py
+  # 训练加载器。
+  - examples/agentic/shopping/dataset_loader.py
+  # 目录/特征/预算约束规则。
+  - examples/agentic/shopping/game.py
+  # 奖励：工具序列正确 + 约束全满足才满分。
+  - examples/agentic/shopping/reward.py
+  # 四轮固定工具序列 rollout。
+  - examples/agentic/shopping/run_agent.py
+  # ===== terminal_hacking：单步候选词演绎（上下文老虎机式，一次
+  # submit_candidates + 非对称稠密奖励；README 以 ling-3.0-tiny + 8192
+  # 上下文演示）。待验证：单步 agentic 路径与该底座在昇腾实测。 =====
+  # 数据生成：8192 谜题并行生成（唯一种子 + 指纹校验）。
+  - examples/agentic/terminal_hacking/dataset_generator.py
+  # 可观测 prompt 构造（隐藏密码不出现在 prompt）。
+  - examples/agentic/terminal_hacking/dataset_loader.py
+  # 候选词过滤 prompt + 规则/replay（训练与 WebUI 同一助手）。
+  - examples/agentic/terminal_hacking/game.py
+  # 非对称稠密候选集奖励（多猜重罚、漏猜轻罚）。
+  - examples/agentic/terminal_hacking/reward.py
+  # 单步 submit_candidates rollout（一次完成、不跑回合）。
+  - examples/agentic/terminal_hacking/run_agent.py
+  # CRT 风格对玩 WebUI（多端点选择），人工交互入口。
+  - examples/agentic/terminal_hacking/web_ui.py
+  # ===== tictactoe：井字棋 RLVR 双变体（tool-call 三件套 + XML no-tool
+  # 三件套，minimax 最优步校验）。待验证：两种 rollout 形态（工具调用 /
+  # 纯文本 XML）在昇腾实测，接入时选其一作代表。 =====
+  # 数据生成：棋局 JSONL。
+  - examples/agentic/tictactoe/dataset_generator.py
+  # tool-call 变体加载器。
+  - examples/agentic/tictactoe/dataset_loader.py
+  # XML no-tool 变体加载器。
+  - examples/agentic/tictactoe/dataset_loader_no_tool.py
+  # 棋面校验 + minimax 最优步。
+  - examples/agentic/tictactoe/game.py
+  # tool-call 变体奖励。
+  - examples/agentic/tictactoe/reward.py
+  # no-tool 变体奖励（<move> 标签解析）。
+  - examples/agentic/tictactoe/reward_no_tool.py
+  # choose_square 工具调用 rollout。
+  - examples/agentic/tictactoe/run_agent.py
+  # XML 输出（<move>N</move>）rollout。
+  - examples/agentic/tictactoe/run_agent_no_tool.py
+  # 浏览器对玩 UI（LLM / minimax 双模式），人工交互入口。
+  - examples/agentic/tictactoe/web_ui.py
+  # ===== math：数学 RLVR 组件（无独立入口，由 areno train 以
+  # --dataset-loader-fn / --reward-fn-path 组合引用；quick-start 的
   # GSPO-on-GSM8K 冒烟即同构组合）。待验证：以 examples 形态完整接入 CI
-  # 后升级 supported——首个升级候选。
-  - examples/math
-  # AVE 音视频事件识别（Gemma 4 多模态 agentic GRPO）：report_events 工具
-  # 调用 + 外部 OpenAI 兼容 judge 模型打分（JUDGE_* 配置），数据来自 HF
-  # 镜像 AVE 数据集 + ffmpeg 抽音频。待验证之外另有外部依赖：judge 服务
-  # 与数据集获取需先落 CI 本地方案，VLM 多模态路径在昇腾亦未实测。
-  - examples/multimodal/ave_event_recognition
-  # Alpaca SFT：数据加载器契约示例（instruction/input/output 归一化为
-  # prompt/response），推荐数据集 yahma/alpaca-cleaned（HF 在线）。待
-  # 验证：SFT 算法在昇腾实测（quick-start 仅覆盖 GSPO RLVR）；接入时
-  # 数据集换 ModelScope 或本地 fixture。
-  - examples/sft/alpaca
-  # Qwen3.5-VL 图像井字棋（视觉语言）：SFT / GSPO / GRPO / PPO /
-  # Agentic 五种训练模式，Pillow 合成板图以 image_base64 内嵌（agentic
-  # 走 image_url data URL）。待验证：Qwen3.5-VL 适配器与 VLM 前向 /
-  # rollout 在昇腾实测；web_ui 为交互配套不进 CI。
-  - examples/vl/tictactoe_image
+  # 后升级 supported——首个升级候选。 =====
+  # GSM8K / NuminaMath 行归一化（question/answer、problem/solution -> prompt）。
+  - examples/math/dataset_loader.py
+  # math_verify 符号验证奖励（\\boxed{} 答案比对）。
+  - examples/math/math_verify_reward.py
+  # ===== ave_event_recognition：AVE 音视频事件识别（Gemma 4 多模态
+  # agentic GRPO：report_events 工具调用 + 外部 OpenAI 兼容 judge 模型打分
+  # JUDGE_*，数据来自 HF 镜像 AVE 数据集 + ffmpeg 抽音频）。待验证之外另
+  # 有外部依赖：judge 服务与数据集获取需先落 CI 本地方案，VLM 多模态路径
+  # 在昇腾亦未实测。 =====
+  # AVE 标注解析与 manifest 共享助手。
+  - examples/multimodal/ave_event_recognition/common.py
+  # 数据生成：AVE 下载 + 16 kHz 单声道 WAV 抽取 + 事件区间 manifest。
+  - examples/multimodal/ave_event_recognition/dataset_generator.py
+  # 视频 + 同步音频的多模态 prompt 构造。
+  - examples/multimodal/ave_event_recognition/dataset_loader.py
+  # 外部 judge 模型语义比对奖励（score/10 归一化，失败即报错）。
+  - examples/multimodal/ave_event_recognition/reward.py
+  # report_events 工具调用 rollout。
+  - examples/multimodal/ave_event_recognition/run_agent.py
+  # ===== alpaca：SFT 数据加载器契约示例（instruction/input/output 归一化
+  # 为 prompt/response；推荐数据集 yahma/alpaca-cleaned，HF 在线）。待验证：
+  # SFT 算法在昇腾实测（quick-start 仅覆盖 GSPO RLVR）；接入时数据集换
+  # ModelScope 或本地 fixture。 =====
+  # Alpaca 行 -> SFT trainer schema（prompt/response）加载器。
+  - examples/sft/alpaca/dataset_loader.py
+  # ===== tictactoe_image：Qwen3.5-VL 图像井字棋（视觉语言，SFT / GSPO /
+  # GRPO / PPO / Agentic 五种模式；Pillow 合成板图以 image_base64 内嵌）。
+  # 待验证：Qwen3.5-VL 适配器与 VLM 前向 / rollout 在昇腾实测。 =====
+  # 数据生成：Pillow 画板图 + image_base64 内嵌 JSONL。
+  - examples/vl/tictactoe_image/dataset_generator.py
+  # 图文行加载（image_base64 / prompt / response，模型无关）。
+  - examples/vl/tictactoe_image/dataset_loader.py
+  # 棋面校验 + BFS 最优步。
+  - examples/vl/tictactoe_image/game.py
+  # RL 完成评分（与 agentic 井字棋同一最优步逻辑）。
+  - examples/vl/tictactoe_image/reward.py
+  # image_url data URL 的 agentic rollout（经 OpenAI 兼容代理）。
+  - examples/vl/tictactoe_image/run_agent.py
+  # 浏览器对玩 UI，人工交互入口。
+  - examples/vl/tictactoe_image/web_ui.py
