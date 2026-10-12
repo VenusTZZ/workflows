@@ -105,7 +105,19 @@ use_npu_capable_source() {
 
 install_areno() {
   source_vendor_env /usr/local/Ascend/ascend-toolkit/set_env.sh
-  python -m pip install -e "$TARGET_ROOT" --no-build-isolation
+  # Build AReno + its Ascend C extension, but skip the two heavy optional deps
+  # the CI never uses: flash-attn-npu (only for --attn-backend flash; the legs
+  # pin native) and flash-linear-attention (only for KDA / linear-attention
+  # models; the legs use dense Qwen3, and areno routes NPU lightning attn to
+  # its own accel.npu.seg_la). Building both from source (kernel compile + git
+  # clone) is the slowest part of setup, so install AReno with --no-deps and
+  # then install the remaining npu.txt deps from wheels.
+  python -m pip install -e "$TARGET_ROOT" --no-build-isolation --no-deps
+  local deps
+  deps=$(grep -vE '^[[:space:]]*(#|flash-attn-npu|flash-linear-attention)' \
+    "$TARGET_ROOT/requirements/npu.txt")
+  # shellcheck disable=SC2086
+  python -m pip install $deps
   python - <<'PY'
 import importlib.util as u
 if u.find_spec('areno.accel._areno_accel_npu') is None:
