@@ -40,9 +40,13 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # Enable after the first successful workflow_dispatch run.
-  # schedule:
-  #   - cron: '30 */6 * * *'
+  schedule:
+    # Run every 6 hours: '25 */6 * * *' fires at minute 25 of every
+    # 6th hour (00:25, 06:25, 12:25, 18:25). Cadence is loose enough
+    # for an upstream that releases on its own schedule (FunASR), but
+    # tight enough that doc fixes propagate within a day. Minute 25 is
+    # unique among the */6 quick-start crons to avoid peak collision.
+    - cron: '25 */6 * * *'
   workflow_dispatch:
 
 permissions:
