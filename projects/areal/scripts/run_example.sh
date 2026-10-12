@@ -196,7 +196,16 @@ PY
     #    gateway under the session key (self-evolution capture). The model
     #    id is "default" - the name InferenceDataProxy registers the served
     #    model under (log: "Model registered: name=default").
+    #    TOOLSETS: hermes-agent enables 30+ toolsets by default (web/search/
+    #    browser/terminal/vision/...); their definitions ride EVERY request
+    #    and overflow vllm's max_model_len=8192 - the agent then death-loops
+    #    its context compressor ("Context length exceeded (20 tokens).
+    #    Cannot compress further.") because tool definitions cannot be
+    #    compressed away, producing an error-message-only trajectory that
+    #    the trainer rejects. Disable everything except the minimal
+    #    "clarify" toolset so a plain greeting fits comfortably.
     if ! echo "Say hello and introduce yourself in one sentence." | \
+        HERMES_DISABLED_TOOLSETS="web,search,x_search,vision,video,image_gen,video_gen,computer_use,terminal,skills,browser,cronjob,file,tts,todo,memory,context_engine,session_search,project,code_execution,delegation,homeassistant,kanban,discord,discord_admin,yuanbao,feishu_doc,feishu_drive,spotify,debugging,safe,coding" \
         "$PYTHON" examples/hermes/hermes_loop.py "$AGENT_GW" \
           --admin-api-key "$HERMES_ADMIN_KEY" \
           --inf-base-url "$GW" \
@@ -242,8 +251,30 @@ PY
       exit 1
     fi
 
-    # 6) Trainer trains its single step and exits.
-    if wait "$TRAINER_PID"; then
+    # 6) Trainer trains its single step and exits. Bounded wait: a rejected
+    #    trajectory (empty/error-only session) leaves the trainer waiting
+    #    for the NEXT session forever - instead of holding the runner until
+    #    the job timeout, fail after 15 min with the trainer log dumped.
+    TRAIN_WAIT_S=900
+    waited=0
+    train_timed_out=0
+    while kill -0 "$TRAINER_PID" 2>/dev/null; do
+      if (( waited >= TRAIN_WAIT_S )); then
+        echo "trainer still running after ${TRAIN_WAIT_S}s - likely waiting for another session (rejected trajectory?); killing and dumping"
+        train_timed_out=1
+        kill "$TRAINER_PID" 2>/dev/null || true
+        sleep 5
+        kill -9 "$TRAINER_PID" 2>/dev/null || true
+        break
+      fi
+      sleep 15
+      waited=$((waited + 15))
+    done
+    if (( train_timed_out )); then
+      run_rc=1
+      echo "trainer wait timed out; tail of $TRAIN_LOG:"
+      tail -n 120 "$TRAIN_LOG"
+    elif wait "$TRAINER_PID"; then
       echo "hermes online-rl loop completed"
     else
       run_rc=$?
