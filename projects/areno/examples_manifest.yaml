@@ -10,12 +10,11 @@ version: 1
 # 文件 import 的共享模块」（工具依赖）统一挪到末尾；README /
 # dataset.jsonl / 图片资产不进扫描。
 #
-# 阶段 A 接入：bash_game、codebreaker 两条训练链路（各自 dataset_generator
-# + loader + reward + run_agent 组合成一次 areno train）已升级 supported；
-# 其余 57 个文件先写入 unsupported「待验证」。quick-start 已在单卡 910B4
-# 跑通同构的 GSPO-on-GSM8K 1 步 RLVR + areno serve 冒烟（NPU 栈 CANN 9.0.0
-# + torch 2.10 + torch_npu 2.10.0.post2，源码装 main 现场编译
-# areno.accel._areno_accel_npu）；两条用例同样装 main，覆盖 agentic rollout
+# 阶段 A 接入：bash_game、codebreaker、coding 三条 agentic 训练链路已升级
+# supported；其余 56 个文件先写入 unsupported「待验证」。quick-start 已在
+# 单卡 910B4 跑通同构的 GSPO-on-GSM8K 1 步 RLVR + areno serve 冒烟（NPU 栈
+# CANN 9.0.0 + torch 2.10 + torch_npu 2.10.0.post2，源码装 main 现场编译
+# areno.accel._areno_accel_npu）；三条用例同样装 main，覆盖 agentic rollout
 # + 工具调用链路。unsupported 的语义是「本看护体系当前不跑它」，不等于
 # 「昇腾原理上跑不了」：注释区分待上卡实测后可升级的项与需先解决外部依赖
 # 才能升级的项。
@@ -73,6 +72,33 @@ supported:
       - --mini-bs 1
       - --max-steps 1
       - --max-new-tokens 64
+  # coding：SWE-bench 风格多轮编码智能体 RLVR（GSPO）。条目锚在 agentic 入口
+  # run_agent.py（薄封装，调用包内 areno.agent.run_agentic_coding_loop，agent
+  # 循环与九工具实现都在包里）；coding_npu 例程跑 1 步训练——模型在任务
+  # workspace 内 inspect/read/rg/apply_patch/run_command/submit，reward.py 按
+  # 测试通过 + solved 打分，覆盖 NPU 上的多轮 coding agent + 有界 shell 工具
+  # 链路（rg 为纯 Python，run_command 经 subprocess 有超时/rm 拦截）。数据用
+  # 上游仓内 dataset.jsonl（100 条自包含任务，无需 fixture），经 overlay_args
+  # 引用；setup 装 pytest 供 run_command 执行测试。同一用例的其余文件
+  # （agent_loop / coding_tools 兼容 shim、code_cli 交互、dataset_loader、
+  # reward）见 unsupported。
+  - path: examples/agentic/coding/run_agent.py
+    profile: coding_npu
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+    timeout_minutes: 240
+    overlay_args:
+      - --dataset-path ${EXAMPLES_ROOT}/examples/agentic/coding/dataset.jsonl
+      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/coding/dataset_loader.py
+      - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/coding/reward.py
+      - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/coding/run_agent.py
+      - --algo gspo
+      - --batch-size 1
+      - --n-samples 2
+      - --mini-bs 1
+      - --max-steps 1
+      - --max-prompt-tokens 4096
+      - --max-new-tokens 256
 unsupported:
   # ===== bash_game 其余文件：训练链路组件与伴随物，不单独调度（链路锚在
   # supported 的 run_agent.py，由 bash_game_npu 例程读取仓内 fixture 跑
@@ -101,21 +127,20 @@ unsupported:
   - examples/agentic/codebreaker/reward.py
   # 终端对玩 TUI（可指向 OpenAI 兼容端点），人工交互入口。
   - examples/agentic/codebreaker/tui.py
-  # ===== coding：SWE-bench 风格多轮编码智能体（dataset.jsonl 100 条自
-  # 包含任务；inspect/read/rg/apply_patch/run_command 等九工具）。待验证：
-  # 多轮长轨迹与 run_command 有界 shell 执行在 CI 容器内的稳定性。 =====
-  # 多轮 agent 循环兼容 shim（re-export areno.agent.agent_loop，实现已上移）。
+  # ===== coding 其余文件：训练链路组件、兼容 shim 与交互入口，不单独调度
+  # （链路锚在 supported 的 run_agent.py，由 coding_npu 例程读仓内
+  # dataset.jsonl 跑 1 步训练）。 =====
+  # 多轮 agent 循环兼容 shim（re-export areno.agent.agent_loop，实现已上移，
+  # 示例流程不再引用）。
   - examples/agentic/coding/agent_loop.py
   # 交互式编码 CLI（在 --repo 目录内跑同一循环），人工交互入口。
   - examples/agentic/coding/code_cli.py
-  # 九工具兼容 shim（re-export areno.agent.tools，实现已上移）。
+  # 九工具兼容 shim（re-export areno.agent.tools，实现已上移，流程不再引用）。
   - examples/agentic/coding/coding_tools.py
   # dataset.jsonl（100 条本地任务）加载器。
   - examples/agentic/coding/dataset_loader.py
   # 奖励：patch + 必要测试全过 + submit solved 才满分，含部分分/负分。
   - examples/agentic/coding/reward.py
-  # 多轮编码 rollout（调用 areno.agent.run_agentic_coding_loop）。
-  - examples/agentic/coding/run_agent.py
   # ===== duelgrid：回合制网格战术游戏多轮 RLVR（结构化 JSON 动作 + 规则
   # 引擎奖励；README 以 Gemma-E2B-it 演示）。待验证：多轮 agentic 路径与
   # 所用底座在昇腾实测。 =====

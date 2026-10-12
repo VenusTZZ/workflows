@@ -119,9 +119,9 @@ PY
 # Known profiles. Every current profile shares the same preparation (the AReno
 # NPU source build below); a profile that needs extra dependencies would branch
 # on PROFILE here, before the shared steps.
-SUPPORTED_PROFILES="bash_game_npu codebreaker_npu"
+SUPPORTED_PROFILES="bash_game_npu codebreaker_npu coding_npu"
 case "$PROFILE" in
-  bash_game_npu | codebreaker_npu) ;;
+  bash_game_npu | codebreaker_npu | coding_npu) ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -134,3 +134,11 @@ ensure_build_tools
 ensure_torch_stack
 use_npu_capable_source
 install_areno
+# pytest backs the coding example's run_command test execution: its tasks run
+# `python -m pytest ...` inside the per-task workspace during rollout.
+python -m pip install -q pytest
+# All three supported examples run agentic rollouts: their run_agent.py drives
+# an OpenAI-compatible client against the local rollout proxy. AReno's NPU
+# requirements list `openai`, but the base image can already satisfy `openai`
+# without pulling its `httpx` dependency, so install both explicitly.
+python -m pip install -q openai httpx
