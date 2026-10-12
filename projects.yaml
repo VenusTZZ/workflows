@@ -692,8 +692,10 @@ projects:
     workflows:
       quick_start: .github/workflows/tgi-quick-start.yml
       examples: .github/workflows/roll-examples.yml
-  # AReaL: RL 训练框架。NPU 支持在 ascend-v1.0.5 分支（非 main），需要专用镜像
-  # ghcr.io/hwvanici/areal_npu:v1.0.5-a2；examples 走共享引擎 examples-template.yml。
+  # AReaL: RL 训练框架。examples 看护 release 线（引擎按 latest release
+  # 解析）；supported 配方用专用镜像 ghcr.io/hwvanici/areal_npu:v1.0.5-a2
+  # （vllm 栈由 setup_example.sh §1b 换装 0.22.1 线以匹配 v2.x 代码）；
+  # 走共享引擎 examples-template.yml。
   - name: areal
     category: 训练加速
     support_level: 基础支持

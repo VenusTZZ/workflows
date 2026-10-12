@@ -2,16 +2,16 @@ version: 1
 scan:
   root: examples
   include_extensions: ['.py', '.sh']
-  # files-only 模型（docs/examples-guard-engine.md §2.7）。2026-10-08 起与
-  # diffusers 对齐收口：原 scan.exclude 的 36 条规则全部迁入
-  # unsupported 段（上游自测 / scaffolding / tir / terminal_bench / search_agent
-  # 等实现模块，带分组注释与理由），scan 只保留 root + include_extensions 两个键。
-  # 对账口径：ascend-v1.0.5 树 101 个 .py/.sh = supported(13) + unsupported(88)。
-  # 注意 main 线（v2.1.0=114、当前 main=131）与本分支树不同，勿混用口径。
+  # files-only 模式（docs/examples-guard-engine.md §2.7）：scan 只保留
+  # root + include_extensions 两个键；实现模块、上游自测等一律进
+  # unsupported 段（带分组注释与理由）。
+  # 对账口径：release 树（当前 v2.1.0）114 个 .py/.sh =
+  # supported(12) + unsupported(102)。
 
-# NPU 支持在 ascend-v1.0.5 分支（非 main），需专用镜像
-# ghcr.io/hwvanici/areal_npu:v1.0.5-a2。
-# 国内源：ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+# 看护 release 线（workflow target_ref 留空，由引擎按 latest release
+# 解析）。supported 配方用专用镜像 ghcr.io/hwvanici/areal_npu:v1.0.5-a2
+# （国内源 ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2）；镜像内的
+# vllm 栈由 setup_example.sh §1b 换装 0.22.1 线以匹配 v2.x 代码布局。
 # 通用配方：
 # - 双卡 colocate：rollout vllm:d1p1t2 + actor fsdp:d2p1t1；offload 解
 #   optimizer-state OOM，disk 权重同步解共卡 xccl 建不起 HCCL 组（EI0015）。
@@ -32,8 +32,13 @@ supported:
     image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
     overlay_args:
       - --config examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.yaml
+      - scheduler.type=local
       - cluster.n_gpus_per_node=2
       - rollout.backend=vllm:d1p1t2
+      # mm server 预热（processor warmup + tokenizer 深拷贝池）在慢机上超
+      # 默认 300s 健康等待（本次 0.22.1 栈实测复现），与其余 RL 条目统一
+      # 1800s 兜底。
+      - +rollout.setup_timeout=1800
       - actor.backend=fsdp:d2p1t1
       - +actor.fsdp.offload_params=true
       - +actor.weight_update_mode=disk
@@ -48,38 +53,65 @@ supported:
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
+      - vllm.max_model_len=8576
     timeout_minutes: 60
-  
-  # Qwen3-VL-2B 多轮 tool-calling GRPO（双卡，实测跑通）。max_tokens_per_mb
-  # 同时是 workflow 的 max_tokens_per_traj，勿低于 1024（图片视觉 token 会超）。
-  - path: examples/multi_turn_vlm/geometry3k_grpo_mt.py
-    profile: areal-vlm-mt-grpo
+  # Hermes 在线 RL（唯一覆盖 online 模式 + agent service + per-session key
+  # 链路的例子）。config.yaml 默认 CUDA 栈，NPU 全部 overlay：rollout sglang
+  # （NPU 无 SGLang，换 config 自带的 vllm 段）、actor megatron（换 fsdp 与
+  # 其余条目同构）、weight_update_mode xccl（NPU 共卡建不起 HCCL 组，换
+  # disk）。**另需 _version=v1 回退**：config 的 _version:v2 会强制非 LoRA
+  # 走 awex 权重同步（rl_trainer.py:380-399，v2 忽略 weight_update_mode），
+  # 而 awex 的推理侧 /awex/report_parallelism 端点上游只有 SGLang 实现
+  # （inference_service/vllm/ 无此路由），vLLM 后端必 404；回 v1 后
+  # weight_update_mode=disk 生效（与 ascend 时代配方同路径）。
+  # train.py 在线模式阻塞等外部会话，run_example.sh 的 hermes 分支编排完整
+  # 生命周期：start_session → 管道驱动 hermes_loop → set_reward → refresh
+  # 结束导出轨迹 → 1 步训练退出；agent 运行时 hermes-agent 由 setup §1c 安装。
+  - path: examples/hermes/train.py
+    profile: areal-hermes-grpo
     runner: linux-aarch64-a2-2
     npu_devices: '0,1'
     image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
     overlay_args:
-      - --config examples/multi_turn_vlm/qwen3_vl_2b_geometry3k_grpo_mt.yaml
-      - scheduler.type=local
+      - --config examples/hermes/config.yaml
+      - rollout.backend=vllm:d1p1t2
+      - rollout._version=v1
+      - actor.backend=fsdp:d2p1t1
+      - actor._version=v1
+      - +actor.fsdp.offload_params=true
+      - ++actor.weight_update_mode=disk
+      - actor.path=${AREAL_MODEL_PATH}
+      - rollout.admin_api_key=sk-areal-ci
+      - vllm.gpu_memory_utilization=0.3
+      - vllm.max_model_len=8192
+      - gconfig.max_new_tokens=256
+      - +rollout.setup_timeout=1800
+      - total_train_steps=1
+      - total_train_epochs=1
+    timeout_minutes: 90
+  # SWE-bench 代理模式 RL（v2 agentic RL 的另一半覆盖面：proxy 模式 subproc
+  # agent + 本地 persistent-bash 沙箱，与 hermes 的 online 会话驱动互补）。
+  # 树内无 config/数据集：setup §11 自建（AReaL-SWEAgent checkout + aenv +
+  # 派生 PPO config + 自包含 fixture），经 ${AREAL_SWE_CONFIG} 注入；标准
+  # 前台运行，1 步即退。
+  - path: examples/swe/train_swe_rl.py
+    profile: areal-swe-rl
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
+    overlay_args:
+      - --config ${AREAL_SWE_CONFIG}
       - cluster.n_gpus_per_node=2
       - rollout.backend=vllm:d1p1t2
+      - +rollout.setup_timeout=1800
       - actor.backend=fsdp:d2p1t1
       - +actor.fsdp.offload_params=true
-      - +actor.weight_update_mode=disk
-      - actor.reward_norm.mean_level=null
-      - actor.adv_norm.mean_level=null
+      - ++actor.weight_update_mode=disk
       - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1024
-      - ref.mb_spec.max_tokens_per_mb=1024
-      - vllm.gpu_memory_utilization=0.3
-      - gconfig.n_samples=1
-      - gconfig.max_new_tokens=64
-      - max_turns=2
-      - train_dataset.batch_size=2
-      - valid_dataset.batch_size=2
-      - +train_dataset.setup_timeout=600
-      - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
-    timeout_minutes: 60
+      - total_train_epochs=1
+      - vllm.gpu_memory_utilization=0.4
+    timeout_minutes: 90
   # GSM8K GRPO（上游 NPU 专用配置 gsm8k_grpo_npu.yaml，实测跑通）
   - path: examples/math/gsm8k_rl.py
     profile: areal-math-grpo
@@ -120,31 +152,6 @@ supported:
       - valid_dataset.batch_size=4
       - +train_dataset.setup_timeout=600
       - +valid_dataset.setup_timeout=600
-      - +total_train_steps=1
-    timeout_minutes: 60
-  # AIME RL（实测跑通）：上游无 aime 配置，setup 从 gsm8k_grpo_npu.yaml
-  # 派生（MathArena 数据转本地 parquet，经 AREAL_AIME_CONFIG 传入）
-  - path: examples/math/aime_rl.py
-    profile: areal-math-aime
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config ${AREAL_AIME_CONFIG}
-      - scheduler.type=local
-      - cluster.n_gpus_per_node=2
-      - rollout.backend=vllm:d1p1t2
-      - actor.backend=fsdp:d2p1t1
-      - +actor.fsdp.offload_params=true
-      - ++actor.weight_update_mode=disk
-      - actor.path=${AREAL_MODEL_PATH}
-      - vllm.gpu_memory_utilization=0.3
-      - gconfig.max_tokens=4096
-      - gconfig.max_new_tokens=512
-      - gconfig.n_samples=1
-      - train_dataset.max_length=4096
-      - train_dataset.batch_size=2
-      - valid_dataset.batch_size=2
       - +total_train_steps=1
     timeout_minutes: 60
   # BoBa GRPO（实测跑通）：脚本按本地 jsonl 加载，setup 预下载
@@ -226,26 +233,6 @@ supported:
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
     timeout_minutes: 60
-  # Geometry3K VLM SFT（2026-09-28 实测跑通）：原配置 27B/megatron 16 卡，
-  # 换 2B + fsdp 看 VLM SFT 管线；yaml scheduling_spec 为 null，数据主进程
-  # 加载，无需 setup_timeout
-  - path: examples/vlm/geometry3k_sft.py
-    profile: areal-vlm-sft
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/vlm_npu/qwen3_6_27b_geometry3k_sft.yaml
-      - scheduler.type=local
-      - cluster.n_gpus_per_node=2
-      - actor.backend=fsdp:d2p1t1
-      - +actor.fsdp.offload_params=true
-      - actor.path=${AREAL_MODEL_PATH}
-      - actor.mb_spec.max_tokens_per_mb=1024
-      - train_dataset.batch_size=2
-      - valid_dataset.batch_size=2
-      - +total_train_steps=1
-    timeout_minutes: 60
   # CLEVR 计数 GRPO：与 geometry3k 同构，复用 areal-vlm-grpo profile。重数据
   # 条目：10.4GB 下载 + 7 万图单进程预处理（上游 FIXME 极慢），故
   # setup_timeout 3600 / timeout 180，HF cache ~30GB
@@ -266,7 +253,7 @@ supported:
       - actor.path=${AREAL_MODEL_PATH}
       - actor.mb_spec.max_tokens_per_mb=1024
       - ref.mb_spec.max_tokens_per_mb=1024
-      - vllm.gpu_memory_utilization=0.3
+      - vllm.gpu_memory_utilization=0.35
       - gconfig.max_new_tokens=64
       - gconfig.n_samples=1
       - train_dataset.batch_size=2
@@ -274,6 +261,7 @@ supported:
       - +train_dataset.setup_timeout=3600
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
+      - vllm.max_model_len=8576
     timeout_minutes: 180
   # TIR 工具集成推理 GRPO（独有覆盖面：带内工具调用 + 本地 python/calculator，
   # Daytona 只是可选后端）；torl 数据只有 GitHub 一个来源且 job 容器不可达
@@ -370,6 +358,7 @@ supported:
       - +valid_dataset.setup_timeout=600
       - +total_train_steps=1
     timeout_minutes: 60
+  
 unsupported:
   # UPSTREAM_BUG：clevr SFT loader 读错 processor 键名、且不判空。
   # transformers 5.x 起 Qwen-VL 处理器把该字段放在 mm_token_type_ids（Qwen2-VL /
@@ -396,11 +385,6 @@ unsupported:
   # UPSTREAM_BUG：dpo_pair_logratios 的序列聚合硬编码 fp64（functional.py:698，
   # 为长对精度设计），Ascend 不支持 fp64 计算
   - examples/alignment/hhrlhf_dpo.py
-  # CodeAgent 硬依赖 OPENAI + DAYTONA 外部凭据；且仓内无 config yaml
-  - examples/code/train.py
-  # mopd：actor.path 是未发布 checkpoint 占位符；leetcode 域走 CodeAgent
-  # 外部凭据；16 卡 CP4 形态压不小
-  - examples/distillation/mopd/mopd_rl.py
   # UPSTREAM_BUG：reward_fn 传函数对象，RPC JSON 序列化失败（应传点路径）
   - examples/vlm_npu/virl39k_grpo.py
   # math_agent 调外部 LLM，需 API key
@@ -426,16 +410,6 @@ unsupported:
   # fork tau2-bench + 外部 user simulator 端点（同 examples/tau2）
   - examples/experimental/inference_service/tau2_rollout.py
 
-  # geometry3k_grpo_mt 的官方 NPU 启动器（export USE_OPTIMIZED_MODEL=0 + 同
-  # config 转发 "$@"）：.py 本体已单独看护，.sh 只是包装层，无独立看护
-  # 价值（2026-10-08 自 supported 移入）。
-  - examples/multi_turn_vlm/run_geometry3k_grpo_mt_npu.sh
-
-  # =====================================================================
-  # ===== 2026-10-08 收口：以下各组自 scan.exclude 迁入，
-  # ===== scan 段自此只保留 root + include_extensions。
-  # =====================================================================
-
   # 上游自测（scaffolding/tests、tir/tests）与 pytest 基础设施。
   - examples/scaffolding/tests/test_controllers.py
   - examples/scaffolding/tests/test_scaffolding_llm_integration.py
@@ -450,6 +424,7 @@ unsupported:
   - examples/tir/tests/test_tool_manager_async.py
   - examples/tir/tests/test_tool_registry_lazy.py
   # 包标识文件（__init__.py）。
+  - examples/hermes/__init__.py
   - examples/scaffolding/__init__.py
   - examples/scaffolding/core/__init__.py
   - examples/scaffolding/tests/__init__.py
@@ -505,24 +480,76 @@ unsupported:
   - examples/agent_workflow/configs.py
   - examples/countdown/reward_score.py
   - examples/multi_turn_math/config.py
-  - examples/multi_turn_vlm/config.py
   - examples/openai_agents/config.py
   - examples/tau2/utils.py
-  # 其它被调用的实现 / 环境 / 演示（agent_service 的 agent、multi_turn_vlm
-  # 的 geo3k_env、openclaw 生命周期演示、sandbox_daytona 奖励示例、
+  # profile 脚本的 rank 解析 helper（被 run_qwen3_30b_a3b_sft_profile.sh 内嵌调用）
+  - examples/profile/profile_rank_utils.py
+  # SWE 的环境/训练配置 dataclass（train_swe_rl.py import）
+  - examples/swe/utils.py
+  # SWE 的 rollout 过滤函数（按组内 reward 方差过滤全对/全错样本并打点统计）
+  - examples/swe/filter_function.py
+  # 其它被调用的实现 / 环境 / 演示（agent_service 的 agent、
+  # openclaw 生命周期演示、sandbox_daytona 奖励示例、
   # tau2 的 agent、docs/debug 调试脚本）。
   - examples/agent_service/agent.py
   - examples/docs/debug/cmp_rollout.py
-  - examples/multi_turn_vlm/geo3k_env.py
   - examples/openclaw/_fmt.py
   - examples/openclaw/demo_lifecycle.py
   - examples/openclaw/set_reward.py
   - examples/openclaw/start_session.py
   - examples/sandbox_daytona/reward_example.py
   - examples/tau2/agent.py
+  # Hermes 的 AgentRunnable 实现（Agent Service 进程内每 session 加载，
+  # 需 hermes-agent 包 + 上游 LLM key，同 agent_service/agent.py 类）
+  - examples/hermes/hermes.py
+  # SWE 的 agent workflow 实现（train_swe_rl.py 调用；agent 本体在独立的
+  # AReaL-SWEAgent checkout，经 AWEAGENT_ROOT 发现）
+  - examples/swe/agent.py
+  # SWE 的 InteractionCache 前缀匹配器（容忍 CC 系 agent 对 tool 参数的重写）
+  - examples/swe/prefix_matchers.py
+  # SWE 的消息预处理器（剥离 Anthropic 计费头等易变元数据）
+  - examples/swe/preprocessors.py
+  # hermes 在线 RL 链路的会话工具：start_session 铸 sk-sess 钥匙（refresh
+  # 即结束会话并导出轨迹）、hermes_loop 会话驱动（EOF 可管道化）、
+  # set_reward 打分。纯 HTTP 客户端与交互 CLI，无模型、无 NPU 依赖、无独立
+  # pass/fail 语义；由 supported 的 examples/hermes/train.py 看护编排
+  # （run_example.sh hermes 分支）作为工具间接执行。
+  - examples/hermes/hermes_loop.py
+  - examples/hermes/set_reward.py
+  - examples/hermes/start_session.py
+  # SGLang 工具链补丁（给 SGLang 0.5.9/0.5.10 打 Bailing Hybrid 模型 radix
+  # cache 支持，改 8 个文件）：NPU 不支持 SGLang、镜像里也无 sglang 安装，
+  # 无对象可打；且是环境修补工具非训练入口，无独立 pass/fail 语义。
+  - examples/swe/apply_sgl_radix_cache_patch.py
+  # profile 性能剖析三件套：CUDA 专属工具链——启动器采集 nvidia-smi.csv、
+  # postprocess 按 CPU/CUDA API/GPU kernels 事件类别拆 kernel trace、
+  # memory 快照走 PyTorch CUDA allocator，NPU 均无对应产物；上游 README
+  # 明示需 8×GPU 环境（"CUDA traces and memory snapshots cannot be
+  # produced"），配套 yaml 为 megatron 8 卡 + Qwen3-30B-A3B。
+  # train_sft_profile.py 的 SFT 本体可跑（确定性 fake 数据），可选后续：
+  # 若要 128K 长序列 NPU SFT 冒烟，可 overlay（fsdp + 小模型）单独升格。
+  - examples/profile/postprocess_profile.py
+  - examples/profile/run_qwen3_30b_a3b_sft_profile.sh
+  - examples/profile/train_sft_profile.py
   # 特殊两条：countdown.py 是数据生成 CLI（CI setup 第 6 节将其作为工具
   # 运行，被守卫的入口是同目录 train.py）；gsm8k_eval.py 是 gsm8k_rl_mt
   # 的评估器（被调用非入口，且自建 scheduler 未初始化 DataController——
   # 上游 bug 清单 #2）。
   - examples/countdown/countdown.py
   - examples/math/gsm8k_eval.py
+  # vlm_npu：geometry3k GRPO 入口的坏副本 + 3 个官方 NPU 启动器（包装层）。
+  # geometry3k_grpo.py 与 supported 的 examples/vlm/geometry3k_grpo.py 逐行
+  # 同源，仅 reward_fn 传函数对象（应为点路径字符串）——同 virl39k 的 RPC
+  # 序列化 UPSTREAM_BUG，属重复条目；qwen2_5/qwen3_vl 的 .sh 只是
+  # USE_OPTIMIZED_MODEL=0 + python 该 py 的包装（底层 py 已坏，geometry3k
+  # 覆盖面也已由 supported 条目覆盖）；multinode .sh 跑 virl39k_grpo.py
+  # （本体在上方 UPSTREAM_BUG 分组）且是 3 节点 ×16 卡多节点形态，池子无
+  # 对应 runner。
+  # 可升格出口：上游把 vlm_npu/geometry3k_grpo.py 的 reward_fn 修成点路径
+  # 后，Qwen3-VL-2B geometry3k（qwen3_vl_2b config，模型已 seed）可作独立
+  # 模型覆盖面升格——走 supported 的 vlm/geometry3k_grpo.py 入口 + config
+  # 注入即可，不需要这个 .sh。
+  - examples/vlm_npu/geometry3k_grpo.py
+  - examples/vlm_npu/qwen2_5_vl_3b_geometry3k_grpo.sh
+  - examples/vlm_npu/qwen2_5_vl_3b_virl39k_grpo_multinode.sh
+  - examples/vlm_npu/qwen3_vl_2b_geometry3k_grpo.sh

@@ -5,6 +5,8 @@
 # CI base image is ghcr.io/hwvanici/areal_npu, which already has the full stack:
 # CANN, torch, vLLM-Ascend, Megatron, MindSpeed, huggingface_hub etc.
 # We should NOT reinstall these; just install the target AReaL source and assets.
+# Exception (section 1b): the vllm/vllm-ascend pair is swapped to the 0.22.1
+# line to match the guarded v2.x code's vllm layout.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -22,6 +24,8 @@ HHRLHF_PREP=0
 TORL_PREP=0
 SCAFFOLD_PREP=0
 CLEVR_SUBSET_PREP=0
+HERMES_PREP=0
+SWE_PREP=0
 case "$PROFILE" in
   areal-vlm-grpo) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct" ;;
   areal-vlm-mt-grpo) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
@@ -41,6 +45,12 @@ case "$PROFILE" in
   areal-math-aime) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; AIME_PREP=1 ;;
   areal-math-boba) MODEL_ID="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"; BOBA_PREP=1 ;;
   areal-countdown-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; COUNTDOWN_PREP=1 ;;
+  # hermes/train.py: online RL; agent runtime package installed in
+  # section 1c, orchestration in run_example.sh's hermes branch.
+  areal-hermes-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HERMES_PREP=1 ;;
+  # swe/train_swe_rl.py: agent runtime (external AReaL-SWEAgent + aenv),
+  # config and fixture are all built in section 11; plain foreground run.
+  areal-swe-rl) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; SWE_PREP=1 ;;
   # hhrlhf_dpo.py: DPO pipeline is model-agnostic; upstream yaml's 7B swapped
   # for 1.5B (7B fp32 init OOMs the 32GB cards in the pool, 15GB per run).
   areal-align) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HHRLHF_PREP=1 ;;
@@ -62,6 +72,115 @@ fi
 # -------------------------------------------------------
 command -v uv >/dev/null 2>&1 || pip install -q uv
 uv pip install --no-deps -e "$TARGET_ROOT" --system
+
+# -------------------------------------------------------
+# 1b. vLLM stack: swap the image's 0.23 line for 0.22.1.
+# The image ships the ascend-v1.0.5 branch stack (vllm/vllm-ascend
+# 0.23.0). The guarded v2.x code imports the pre-0.23 vllm layout
+# (vllm.entrypoints.openai.utils / vllm.entrypoints.utils exist
+# through 0.22.1, removed in 0.23) - without this swap every
+# rollout-backed entry dies on
+#   ModuleNotFoundError: No module named 'vllm.entrypoints.openai.utils'
+#
+# Recipe per vllm-ascend's own Dockerfile at v0.22.1rc1:
+#   - vllm-ascend 0.22.1rc1 PyPI wheel with --no-deps: its pins would
+#     re-resolve the frozen image stack (torch_npu 2.10.0.post2 etc);
+#   - vllm 0.22.1 from SOURCE with VLLM_TARGET_DEVICE=empty (pure
+#     Python, no compiled kernels - the ascend plugin supplies the
+#     device layer). NEVER install vllm from PyPI here: the wheel is
+#     built against torch==2.11.0, incompatible with the image's
+#     torch 2.10.0 and areal's torch<2.11 pin. --no-deps keeps the
+#     image stack untouched, --no-build-isolation lets setup.py see
+#     the system torch;
+#   - triton-ascend stays as the image's 3.2.2 (same 3.2.x generation
+#     as this line's 3.2.1);
+#   - the source build additionally needs setuptools-rust/setuptools-scm
+#     in the system env: --no-build-isolation skips the declared
+#     build-system requires, but setup.py imports both unconditionally.
+#     The optional rust extension is skipped when cargo is absent (same
+#     as vllm-ascend's own image, which ships no rust toolchain).
+# Applies to ALL profiles: fsdp-only entries (gsm8k_sft) double as
+# the control that the swap does not disturb the vllm-free path.
+# TODO(vllm-0.23): drop this block once upstream ships a v2.x NPU
+# image or vllm-ascend catches up with mainline's target layout.
+# -------------------------------------------------------
+VLLM_SRC="$GITHUB_WORKSPACE/vllm-0.22.1-src"
+git clone --depth 1 --branch v0.22.1 https://github.com/vllm-project/vllm.git "$VLLM_SRC"
+uv pip install --system --no-deps \
+  --index-url https://mirrors.aliyun.com/pypi/simple \
+  vllm-ascend==0.22.1rc1
+uv pip install --system \
+  --index-url https://mirrors.aliyun.com/pypi/simple \
+  "setuptools-rust>=1.9.0" "setuptools-scm>=8.0"
+VLLM_TARGET_DEVICE=empty uv pip install --system --no-deps --no-build-isolation \
+  -e "$VLLM_SRC"
+python -c "import torch, torch_npu, vllm, vllm_ascend; from vllm.entrypoints.openai.utils import validate_json_request; print(f'vllm {vllm.__version__} + vllm-ascend 0.22.1rc1 layout OK; torch {torch.__version__}, torch_npu {torch_npu.__version__}')"
+
+# -------------------------------------------------------
+# 1c. hermes profile: the agent runtime package. The model is the
+# standard shared-cache Qwen2.5-1.5B-Instruct (hermes-agent itself is
+# model-agnostic - it drives whatever OpenAI-compatible endpoint the
+# rollout engine serves); the Agent Service imports
+# examples.hermes.hermes.HermesAgent from the target checkout.
+# Index: tsinghua (not aliyun) - aliyun's PEP 658 .metadata sidecar for
+# hermes-agent's python-dotenv dep 404s intermittently; tuna mirrors the
+# metadata reliably (same mirror as transformers-quick-start.yml).
+# -------------------------------------------------------
+if [[ "$HERMES_PREP" == 1 ]]; then
+  uv pip install --system \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    hermes-agent==0.19.0
+fi
+
+# -------------------------------------------------------
+# 1d. NPU portability patch: lazy MegatronEngine import.
+# areal/v2/training_service/worker/awex.py:_create_training_adapter
+# imports areal.engine.megatron_engine (and the megatron weight-update
+# adapter) unconditionally, so even FSDP-only runs load megatron.bridge ->
+# peft/lora_layers.py -> `import transformer_engine`, a CUDA-only package
+# with no Ascend wheel (same class as bitsandbytes on aarch64). Defer both
+# imports until the engine is known to be Megatron - behaviour-preserving;
+# the editable install reads the patched file live.
+# TODO(npu-upstream): drop once upstream guards the import.
+# -------------------------------------------------------
+python3 - <<'PY'
+import os
+
+path = os.path.join(
+    os.environ["TARGET_ROOT"],
+    "areal", "v2", "training_service", "worker", "awex.py",
+)
+with open(path, encoding="utf-8") as fh:
+    text = fh.read()
+
+old = '''    from areal.engine.fsdp_engine import FSDPEngine
+    from areal.engine.megatron_engine import MegatronEngine
+    from areal.v2.weight_update.awex.fsdp_adapter import AwexFSDPAdapter
+    from areal.v2.weight_update.awex.megatron_adapter import (
+        AwexMegatronAdapter,
+    )
+
+    if isinstance(engine, FSDPEngine):
+        return AwexFSDPAdapter(engine)
+'''
+new = '''    from areal.engine.fsdp_engine import FSDPEngine
+    from areal.v2.weight_update.awex.fsdp_adapter import AwexFSDPAdapter
+
+    if isinstance(engine, FSDPEngine):
+        return AwexFSDPAdapter(engine)
+
+    # NPU: defer the Megatron imports - megatron.bridge drags the CUDA-only
+    # transformer_engine, which has no Ascend wheel.
+    from areal.engine.megatron_engine import MegatronEngine
+    from areal.v2.weight_update.awex.megatron_adapter import (
+        AwexMegatronAdapter,
+    )
+'''
+assert text.count(old) == 1, "awex.py layout changed; update the NPU patch"
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write(text.replace(old, new))
+print("patched awex.py: MegatronEngine import is now lazy", flush=True)
+PY
 
 # -------------------------------------------------------
 # 2. Runtime Environment setup.
@@ -399,5 +518,161 @@ ds.to_parquet(os.path.join(dst, "train.parquet"))
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"AREAL_CLEVR_SUBSET_DIR={dst}\n")
 print(f"prepared clevr subset ({len(ds)} rows) at {dst}", flush=True)
+PY
+fi
+
+# -------------------------------------------------------
+# 11. SWE-bench agent RL (areal-swe-rl).
+# -------------------------------------------------------
+# train_swe_rl.py has no in-tree config or dataset; build all pieces:
+#  a) clone the external AReaL-SWEAgent checkout (the workflow imports
+#     `aweagent.lifecycle` from econfig.agent_root) and install its
+#     requirements.txt (aenvironment sandbox SDK + openai-agents stack);
+#  b) author a minimal agent config: the shipped default
+#     (1_0_0/min-swe-agent-train-top1) uses step_limit=200 with 16K
+#     completion tokens and the swebench eval env - unusable in CI. Derive
+#     it with tiny limits and the inline eval_script reward path;
+#  c) author the PPO config (derived from gsm8k_grpo_npu.yaml) + a
+#     self-contained fixture JSONL (instance_id / problem_statement /
+#     eval_script; no repo clone, no network), and export
+#     AWEAGENT_ROOT / AREAL_SWE_CONFIG for the overlay.
+# The persistent-bash env starts with `cd /testbed`, so prepare /testbed as
+# an empty git repo in the job container (first-run risk: the aenvironment
+# persistent-bash env must execute the shell locally, not in a remote FaaS
+# sandbox).
+if [[ "$SWE_PREP" == 1 ]]; then
+# AREAL_MODEL_PATH is a non-exported shell variable from section 3; export it
+# for this heredoc only so os.environ sees it (it is already in GITHUB_ENV for
+# the run step).
+AREAL_MODEL_PATH="$AREAL_MODEL_PATH" python3 <<'PY'
+import json
+import os
+import subprocess
+
+import yaml
+
+workspace = os.environ["GITHUB_WORKSPACE"]
+target_root = os.environ["TARGET_ROOT"]
+aweagent_root = os.path.join(workspace, "AReaL-SWEAgent")
+
+# a) agent runtime checkout + its requirements. NOTE: the SDK is imported as
+# `from aenv import Environment`, but the PyPI package is `aenvironment` (the
+# package and module names differ) - installing PyPI `aenv` grabs an
+# unrelated same-named project and the import dies with
+# "cannot import name 'Environment' from 'aenv' (unknown location)". Follow
+# the upstream mechanism (train_swe_rl._install_aweagent_deps_on_ray_nodes
+# runs `uv pip install -r requirements.txt`) and install the pinned set:
+# aenvironment + openai/openai-agents/tenacity/loguru. Tuna index (aliyun's
+# PEP 658 metadata sidecars 404 intermittently).
+# Those requirements can pull a NEWER starlette whose Router dropped the
+# `on_startup` kwarg; vllm 0.22.1's `APIRouter(on_startup=...)` then dies on
+# import in the SAME python env (areal_vllm_server imports
+# vllm.entrypoints.openai.api_server -> ... -> `router = APIRouter()`),
+# even though the image's bundled starlette works. Pin fastapi/starlette to
+# the image's current versions via a constraint file.
+import importlib.metadata as importlib_metadata
+
+constraint_path = os.path.join(workspace, "swe-web-constraints.txt")
+with open(constraint_path, "w", encoding="utf-8") as fh:
+    for pkg in ("fastapi", "starlette"):
+        try:
+            fh.write(f"{pkg}=={importlib_metadata.version(pkg)}\n")
+        except importlib_metadata.PackageNotFoundError:
+            pass
+
+if not os.path.isdir(aweagent_root):
+    subprocess.run(
+        [
+            "git", "clone", "--depth", "1",
+            "https://github.com/areal-project/AReaL-SWEAgent.git", aweagent_root,
+        ],
+        check=True,
+    )
+subprocess.run(
+    [
+        "uv", "pip", "install", "--system",
+        "--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple",
+        "--constraint", constraint_path,
+        "-r", os.path.join(aweagent_root, "requirements.txt"),
+    ],
+    check=True,
+)
+
+# b) minimal agent config derived from the shipped Qwen SWE-RL config
+src_cfg = os.path.join(
+    aweagent_root, "aweagent", "configs", "1_0_0", "min-swe-agent-train-top1.yaml"
+)
+with open(src_cfg, encoding="utf-8") as fh:
+    agent_cfg = yaml.safe_load(fh)
+agent_cfg.update(
+    max_completion_tokens=256,
+    step_limit=6,
+    no_tool_call_limit=3,
+    multiple_tools_limit=3,
+    rl_test=False,  # inline eval_script reward, not the swebench eval env
+)
+dst_cfg = os.path.join(aweagent_root, "aweagent", "configs", "ci_swe_smoke.yaml")
+with open(dst_cfg, "w", encoding="utf-8") as fh:
+    yaml.safe_dump(agent_cfg, fh, sort_keys=False, allow_unicode=True)
+
+# c) self-contained fixture + /testbed workspace + PPO config
+data_dir = os.path.join(workspace, "areal_data", "swe")
+os.makedirs(data_dir, exist_ok=True)
+fixture = os.path.join(data_dir, "ci_swe_smoke.jsonl")
+with open(fixture, "w", encoding="utf-8") as fh:
+    fh.write(
+        json.dumps(
+            {
+                "instance_id": "ci-swe-smoke-1",
+                "problem_statement": (
+                    "Create a file `hello.py` in the current working directory "
+                    "that defines a function `add(a, b)` returning the sum of a "
+                    "and b."
+                ),
+                "eval_script": (
+                    "cd /testbed && python -c \"import hello; "
+                    "assert hello.add(2, 3) == 5\""
+                ),
+            }
+        )
+        + "\n"
+    )
+
+os.makedirs("/testbed", exist_ok=True)
+subprocess.run(["git", "init", "-q", "/testbed"], check=True)
+subprocess.run(
+    ["git", "-C", "/testbed", "config", "user.email", "sweagent@test.com"], check=True
+)
+subprocess.run(
+    ["git", "-C", "/testbed", "config", "user.name", "sweagent"], check=True
+)
+
+base = os.path.join(target_root, "examples", "math", "gsm8k_grpo_npu.yaml")
+with open(base, encoding="utf-8") as fh:
+    cfg = yaml.safe_load(fh)
+cfg["experiment_name"] = "swe-rl-smoke"
+cfg["scheduler"]["type"] = "local"
+# Keep the base's rollout.agent (mode: inline) - the field is a non-Optional
+# AgentConfig in the schema, and the SWE workflow is passed explicitly to
+# trainer.train(), so the built-in agent config just needs to stay valid.
+cfg["train_dataset"].update(path=fixture, type="rl", batch_size=1)
+cfg["valid_dataset"].update(path=fixture, type="rl", batch_size=1)
+cfg["econfig"] = {
+    "dataset_path": data_dir,
+    "agent_type": "swe",
+    "agent_config": "ci_swe_smoke",
+    "agent_root": aweagent_root,
+    "llm_model": os.environ["AREAL_MODEL_PATH"],
+    "timeout": 600,
+}
+cfg_path = os.path.join(data_dir, "swe_ppo_npu.yaml")
+with open(cfg_path, "w", encoding="utf-8") as fh:
+    yaml.safe_dump(cfg, fh, sort_keys=False, allow_unicode=True)
+
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"AWEAGENT_ROOT={aweagent_root}\n")
+    fh.write(f"AREAL_SWE_CONFIG={cfg_path}\n")
+print(f"prepared AReaL-SWEAgent at {aweagent_root}", flush=True)
+print(f"generated {cfg_path} and {fixture}", flush=True)
 PY
 fi
