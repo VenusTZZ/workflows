@@ -1,0 +1,8 @@
+{"n": 85, "m": 3, "instance_id": "train-000001", "winning": true, "oracle_move": {"take": 1}, "solution": {"take": 1}}
+{"n": 80, "m": 4, "instance_id": "train-000002", "winning": false, "oracle_move": {"resign": true}, "solution": {"resign": true}}
+{"n": 89, "m": 6, "instance_id": "train-000003", "winning": true, "oracle_move": {"take": 5}, "solution": {"take": 5}}
+{"n": 37, "m": 6, "instance_id": "train-000004", "winning": true, "oracle_move": {"take": 2}, "solution": {"take": 2}}
+{"n": 37, "m": 5, "instance_id": "train-000005", "winning": true, "oracle_move": {"take": 1}, "solution": {"take": 1}}
+{"n": 94, "m": 6, "instance_id": "train-000006", "winning": true, "oracle_move": {"take": 3}, "solution": {"take": 3}}
+{"n": 40, "m": 5, "instance_id": "train-000007", "winning": true, "oracle_move": {"take": 4}, "solution": {"take": 4}}
+{"n": 24, "m": 4, "instance_id": "train-000008", "winning": true, "oracle_move": {"take": 4}, "solution": {"take": 4}}
