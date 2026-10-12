@@ -79,8 +79,8 @@ python --version
 
 输出结果如下：
 
-```shell #test-result id="check-py" fuzzy='xxx'
-Python 3.12.xxx
+```shell #test-result id="check-py" 
+Python 3.12...
 ```
 
 检查 torch / torch_npu / torchaudio 是否装好且 NPU 设备可用，下面用 **python** 跑：
@@ -96,10 +96,10 @@ print('count:', torch.npu.device_count())
 
 输出结果如下：
 
-```shell #test-result id="check-torch" fuzzy='xxx'
-torch= xxx
-torch_npu= xxx
-torchaudio= xxx
+```shell #test-result id="check-torch" 
+torch= ...
+torch_npu= ...
+torchaudio= ...
 is_available: True
 count: 1
 ```
@@ -137,12 +137,12 @@ python -c "import funasr; print('funasr', funasr.__version__)"
 
 输出结果类似如下（开头是 FunASR 在 import 时打印的提示行：无 ffmpeg 时回落 `torchaudio` 的 Notice、以及版本号，均无害，被 `...` 吸收）：
 
-```shell #test-result id="funasr-install-source" fuzzy='xxx' fuzzy='...'
+```shell #test-result id="funasr-install-source" 
 ...
-funasr xxx
+funasr ...
 ```
 
-- xxx 表示最新的版本号
+- ... 表示最新的版本号
 
 > 如果机器在国内、无稳定外网，模型下载默认走 ModelScope（`hub="ms"`），比 Hugging Face 更稳；python 包走 [huawei pypi 镜像](https://repo.huaweicloud.com/ascend/repos/pypi) 配 `pip install -i ...`。
 
@@ -156,12 +156,12 @@ funasr --version
 
 输出结果类似如下：
 
-```shell #test-result id="funasr-version" fuzzy='xxx' fuzzy='...'
+```shell #test-result id="funasr-version" 
 ...
-funasr xxx
+funasr ...
 ```
 
-其中开头是 FunASR 对音频后端的提示（无 ffmpeg 时自动回落 `torchaudio`），`funasr xxx` 是版本号。
+其中开头是 FunASR 对音频后端的提示（无 ffmpeg 时自动回落 `torchaudio`），`funasr ...` 是版本号。
 
 ## 语音识别生产级 pipeline（ASR + VAD + 标点 + 说话人）
 
@@ -190,12 +190,12 @@ print('text:', r['text'])
 print('sentence_info_keys:', sorted(r['sentence_info'][0].keys()))
 ```
 
-输出结果类似如下（转写文本随模型版本可能微调，用 `xxx` 吸收）：
+输出结果类似如下（转写文本随模型版本可能微调，用 `...` 吸收）：
 
-```shell #test-result id="funasr-asr-pipeline" fuzzy='xxx' fuzzy='...'
+```shell #test-result id="funasr-asr-pipeline" 
 ...
 device: npu:0
-text: xxx
+text: ...
 sentence_info_keys: ['end', 'spk', 'start', 'text', 'timestamp']
 ```
 
@@ -227,11 +227,11 @@ print('clean_text:', rich_transcription_postprocess(r['text']))
 
 输出结果类似如下：
 
-```shell #test-result id="funasr-sensevoice" fuzzy='xxx' fuzzy='...'
+```shell #test-result id="funasr-sensevoice" 
 ...
 device: npu:0
-raw_text: xxx
-clean_text: xxx
+raw_text: ...
+clean_text: ...
 ```
 
 - `raw_text` 一栏能看到 `|zh|`（语种）、`|NEUTRAL|`（情感）、`|Speech|`（事件）三类标签拼接在转写文本两侧——这是 SenseVoice 的多任务输出合同；
@@ -277,10 +277,10 @@ print('streamed_text:', ''.join(parts))
 
 输出结果类似如下：
 
-```shell #test-result id="funasr-streaming" fuzzy='xxx' fuzzy='...'
+```shell #test-result id="funasr-streaming" 
 ...
 device: npu:0
-streamed_text: xxx
+streamed_text: ...
 ```
 
 `streamed_text` 是所有块增量返回文本拼接后的完整转写；生产里把每块非空 `text` 直接推给下游即可实现实时上屏。
@@ -310,13 +310,13 @@ print('n_labels:', len(labels))
 print('top_emotion:', top[0])
 ```
 
-输出结果类似如下（`top_emotion` 随输入音频变化，用 `xxx` 吸收）：
+输出结果类似如下（`top_emotion` 随输入音频变化，用 `...` 吸收）：
 
-```shell #test-result id="funasr-emotion" fuzzy='xxx' fuzzy='...'
+```shell #test-result id="funasr-emotion" 
 ...
 device: npu:0
 n_labels: 9
-top_emotion: xxx
+top_emotion: ...
 ```
 
 `labels` 覆盖 8 种情感（生气/厌恶/恐惧/开心/中立/其他/难过/吃惊）+ 1 个 `other`/`<unk>` 兜底标签，`top_emotion` 是概率最高的那一个。
