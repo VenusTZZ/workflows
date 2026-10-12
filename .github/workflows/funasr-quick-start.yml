@@ -41,12 +41,11 @@ concurrency:
 
 on:
   schedule:
-    # Run every 6 hours: '25 */6 * * *' fires at minute 25 of every
-    # 6th hour (00:25, 06:25, 12:25, 18:25). Cadence is loose enough
-    # for an upstream that releases on its own schedule (FunASR), but
-    # tight enough that doc fixes propagate within a day. Minute 25 is
-    # unique among the */6 quick-start crons to avoid peak collision.
-    - cron: '25 */6 * * *'
+    # Daily: '30 4 * * *' fires at 04:30 UTC (12:30 北京时间). FunASR
+    # releases on its own schedule (not per-commit), so a once-a-day
+    # audit matches transformers (the other daily quick-start) and is
+    # enough for doc fixes to propagate within a day.
+    - cron: '30 4 * * *'
   workflow_dispatch:
 
 permissions:
