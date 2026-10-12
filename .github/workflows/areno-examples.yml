@@ -7,21 +7,17 @@
 # run-example matrix / validate-results / save-monitor-state) lives in the
 # engine. See docs/examples-guard-engine.md for the design.
 #
-# Bring-up state: projects/areno/examples_manifest.yaml registers every
-# .py / .sh file under upstream examples/ (59 files today, no .sh yet -
-# the extension stays in the scan for future shell entrypoints) as
-# unsupported pending verification - no example has an NPU-side run
-# record yet (the quick-start smoke covers the same GSPO + math_verify
-# path shape, but not the example entrypoints).
-# has_supported=false, so the engine schedules no matrix leg and uses no
-# NPU runner; manual/scheduled runs still exercise manifest-check
-# against the release checkout, and the daily examples-check
-# reconciliation covers the unsupported set.
+# Guard state: projects/areno/examples_manifest.yaml promotes the
+# bash_game example (single-turn agentic tool-call RLVR) to supported
+# and keeps the remaining .py files unsupported pending verification.
+# The run-example matrix therefore schedules one 1-card NPU leg
+# (linux-aarch64-a2-1) that runs projects/areno/scripts/setup_example.sh
+# (source build of areno.accel._areno_accel_npu) + run_example.sh.
 # Refs: latest release v0.0.8 already ships the full examples/ tree
-# (identical to main), so the engine's release-line resolution works
-# unchanged. Note the runnable NPU stack (areno.accel._areno_accel_npu)
-# is still main-only - cf. areno-quick-start.yml - a constraint for the
-# setup scripts once entries graduate to supported.
+# (identical to main), so manifest-check and the daily examples-check
+# resolve unchanged; but v0.0.8 predates the NPU backend, so the setup
+# script switches the workspace checkout to upstream main before the
+# source build (temporary - same handling as areno-quick-start.yml).
 
 name: areno-examples
 
@@ -65,4 +61,4 @@ jobs:
       # unsupported pending verification) so the matrix is empty; keep
       # one leg at a time until entries graduate and the source-install
       # stack settles.
-      max_parallel: 1
+      max_parallel: 8

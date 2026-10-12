@@ -730,11 +730,12 @@ projects:
   # NPU 版：GSPO-on-GSM8K 1 步 RLVR 冒烟（Qwen3-0.6B，ModelScope）+
   # checkpoint 落盘 + areno serve --backend npu 的 /v1/chat/completions
   # 冒烟。Examples 走共享引擎 examples-template.yml：release 线 v0.0.8
-  # 已带全部用例（examples/ 树与 main 一致），manifest 阶段 A 把 examples/
-  # 下全部 59 个 .py/.sh 入口（当前全为 .py，逐文件登记）写入 unsupported
-  # 待验证（NPU 侧尚无任何 example 实跑记录），has_supported=false 不排
-  # NPU matrix；待上卡验证后逐条升级 supported（升级时安装源仍需
-  # main-only 的临时处理，同 quick-start）。
+  # 已带全部用例（examples/ 树与 main 一致），manifest 已把 bash_game
+  # 训练链路（锚在 run_agent.py）升级 supported，同目录其余组件/伴随物
+  # 连同其他用例共 58 个 .py 仍逐文件登记 unsupported 待验证；supported
+  # 一条在单卡 a2-1 上由 projects/areno/scripts/{setup,run}_example.sh 现场
+  # 装 main（v0.0.8 无 NPU 后端，同 quick-start 的临时处理）跑 1 步
+  # agentic GSPO。
   # category/support_level 按姊妹项目 areal 的口径暂记，如与项目
   # 表不符以表为准。
   - name: areno
