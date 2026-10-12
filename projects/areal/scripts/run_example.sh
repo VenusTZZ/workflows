@@ -334,13 +334,18 @@ PY
 
     # 2) Drive two episodes in the background (episode 2's refresh exports
     #    episode 1's trajectory; see header for why the exit is not checked).
+    #    tee (not a plain redirect) so the driver's output also lands in the
+    #    job log for live progress; process substitution keeps $! = python pid.
     "$PYTHON" examples/openclaw/demo_lifecycle.py "$GW" \
-      --admin-key "$OC_ADMIN_KEY" --episodes 2 >"$DEMO_LOG" 2>&1 &
+      --admin-key "$OC_ADMIN_KEY" --episodes 2 > >(tee "$DEMO_LOG") 2>&1 &
     DEMO_PID=$!
     echo "demo_lifecycle started (pid=$DEMO_PID, log=$DEMO_LOG)"
 
-    # 3) Wait for the trainer's single step and clean exit (bounded).
-    TRAIN_WAIT_S=900
+    # 3) Wait for the trainer's single step and clean exit (bounded). The
+    # driver's chat call can legitimately take up to its (patched) 600s read
+    # timeout on the slow NPU, plus the refresh + one PPO step, so allow
+    # 1200s before declaring the trainer stuck.
+    TRAIN_WAIT_S=1200
     waited=0
     train_timed_out=0
     while kill -0 "$TRAINER_PID" 2>/dev/null; do
@@ -354,6 +359,9 @@ PY
       fi
       sleep 15
       waited=$((waited + 15))
+      # Heartbeat: surface the driver's latest line so a slow-but-alive
+      # generation is distinguishable from a real hang (ANSI stripped).
+      echo "[wait ${waited}s] demo: $(tail -n 1 "$DEMO_LOG" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-200)"
     done
     kill "$DEMO_PID" 2>/dev/null || true
     if (( train_timed_out )); then
