@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # Prepare the CI environment for one supported AReaL example.
 # $1 is the manifest profile. Unknown profiles fail before any install.
 #

@@ -69,8 +69,8 @@ supported:
   # 结束导出轨迹 → 1 步训练退出；agent 运行时 hermes-agent 由 setup §1c 安装。
   - path: examples/hermes/train.py
     profile: areal-hermes-grpo
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
     image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
     overlay_args:
       - --config examples/hermes/config.yaml
@@ -80,9 +80,9 @@ supported:
       # train_controller.balanced_greedy_partition(items=1, K=2) raise
       # "Number of items (1) must be >= K (2)". One card avoids the split;
       # rollout colocated on the same card keeps colocate valid.
-      - rollout.backend=vllm:d1p1t2
+      - rollout.backend=vllm:d1p1t1
       - rollout._version=v1
-      - actor.backend=fsdp:d2p1t1
+      - actor.backend=fsdp:d1p1t1
       - actor._version=v1
       - +actor.fsdp.offload_params=true
       - ++actor.weight_update_mode=disk
