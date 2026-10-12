@@ -7,11 +7,12 @@
 # run-example matrix / validate-results / save-monitor-state) lives in the
 # engine. See docs/examples-guard-engine.md for the design.
 #
-# Guard state: projects/areno/examples_manifest.yaml promotes the
-# bash_game example (single-turn agentic tool-call RLVR) to supported
-# and keeps the remaining .py files unsupported pending verification.
-# The run-example matrix therefore schedules one 1-card NPU leg
-# (linux-aarch64-a2-1) that runs projects/areno/scripts/setup_example.sh
+# Guard state: projects/areno/examples_manifest.yaml promotes two agentic
+# RLVR examples to supported - bash_game (single-turn) and codebreaker
+# (multi-turn), each anchored on its run_agent.py entry file - and keeps
+# the remaining .py files unsupported pending verification. The
+# run-example matrix therefore schedules two 1-card NPU legs
+# (linux-aarch64-a2-1), each running projects/areno/scripts/setup_example.sh
 # (source build of areno.accel._areno_accel_npu) + run_example.sh.
 # Refs: latest release v0.0.8 already ships the full examples/ tree
 # (identical to main), so manifest-check and the daily examples-check

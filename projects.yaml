@@ -731,10 +731,10 @@ projects:
   # checkpoint 落盘 + areno serve --backend npu 的 /v1/chat/completions
   # 冒烟。Examples 走共享引擎 examples-template.yml：release 线 v0.0.8
   # 已带全部用例（examples/ 树与 main 一致），manifest 已把 bash_game
-  # 训练链路（锚在 run_agent.py）升级 supported，同目录其余组件/伴随物
-  # 连同其他用例共 58 个 .py 仍逐文件登记 unsupported 待验证；supported
-  # 一条在单卡 a2-1 上由 projects/areno/scripts/{setup,run}_example.sh 现场
-  # 装 main（v0.0.8 无 NPU 后端，同 quick-start 的临时处理）跑 1 步
+  # （单轮）与 codebreaker（多轮）两条 agentic 链路（各锚在 run_agent.py）
+  # 升级 supported，其余 57 个 .py 仍逐文件登记 unsupported 待验证；
+  # supported 两条在单卡 a2-1 上由 projects/areno/scripts/{setup,run}_example.sh
+  # 现场装 main（v0.0.8 无 NPU 后端，同 quick-start 的临时处理）各跑 1 步
   # agentic GSPO。
   # category/support_level 按姊妹项目 areal 的口径暂记，如与项目
   # 表不符以表为准。

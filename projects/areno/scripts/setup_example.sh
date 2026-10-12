@@ -71,16 +71,23 @@ ensure_build_tools() {
 }
 
 ensure_torch_stack() {
-  # The CANN 9.0.0 image normally contains a compatible torch/torch_npu
-  # pair; reuse it when possible (the wheels are large). Otherwise install
-  # the stack pinned by the upstream NPU doc.
+  # The CANN 9.0.0 image ships no torch, so install the pinned pair. Fetch
+  # torch from the Ascend/Huawei index instead of the upstream +cpu
+  # find-links mirror: the Ascend repo hosts the torch build paired with
+  # torch_npu and the Huawei CDN is fast from the mainland runners - the same
+  # approach as trl / accelerate / dgl - avoiding a slow single-connection
+  # 146 MB aliyun download.
   if python -c "import torch, torch_npu; print('found torch', torch.__version__, 'torch_npu', torch_npu.__version__)"; then
     echo "reusing image torch stack"
     return
   fi
-  echo "installing torch==2.10.0 (cpu) and torch_npu==2.10.0.post2"
-  python -m pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.10.0
-  python -m pip install --extra-index-url "$ASCEND_PIP_INDEX" torch_npu==2.10.0.post2
+  echo "installing torch==2.10.0 + torch_npu==2.10.0.post2 from the Ascend repo"
+  if ! python -m pip install --extra-index-url "$ASCEND_PIP_INDEX" \
+      torch==2.10.0 torch_npu==2.10.0.post2; then
+    echo "Ascend index lacked the pair; falling back to the upstream +cpu find-links"
+    python -m pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.10.0
+    python -m pip install --extra-index-url "$ASCEND_PIP_INDEX" torch_npu==2.10.0.post2
+  fi
   python -c "import torch, torch_npu; print('torch', torch.__version__, 'torch_npu', torch_npu.__version__)"
 }
 
@@ -109,21 +116,17 @@ print('areno NPU extension ok')
 PY
 }
 
-setup_bash_game_npu() {
-  # The only extra dependency is the AReno NPU stack itself; the model
-  # (Qwen/Qwen3-0.6B) and data are pulled at run time by areno train and
-  # dataset_generator.py respectively.
-  echo "bash_game_npu: no extra dependencies beyond AReno"
-}
-
-supported_profiles() {
-  declare -F | awk '/^declare -f setup_/ { sub(/^declare -f setup_/, ""); print }' | paste -sd' ' -
-}
-
-if ! declare -F "setup_${PROFILE}" >/dev/null 2>&1; then
-  echo "unknown profile: ${PROFILE} (supported: $(supported_profiles))" >&2
-  exit 1
-fi
+# Known profiles. Every current profile shares the same preparation (the AReno
+# NPU source build below); a profile that needs extra dependencies would branch
+# on PROFILE here, before the shared steps.
+SUPPORTED_PROFILES="bash_game_npu codebreaker_npu"
+case "$PROFILE" in
+  bash_game_npu | codebreaker_npu) ;;
+  *)
+    echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
+    exit 1
+    ;;
+esac
 
 select_pip_index
 python -m pip install -U pip 'setuptools>=69' wheel
@@ -131,4 +134,3 @@ ensure_build_tools
 ensure_torch_stack
 use_npu_capable_source
 install_areno
-"setup_${PROFILE}"

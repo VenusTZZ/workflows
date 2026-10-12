@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Run one supported AReno example from the CI working copy.
-# $1 is the manifest entry path (relative to the examples root). The
-# profile selects the recipe. Overlay CLI args come from OVERLAY_ARGS
-# (JSON array, possibly []). Never git add/commit/push.
+# $1 is the manifest entry path (relative to the examples root); it is only
+# checked for existence. Everything example-specific travels in the manifest's
+# overlay_args (OVERLAY_ARGS, a JSON array): dataset path, loader, reward,
+# agent entry, algo and CI-scaling flags. The shared single-card NPU smoke
+# harness (native attention, Qwen3-0.6B via ModelScope, one checkpoint per
+# profile) lives here, so adding an example only touches the manifest.
+# Never git add/commit/push.
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
@@ -44,8 +48,8 @@ python -c "import torch, torch_npu; print('NPU available:', torch.npu.is_availab
 
 expand_overlay() {
   # The workflow serializes manifest.overlay_args as JSON. Expand each item
-  # with shell quoting intact, then allow CI paths such as ${CI_OUTPUT_DIR}
-  # to resolve only in this job's environment.
+  # with shell quoting intact, then allow CI paths such as ${FIXTURE_DIR} /
+  # ${EXAMPLES_ROOT} to resolve only in this job's environment.
   python - <<'PY'
 import json
 import os
@@ -74,43 +78,25 @@ PY
 
 eval "EXTRA_ARGS=( $(expand_overlay) )"
 
-echo "running $EXAMPLE_REL with ${#EXTRA_ARGS[@]} overlay args"
+echo "running $EXAMPLE_REL (profile $PROFILE) with ${#EXTRA_ARGS[@]} overlay args"
 if ((${#EXTRA_ARGS[@]})); then
   printf 'overlay arg: %q\n' "${EXTRA_ARGS[@]}"
 fi
 
-run_bash_game_npu() {
-  # Repo fixture convention: the deterministic position set is a checked-in
-  # fixture (projects/areno/fixtures/ci_bash_game_8.jsonl, generated once by
-  # the upstream dataset_generator.py at seed 42, same schema); --dataset-path
-  # is supplied through overlay_args as ${FIXTURE_DIR}/... so the upstream
-  # generator is not re-run in the leg. run_agent.py calls the local rollout
-  # proxy (submit_move tool) and reward.py scores against the hidden oracle.
-  # Qwen3-0.6B from ModelScope keeps a single 1-card leg within budget.
-  local dir="$EXAMPLES_ROOT/examples/agentic/bash_game"
-  areno train \
-    --ckpt Qwen/Qwen3-0.6B \
-    --model-hub modelscope \
-    --dataset-loader-fn "$dir/dataset_loader.py" \
-    --reward-fn-path "$dir/reward.py" \
-    --agent-fn "$dir/run_agent.py" \
-    --backend npu \
-    --attn-backend native \
-    --tp-size 1 \
-    --world-size 1 \
-    --save-path "$CI_OUTPUT_DIR/bash_game-ckpt" \
-    --save-interval 1 \
-    "${EXTRA_ARGS[@]}"
-  ls -d "$CI_OUTPUT_DIR"/bash_game-ckpt/step_* >/dev/null
-}
-
-case "$PROFILE" in
-  bash_game_npu)
-    cd "$TARGET_ROOT"
-    run_bash_game_npu
-    ;;
-  *)
-    echo "unknown profile: $PROFILE" >&2
-    exit 2
-    ;;
-esac
+# Shared single-card NPU smoke harness. --attn-backend native avoids the
+# flash-attn-npu kvcache path that is incompatible with NPU graph capture.
+# Per-example flags follow in overlay_args and override any of these because
+# argparse keeps the last occurrence of a repeated flag.
+save="$CI_OUTPUT_DIR/${PROFILE}-ckpt"
+cd "$TARGET_ROOT"
+areno train \
+  --ckpt Qwen/Qwen3-0.6B \
+  --model-hub modelscope \
+  --backend npu \
+  --attn-backend native \
+  --tp-size 1 \
+  --world-size 1 \
+  --save-path "$save" \
+  --save-interval 1 \
+  "${EXTRA_ARGS[@]}"
+ls -d "$save"/step_* >/dev/null
