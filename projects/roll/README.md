@@ -11,9 +11,9 @@
 - 146 个 YAML 中，9 个 `examples/config/**` 共享配置片段由 scan.exclude 排除；
   空配置 `agentic_val_webshop.yaml` 不再登记为用例。
 - manifest 现为 **28 supported / 108 unsupported**，原为 19 / 119。
-  原有 19 条配方的解析结果保持不变，已在
-  [Run #109](https://github.com/cosdt-ci-test/workflows/actions/runs/38150557380) 全部通过；
-  本轮新增 9 条已完成本地配置/数据验证，**尚未通过 NPU CI 验收**。
+  原有 19 条及新增的两个 GEM 用例已在
+  [Run #111](https://github.com/cosdt-ci-test/workflows/actions/runs/38197430010) 通过；
+  其余 7 条已按日志修复配置，**仍待下一次 NPU CI 验收**。
 - 不按比例凑覆盖率：关闭关键特性后与已支持配方等价的配置，不重复宣称新增能力。
 
 ## 本轮新增用例
@@ -92,6 +92,19 @@ overlay_args 已逐条去重和删除冗余默认值覆盖，共精简 197 项�
 - artifact 名为 `roll-examples-<run_id>-<job_index>`。
 
 ## 验证与迁移边界
+
+Run #111 的环境安装和 manifest 检查通过，运行结果为 21 成功 / 7 失败：
+
+- RAFT++、REINFORCE++、在线蒸馏、OPSD 和离线蒸馏在训练后因 logging_steps=0
+  触发原生日志取模除零；移除该覆盖，恢复上游 logging_steps=1。
+- DPO 入口使用 dacite 类型检查，不接受显式 validation.data_args=null。
+  删除 validation 配置，让原生 DPOConfig 创建默认 WorkerConfig，其 data_args 默认为空。
+- SFT 在最后一步保存 checkpoint 时调用当前 NPU Torch 缺少的私有 API
+  torch._C._host_emptyCache。SFT/DPO/离线蒸馏显式设置 save_steps=0，按上游开关
+  禁用 checkpoint；设为较大的正数仍会在最后一步强制保存，不能替代禁用。
+
+本轮 smoke 验证训练、推理、奖励与蒸馏链路，不覆盖 checkpoint 保存/恢复。
+没有修补 Torch 私有 API，也不将 checkpoint 的兼容性问题宣称为已修复。
 
 本地验证包括 YAML/schema/path 检查、28 条 Hydra compose/resolve、原有 19 条
 配方不变断言、原生数据编码及 token 预算、ModelScope tokenizer 对齐、

@@ -3,7 +3,7 @@ version: 1
 # 对账单位是「完整运行配置」（.yaml）：根目录 start_*_pipeline.py 与各目录 run_*.sh
 # 是公共 launcher / 别名，不重复登记；examples/config/ 是被其他配置继承的共享片段。
 #
-# supported 原有 19 条已通过 Run #109；新增 9 条 SFT/DPO/蒸馏/算法/GEM 环境用例待 NPU 验证。
+# supported 原有 19 条及新增 2 条 GEM 已通过 Run #111；其余 7 条修复日志/验证配置及 checkpoint 后待复验。
 # 国内 CANN 镜像 + setup 动态装栈；基于 release 上游 YAML，用 overlay_args 声明 CI 覆盖项。
 # ++ 添加或覆盖字段，~ 删除字段；项目 runner 使用 Hydra 组合配置，不修改上游源码。
 # 已删除 197 项重复/默认值覆盖；以 v0.4.0 解析后的配置和值类型完全相同为准。
@@ -1175,9 +1175,8 @@ supported:
     - ++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"
     - ++num_nodes=1
     - ++max_steps=3
-    - ++save_steps=1000
+    - ++save_steps=0
     - ++eval_steps=1000
-    - ++logging_steps=0
     - ++track_with="tensorboard"
     - ++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"
     - ++sequence_length=256
@@ -1219,14 +1218,13 @@ supported:
     - ++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"
     - ++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"
     - ++max_steps=3
-    - ++save_steps=1000
+    - ++save_steps=0
     - ++eval_steps=1000
-    - ++logging_steps=0
     - ++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"
     - ++sequence_length=256
     - ++num_gpus_per_node=2
     - ++pretrain="${oc.env:ROLL_MODEL_PATH}"
-    - ++validation.data_args=null
+    - ~validation
     - ++actor_train.model_args.model_name_or_path="${oc.env:ROLL_MODEL_PATH}"
     - ++actor_train.model_args.attn_implementation="sdpa"
     - ++actor_train.model_args.ulysses_size=1
@@ -1273,9 +1271,8 @@ supported:
     - ++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"
     - ++num_nodes=1
     - ++max_steps=3
-    - ++save_steps=1000
+    - ++save_steps=0
     - ++eval_steps=1000
-    - ++logging_steps=0
     - ++track_with="tensorboard"
     - ++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"
     - ++sequence_length=256
@@ -1366,7 +1363,6 @@ supported:
     - ~rewards.ifeval
     - ~rewards.code_sandbox
     - ~rewards.llm_judge
-    - ++logging_steps=0
     - ++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"
     - ++actor_train.training_args.lr_scheduler_type="constant"
     - ++exp_name="roll-ci-example_raft_pp"
@@ -1426,7 +1422,6 @@ supported:
     - ~rewards.ifeval
     - ~rewards.code_sandbox
     - ~rewards.llm_judge
-    - ++logging_steps=0
     - ++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"
     - ++actor_train.training_args.lr_scheduler_type="constant"
     - ++exp_name="roll-ci-example_reinforce_pp"
@@ -1450,7 +1445,6 @@ supported:
     - ++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"
     - ++save_steps=1000
     - ++eval_steps=1000
-    - ++logging_steps=0
     - ++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"
     - ++num_gpus_per_node=4
     - ++max_steps=1
@@ -1523,7 +1517,6 @@ supported:
     - ++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"
     - ++save_steps=1000
     - ++eval_steps=1000
-    - ++logging_steps=0
     - ++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"
     - ++num_gpus_per_node=4
     - ++max_steps=1
