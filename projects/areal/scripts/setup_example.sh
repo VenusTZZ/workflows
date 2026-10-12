@@ -179,6 +179,34 @@ print("patched awex.py: MegatronEngine import is now lazy", flush=True)
 PY
 
 # -------------------------------------------------------
+# 1e. hermes profile: raise hermes_loop's httpx timeout.
+# The CLI hardcodes httpx.AsyncClient(timeout=120.0) for the
+# /v1/responses round trip; the Hermes agent's system prompt alone is
+# ~11.5K tokens, and prefilling 16K context + generating up to 512 tokens
+# on a 1.5B model over NPU can exceed 120s -> httpx.ReadTimeout kills the
+# orchestration before the agent ever answers. Raise to 600s (hermes
+# profile only - other examples never call this script).
+# -------------------------------------------------------
+if [[ "$HERMES_PREP" == 1 ]]; then
+python3 - <<'PY'
+import os
+
+path = os.path.join(
+    os.environ["TARGET_ROOT"], "examples", "hermes", "hermes_loop.py"
+)
+with open(path, encoding="utf-8") as fh:
+    text = fh.read()
+
+old = "httpx.AsyncClient(timeout=120.0)"
+new = "httpx.AsyncClient(timeout=600.0)"
+assert text.count(old) == 1, "hermes_loop.py timeout layout changed"
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write(text.replace(old, new))
+print("patched hermes_loop.py: httpx timeout 120s -> 600s", flush=True)
+PY
+fi
+
+# -------------------------------------------------------
 # 2. Runtime Environment setup.
 # -------------------------------------------------------
 echo "PYTHONPATH=/areal-workspace/MindSpeed:/areal-workspace/Megatron-Bridge/src:${PYTHONPATH:-}" >> "$GITHUB_ENV"
