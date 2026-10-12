@@ -52,10 +52,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     ``#test-result``.
 
     Scope: NPU stack check (torch / torch_npu / device count) + source
-    install at the engine-resolved release tag (the installer detects
-    ``torch_npu``, switches to ``requirements/npu.txt`` and compiles the
-    ``areno.accel._areno_accel_npu`` Ascend C extension — no fallback, so
-    the build must succeed on the CANN 9.0.0 dev image) + CLI entry smoke
+    install at upstream main (temporary: the latest release tag v0.0.8
+    predates the NPU backend — same situation as wenet; revert to the
+    engine-resolved release tag once a release ships NPU. The installer
+    detects ``torch_npu``, switches to ``requirements/npu.txt`` and
+    compiles the ``areno.accel._areno_accel_npu`` Ascend C extension —
+    no fallback, so the build must succeed on the CANN 9.0.0 dev image)
+    + CLI entry smoke
     + GSPO-on-GSM8K 1-step RLVR smoke (Qwen3-0.6B via ModelScope, rollout
     + reward + train + checkpoint save) + OpenAI-compatible serve of the
     saved checkpoint (background start, /health poll, /v1/models and

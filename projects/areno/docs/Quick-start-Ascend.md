@@ -37,7 +37,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
 | CANN | 9.0.0 |
 | torch | 2.10.0+cpu |
 | torch_npu | 2.10.0.post2 |
-| AReno | 最新 release tag |
+| AReno | main 分支（最新 release v0.0.8 尚未包含 NPU 后端，临时看护 main，待发版后回切） |
 | 模型 | [Qwen/Qwen3-0.6B](https://www.modelscope.cn/Qwen/Qwen3-0.6B)（ModelScope，AReno 默认 hub） |
 | 数据集 | `gsm8k:main`（ModelScope） |
 
@@ -119,17 +119,18 @@ echo "${UPSTREAM_REF}"
 ```
 -->
 
-克隆上游仓库并 checkout 到工作流注入的最新 release tag，安装并验证：
+克隆上游仓库并 checkout 到 `main` 分支，安装并验证：
 
 ```shell #test id="install-areno" load="upstream_ref>>ref"
-git clone --depth 1 --branch <ref> https://github.com/inclusionAI/AReno.git
+git clone --depth 1 https://github.com/inclusionAI/AReno.git
 cd AReno
+git checkout main
 source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1
 uv pip install -e . --no-build-isolation
 python -c "from importlib.metadata import version; print('areno', version('areno'))"
 ```
 
-\<ref> 为安装的最新 release tag。
+> 上游最新 release tag（v0.0.8）尚未包含 NPU 后端（NPU 支持在 v0.0.8 之后才合入 main），与 wenet 的临时处理一致：本文档暂以 `main` 为安装源。待上游发布包含 NPU 支持的 release 后，回切为 `git clone --depth 1 --branch <ref>`（`<ref>` 为工作流注入的最新 release tag）。
 
 输出结果类似如下：
 
