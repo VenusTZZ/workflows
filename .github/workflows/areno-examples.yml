@@ -1,0 +1,66 @@
+# areno examples guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/examples-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, upstream repo, dispatch input forwarding, and matrix
+# parallelism. The guard loop (release-only monitor / manifest-check /
+# run-example matrix / validate-results / save-monitor-state) lives in the
+# engine. See docs/examples-guard-engine.md for the design.
+#
+# Bring-up state: projects/areno/examples_manifest.yaml registers all
+# 11 upstream examples as unsupported pending verification - no example
+# has an NPU-side run record yet (the quick-start smoke covers the same
+# GSPO + math_verify path shape, but not the example entrypoints).
+# has_supported=false, so the engine schedules no matrix leg and uses no
+# NPU runner; manual/scheduled runs still exercise manifest-check
+# against the release checkout, and the daily examples-check
+# reconciliation covers the unsupported set.
+# Refs: latest release v0.0.8 already ships the full examples/ tree
+# (identical to main), so the engine's release-line resolution works
+# unchanged. Note the runnable NPU stack (areno.accel._areno_accel_npu)
+# is still main-only - cf. areno-quick-start.yml - a constraint for the
+# setup scripts once entries graduate to supported.
+
+name: areno-examples
+
+concurrency:
+  # Schedule runs serialize; each manual run gets its own group so a
+  # dispatch is never blocked behind a scheduled run.
+  group: ${{ github.event_name == 'schedule' && 'areno-examples-schedule' || format('manual-{0}', github.run_id) }}
+  # A run cancelled mid-way loses its outcome writeback, and that outcome
+  # drives the next scheduled cycle's retry.
+  cancel-in-progress: false
+
+on:
+  # Bring-up phase: keep the schedule disabled until a few manual rounds
+  # are green. Re-enable:
+  # schedule:
+  #   - cron: '10 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Branch, tag, or SHA of inclusionAI/AReno to test (empty resolves to upstream latest release)
+        required: false
+        default: ''
+        type: string
+
+# Engine jobs query the GitHub Job API (validate-results); called workflows
+# run with the caller's GITHUB_TOKEN permissions.
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  areno-examples:
+    uses: ./.github/workflows/examples-template.yml
+    with:
+      # Namespaces monitor-state cache keys, artifact names, and the
+      # scheduling paths under projects/areno.
+      project: areno
+      upstream_repo: inclusionAI/AReno
+      target_ref: ${{ inputs.target_ref }}
+      # Bring-up phase: no supported entries yet (all 11 examples are
+      # unsupported pending verification) so the matrix is empty; keep
+      # one leg at a time until entries graduate and the source-install
+      # stack settles.
+      max_parallel: 1

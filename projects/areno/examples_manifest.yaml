@@ -1,0 +1,76 @@
+version: 1
+# AReno examples 对账快照：以 inclusionAI/AReno release 线为准（v0.0.8 的
+# examples/ 树与 main 一致，11 个用例齐全）。files-only 扫描模型
+# （docs/examples-guard-engine.md 2.7）：对账单位是 .py 入口——areno train
+# 以 --dataset-loader-fn / --reward-fn-path / --agent-fn 引用各 example 的
+# .py 组件；README / dataset.jsonl / 图片资产与交互配套（web_ui / tui /
+# code_cli / eval）不进扫描，由所在目录的 unsupported 条目连带覆盖。
+#
+# 阶段 A 接入：11 个用例全部先写入 unsupported「待验证」。quick-start 已在
+# 单卡 910B4 跑通同构的 GSPO-on-GSM8K 1 步 RLVR + areno serve --backend npu
+# 冒烟（NPU 栈 CANN 9.0.0 + torch 2.10 + torch_npu 2.10.0.post2，源码装
+# main 现场编译 areno.accel._areno_accel_npu），但各 example 的入口形态
+# （数据生成/加载、agentic 多轮 rollout、SFT/DPO/PPO 算法、VLM 多模态、
+# 4bit 优化器）均未在昇腾实测。unsupported 的语义是「本看护体系当前不跑
+# 它」，不等于「昇腾原理上跑不了」：注释区分待上卡实测后可升级 supported
+# 的项与需先解决外部依赖才能升级的项；升级时注意安装源仍是 main-only
+# （同 quick-start 的临时处理，v0.0.8 尚未包含 NPU 后端）。
+scan:
+  root: examples
+  include_extensions: ['.py']
+supported: []
+unsupported:
+  # Bash Game 巴什博弈单轮策略游戏 RLVR：n mod (m+1) 取石子必胜策略，
+  # submit_move 单工具调用 + 确定性奖励（exact 1.0 / dense closeness）。
+  # 待验证：GSPO + --adam-4bit 4bit 优化器与该数据/奖励组合在昇腾单卡
+  # 实测（README 以 Ling-3.0-tiny / GB10 演示）；eval / web_ui 为交互
+  # 配套不进 CI。
+  - examples/agentic/bash_game
+  # Codebreaker 多轮 Bulls and Cows 演绎游戏：guess_code 最多 6 轮，部分
+  # 可观测、状态仅经 tool result 累积。待验证：多轮工具调用 agentic
+  # rollout 路径在昇腾实测；tui 为交互配套不进 CI。
+  - examples/agentic/codebreaker
+  # SWE-bench 风格多轮编码智能体：仓库内 dataset.jsonl 100 条自包含任务，
+  # inspect/read/rg/apply_patch/run_command 等九工具。待验证：多轮长轨迹
+  # 与 run_command 有界 shell 执行在 CI 容器内的稳定性；code_cli 为交互
+  # 配套不进 CI。
+  - examples/agentic/coding
+  # DuelGrid 回合制网格战术游戏多轮 RLVR：结构化 JSON 动作 + 规则引擎
+  # 奖励（README 以 Gemma-E2B-it 演示）。待验证：多轮 agentic 路径与所用
+  # 底座在昇腾实测；web_ui 为交互配套不进 CI。
+  - examples/agentic/duelgrid
+  # Shopping Kit 多轮工具调用任务：search_catalog -> inspect_items ->
+  # check_kit -> submit_bundle 四轮固定序列，奖励校验类别/特征/预算约束。
+  # 待验证：多轮工具调用路径在昇腾实测。
+  - examples/agentic/shopping
+  # Terminal Hacking 单步候选词演绎（上下文老虎机式）：一次
+  # submit_candidates 工具调用 + 非对称稠密奖励（README 以 ling-3.0-tiny +
+  # 8192 上下文演示）。待验证：单步 agentic 路径与该底座在昇腾实测；
+  # web_ui 为交互配套不进 CI。
+  - examples/agentic/terminal_hacking
+  # 井字棋 RLVR 双变体：tool-call（dataset_loader/reward/run_agent）与
+  # XML no-tool（*_no_tool 三件套），minimax 最优步校验。待验证：两种
+  # rollout 形态（工具调用 / 纯文本 XML）在昇腾实测，接入时选其一作
+  # 代表；web_ui 与 DGX 指南为交互/文档配套不进 CI。
+  - examples/agentic/tictactoe
+  # 数学 RLVR 组件：dataset_loader 归一化 GSM8K / NuminaMath 行 +
+  # math_verify_reward 符号验证奖励；无独立入口，由 areno train 以
+  # --dataset-loader-fn / --reward-fn-path 组合引用（quick-start 的
+  # GSPO-on-GSM8K 冒烟即同构组合）。待验证：以 examples 形态完整接入 CI
+  # 后升级 supported——首个升级候选。
+  - examples/math
+  # AVE 音视频事件识别（Gemma 4 多模态 agentic GRPO）：report_events 工具
+  # 调用 + 外部 OpenAI 兼容 judge 模型打分（JUDGE_* 配置），数据来自 HF
+  # 镜像 AVE 数据集 + ffmpeg 抽音频。待验证之外另有外部依赖：judge 服务
+  # 与数据集获取需先落 CI 本地方案，VLM 多模态路径在昇腾亦未实测。
+  - examples/multimodal/ave_event_recognition
+  # Alpaca SFT：数据加载器契约示例（instruction/input/output 归一化为
+  # prompt/response），推荐数据集 yahma/alpaca-cleaned（HF 在线）。待
+  # 验证：SFT 算法在昇腾实测（quick-start 仅覆盖 GSPO RLVR）；接入时
+  # 数据集换 ModelScope 或本地 fixture。
+  - examples/sft/alpaca
+  # Qwen3.5-VL 图像井字棋（视觉语言）：SFT / GSPO / GRPO / PPO /
+  # Agentic 五种训练模式，Pillow 合成板图以 image_base64 内嵌（agentic
+  # 走 image_url data URL）。待验证：Qwen3.5-VL 适配器与 VLM 前向 /
+  # rollout 在昇腾实测；web_ui 为交互配套不进 CI。
+  - examples/vl/tictactoe_image
