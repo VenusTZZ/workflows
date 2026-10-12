@@ -719,3 +719,24 @@ projects:
     workflows:
       examples: .github/workflows/liger-kernel-examples.yml
       quick_start: .github/workflows/liger-kernel-quick-start.yml
+  # AReno: inclusionAI 的单机 RL post-training 工具包（SFT/DPO/GRPO/GSPO/
+  # PPO + OpenAI 兼容 serving）。NPU 后端按上游 docs/concepts/npu.rst 的
+  # 目标栈：CANN 9.0.0 + torch 2.10.0+cpu + torch_npu 2.10.0.post2（镜像
+  # 用 9.0.0 线，非多数项目用的 9.1.0）。源码安装时现场编译
+  # areno.accel._areno_accel_npu（Ascend C + CMake，无 Python 回退）。
+  # 安装源临时 checkout main：最新 release v0.0.8 尚未包含 NPU 后端（同
+  # wenet 的临时处理），待上游发布含 NPU 的 release 后回切 release tag。
+  # Quick start 在单卡 910B4 上跑 README「Tiny training smoke test」的
+  # NPU 版：GSPO-on-GSM8K 1 步 RLVR 冒烟（Qwen3-0.6B，ModelScope）+
+  # checkpoint 落盘 + areno serve --backend npu 的 /v1/chat/completions
+  # 冒烟。category/support_level 按姊妹项目 areal 的口径暂记，如与项目
+  # 表不符以表为准。
+  - name: areno
+    category: 训练加速
+    support_level: 基础支持
+    upstream_repo: inclusionAI/AReno
+    phase: A
+    runner: linux-aarch64-a2-1
+    dir: projects/areno
+    workflows:
+      quick_start: .github/workflows/areno-quick-start.yml

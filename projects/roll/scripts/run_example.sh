@@ -116,30 +116,7 @@ print("NPU available:", torch.npu.is_available(), "devices:", torch.npu.device_c
 PY
 
 expand_overlay() {
-  python - <<'PY'
-import json
-import os
-import shlex
-
-raw = os.environ.get('OVERLAY_ARGS', '').strip()
-if not raw or raw in ('null', '""'):
-    raise SystemExit(0)
-try:
-    items = json.loads(raw)
-except json.JSONDecodeError as exc:
-    raise SystemExit(f'OVERLAY_ARGS is not valid JSON: {exc}') from exc
-if items in (None, ''):
-    raise SystemExit(0)
-if not isinstance(items, list):
-    raise SystemExit(
-        f'OVERLAY_ARGS must be a JSON array, got {type(items).__name__}')
-tokens = []
-for item in items:
-    if not isinstance(item, str) or not item.strip():
-        raise SystemExit('OVERLAY_ARGS items must be non-empty strings')
-    tokens.extend(shlex.split(os.path.expandvars(item), posix=True))
-print(' '.join(shlex.quote(token) for token in tokens))
-PY
+  python "$PROJECT_ROOT/scripts/prepare_config.py" --print-overlay
 }
 
 eval "EXTRA_ARGS=( $(expand_overlay) )"
@@ -151,4 +128,5 @@ if ((${#EXTRA_ARGS[@]})); then
 fi
 
 cd "$TARGET_ROOT"
-python "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+python "$PROJECT_ROOT/scripts/prepare_config.py" \
+  --launcher "$EXEC" "${EXTRA_ARGS[@]}"

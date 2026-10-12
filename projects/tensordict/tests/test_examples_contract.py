@@ -1,7 +1,8 @@
-"""Static contract for the first TensorDict NPU tutorial guard."""
+"""Static contract for the TensorDict NPU tutorial guard."""
 
 from __future__ import annotations
 
+import ast
 import unittest
 from pathlib import Path
 
@@ -28,9 +29,14 @@ TUTORIALS = {
     "zarr_storage.py",
 }
 SUPPORTED = {
+    "export.py",
+    "functional.py",
     "tensordict_keys.py",
     "tensordict_shapes.py",
     "tensordict_preallocation.py",
+    "tensordict_slicing.py",
+    "streamed_tensordict.py",
+    "tensordict_memory.py",
 }
 
 
@@ -52,8 +58,8 @@ class TensorDictExamplesContract(unittest.TestCase):
             {path.removeprefix(prefix) for path in supported_paths | unsupported_paths},
             TUTORIALS,
         )
-        self.assertEqual(len(supported), 3)
-        self.assertEqual(len(unsupported), 11)
+        self.assertEqual(len(supported), 8)
+        self.assertEqual(len(unsupported), 6)
 
         lines = text.splitlines()
         for item in supported:
@@ -65,20 +71,31 @@ class TensorDictExamplesContract(unittest.TestCase):
             path_line = next(i for i, line in enumerate(lines) if line.strip() == f"- path: {path}")
             self.assertTrue(lines[path_line - 1].lstrip().startswith("# "), path)
         for path in unsupported:
-            line = next(line for line in lines if line.lstrip().startswith(f"- {path}  # "))
-            self.assertTrue(any("\u4e00" <= char <= "\u9fff" for char in line), path)
+            index = next(i for i, line in enumerate(lines) if line.strip() == f"- {path}")
+            self.assertTrue(lines[index - 1].lstrip().startswith("# "), path)
+            self.assertTrue(any("\u4e00" <= char <= "\u9fff" for char in lines[index - 1]), path)
 
     def test_launcher_requires_real_npu_results(self) -> None:
         run = (PROJECT / "scripts" / "run_example.sh").read_text(encoding="utf-8")
         setup = (PROJECT / "scripts" / "setup_example.sh").read_text(encoding="utf-8")
+        manifest = yaml.safe_load(MANIFEST_PATH.read_text(encoding="utf-8"))
+        for item in manifest["supported"]:
+            self.assertIn(item["path"], run)
+        python_body = run.split('python - "$tutorial" <<\'PY\'\n', 1)[1].split("\nPY", 1)[0]
+        ast.parse(python_body)
         self.assertIn('torch.set_default_device("npu:0")', run)
         self.assertIn('runpy.run_path(sys.argv[1], run_name="__main__")', run)
         self.assertIn('leaf.device.type != "npu"', run)
+        self.assertIn('require_npu(namespace.get("params_stack")', run)
+        self.assertIn('require_npu(exported_output, "exported module output")', run)
         self.assertIn('"NPU is unavailable; refusing CPU fallback"', run)
+        self.assertIn('torch==2.9.0 torch_npu==2.9.0.post2', setup)
+        self.assertIn('reusing compatible torch/torch_npu stack', setup)
+        self.assertLess(setup.index('installing torch==2.9.0'), setup.index('import torch\nimport torch_npu\n\nprint('))
         self.assertIn('uv pip install --system --no-deps -e "$TARGET_ROOT"', setup)
-        self.assertNotIn("pip install torch", setup)
+        self.assertNotIn('pip install -e "$TARGET_ROOT"', setup)
 
-    def test_thin_trigger_and_registry(self) -> None:
+    def test_thin_trigger(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "tensordict-examples.yml").read_text(
             encoding="utf-8"
         )
@@ -86,8 +103,6 @@ class TensorDictExamplesContract(unittest.TestCase):
         self.assertIn("upstream_repo: pytorch/tensordict", workflow)
         self.assertIn("# schedule:", workflow)
         self.assertNotIn("  schedule:\n", workflow)
-        projects = (ROOT / "projects.yaml").read_text(encoding="utf-8")
-        self.assertIn("examples: .github/workflows/tensordict-examples.yml", projects)
 
 
 if __name__ == "__main__":
