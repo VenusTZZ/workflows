@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 # Prepare the CI environment for one supported AReaL example.
 # $1 is the manifest profile. Unknown profiles fail before any install.
 #
@@ -16,7 +16,7 @@ fi
 
 PROFILE="$1"
 
-SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-align"
+SUPPORTED_PROFILES="areal-vlm-grpo areal-vlm-mt-grpo areal-vlm-sft areal-clevr-sft areal-tir-grpo areal-scaffold-grpo areal-agents-grpo areal-math-grpo areal-math-sft areal-math-aime areal-math-boba areal-countdown-grpo areal-hermes-grpo areal-align"
 AIME_PREP=0
 BOBA_PREP=0
 COUNTDOWN_PREP=0
@@ -25,7 +25,6 @@ TORL_PREP=0
 SCAFFOLD_PREP=0
 CLEVR_SUBSET_PREP=0
 HERMES_PREP=0
-SWE_PREP=0
 case "$PROFILE" in
   areal-vlm-grpo) MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct" ;;
   areal-vlm-mt-grpo) MODEL_ID="Qwen/Qwen3-VL-2B-Instruct" ;;
@@ -48,9 +47,6 @@ case "$PROFILE" in
   # hermes/train.py: online RL; agent runtime package installed in
   # section 1c, orchestration in run_example.sh's hermes branch.
   areal-hermes-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HERMES_PREP=1 ;;
-  # swe/train_swe_rl.py: agent runtime (external AReaL-SWEAgent + aenv),
-  # config and fixture are all built in section 11; plain foreground run.
-  areal-swe-rl) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; SWE_PREP=1 ;;
   # hhrlhf_dpo.py: DPO pipeline is model-agnostic; upstream yaml's 7B swapped
   # for 1.5B (7B fp32 init OOMs the 32GB cards in the pool, 15GB per run).
   areal-align) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HHRLHF_PREP=1 ;;
@@ -418,7 +414,7 @@ fi
 # harmless-base subset online (via HF_ENDPOINT mirror) into a flat local
 # dir; load_dataset(<dir>, split="train"/"test") then infers splits from
 # the file names. Exposed to overlay args via AREAL_HHRLHF_DATA.
-# NOTE: the dir is deliberately named "hh-rlhf" — areal's dataset dispatch
+# NOTE: the dir is deliberately named "hh-rlhf" 鈥?areal's dataset dispatch
 # matches the literal substring "hh-rlhf" in the path; a dir named
 # "hhrlhf" falls through to the load_from_disk fallback and errors out.
 if [[ "$HHRLHF_PREP" == 1 ]]; then
@@ -518,161 +514,5 @@ ds.to_parquet(os.path.join(dst, "train.parquet"))
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"AREAL_CLEVR_SUBSET_DIR={dst}\n")
 print(f"prepared clevr subset ({len(ds)} rows) at {dst}", flush=True)
-PY
-fi
-
-# -------------------------------------------------------
-# 11. SWE-bench agent RL (areal-swe-rl).
-# -------------------------------------------------------
-# train_swe_rl.py has no in-tree config or dataset; build all pieces:
-#  a) clone the external AReaL-SWEAgent checkout (the workflow imports
-#     `aweagent.lifecycle` from econfig.agent_root) and install its
-#     requirements.txt (aenvironment sandbox SDK + openai-agents stack);
-#  b) author a minimal agent config: the shipped default
-#     (1_0_0/min-swe-agent-train-top1) uses step_limit=200 with 16K
-#     completion tokens and the swebench eval env - unusable in CI. Derive
-#     it with tiny limits and the inline eval_script reward path;
-#  c) author the PPO config (derived from gsm8k_grpo_npu.yaml) + a
-#     self-contained fixture JSONL (instance_id / problem_statement /
-#     eval_script; no repo clone, no network), and export
-#     AWEAGENT_ROOT / AREAL_SWE_CONFIG for the overlay.
-# The persistent-bash env starts with `cd /testbed`, so prepare /testbed as
-# an empty git repo in the job container (first-run risk: the aenvironment
-# persistent-bash env must execute the shell locally, not in a remote FaaS
-# sandbox).
-if [[ "$SWE_PREP" == 1 ]]; then
-# AREAL_MODEL_PATH is a non-exported shell variable from section 3; export it
-# for this heredoc only so os.environ sees it (it is already in GITHUB_ENV for
-# the run step).
-AREAL_MODEL_PATH="$AREAL_MODEL_PATH" python3 <<'PY'
-import json
-import os
-import subprocess
-
-import yaml
-
-workspace = os.environ["GITHUB_WORKSPACE"]
-target_root = os.environ["TARGET_ROOT"]
-aweagent_root = os.path.join(workspace, "AReaL-SWEAgent")
-
-# a) agent runtime checkout + its requirements. NOTE: the SDK is imported as
-# `from aenv import Environment`, but the PyPI package is `aenvironment` (the
-# package and module names differ) - installing PyPI `aenv` grabs an
-# unrelated same-named project and the import dies with
-# "cannot import name 'Environment' from 'aenv' (unknown location)". Follow
-# the upstream mechanism (train_swe_rl._install_aweagent_deps_on_ray_nodes
-# runs `uv pip install -r requirements.txt`) and install the pinned set:
-# aenvironment + openai/openai-agents/tenacity/loguru. Tuna index (aliyun's
-# PEP 658 metadata sidecars 404 intermittently).
-# Those requirements can pull a NEWER starlette whose Router dropped the
-# `on_startup` kwarg; vllm 0.22.1's `APIRouter(on_startup=...)` then dies on
-# import in the SAME python env (areal_vllm_server imports
-# vllm.entrypoints.openai.api_server -> ... -> `router = APIRouter()`),
-# even though the image's bundled starlette works. Pin fastapi/starlette to
-# the image's current versions via a constraint file.
-import importlib.metadata as importlib_metadata
-
-constraint_path = os.path.join(workspace, "swe-web-constraints.txt")
-with open(constraint_path, "w", encoding="utf-8") as fh:
-    for pkg in ("fastapi", "starlette"):
-        try:
-            fh.write(f"{pkg}=={importlib_metadata.version(pkg)}\n")
-        except importlib_metadata.PackageNotFoundError:
-            pass
-
-if not os.path.isdir(aweagent_root):
-    subprocess.run(
-        [
-            "git", "clone", "--depth", "1",
-            "https://github.com/areal-project/AReaL-SWEAgent.git", aweagent_root,
-        ],
-        check=True,
-    )
-subprocess.run(
-    [
-        "uv", "pip", "install", "--system",
-        "--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple",
-        "--constraint", constraint_path,
-        "-r", os.path.join(aweagent_root, "requirements.txt"),
-    ],
-    check=True,
-)
-
-# b) minimal agent config derived from the shipped Qwen SWE-RL config
-src_cfg = os.path.join(
-    aweagent_root, "aweagent", "configs", "1_0_0", "min-swe-agent-train-top1.yaml"
-)
-with open(src_cfg, encoding="utf-8") as fh:
-    agent_cfg = yaml.safe_load(fh)
-agent_cfg.update(
-    max_completion_tokens=256,
-    step_limit=6,
-    no_tool_call_limit=3,
-    multiple_tools_limit=3,
-    rl_test=False,  # inline eval_script reward, not the swebench eval env
-)
-dst_cfg = os.path.join(aweagent_root, "aweagent", "configs", "ci_swe_smoke.yaml")
-with open(dst_cfg, "w", encoding="utf-8") as fh:
-    yaml.safe_dump(agent_cfg, fh, sort_keys=False, allow_unicode=True)
-
-# c) self-contained fixture + /testbed workspace + PPO config
-data_dir = os.path.join(workspace, "areal_data", "swe")
-os.makedirs(data_dir, exist_ok=True)
-fixture = os.path.join(data_dir, "ci_swe_smoke.jsonl")
-with open(fixture, "w", encoding="utf-8") as fh:
-    fh.write(
-        json.dumps(
-            {
-                "instance_id": "ci-swe-smoke-1",
-                "problem_statement": (
-                    "Create a file `hello.py` in the current working directory "
-                    "that defines a function `add(a, b)` returning the sum of a "
-                    "and b."
-                ),
-                "eval_script": (
-                    "cd /testbed && python -c \"import hello; "
-                    "assert hello.add(2, 3) == 5\""
-                ),
-            }
-        )
-        + "\n"
-    )
-
-os.makedirs("/testbed", exist_ok=True)
-subprocess.run(["git", "init", "-q", "/testbed"], check=True)
-subprocess.run(
-    ["git", "-C", "/testbed", "config", "user.email", "sweagent@test.com"], check=True
-)
-subprocess.run(
-    ["git", "-C", "/testbed", "config", "user.name", "sweagent"], check=True
-)
-
-base = os.path.join(target_root, "examples", "math", "gsm8k_grpo_npu.yaml")
-with open(base, encoding="utf-8") as fh:
-    cfg = yaml.safe_load(fh)
-cfg["experiment_name"] = "swe-rl-smoke"
-cfg["scheduler"]["type"] = "local"
-# Keep the base's rollout.agent (mode: inline) - the field is a non-Optional
-# AgentConfig in the schema, and the SWE workflow is passed explicitly to
-# trainer.train(), so the built-in agent config just needs to stay valid.
-cfg["train_dataset"].update(path=fixture, type="rl", batch_size=1)
-cfg["valid_dataset"].update(path=fixture, type="rl", batch_size=1)
-cfg["econfig"] = {
-    "dataset_path": data_dir,
-    "agent_type": "swe",
-    "agent_config": "ci_swe_smoke",
-    "agent_root": aweagent_root,
-    "llm_model": os.environ["AREAL_MODEL_PATH"],
-    "timeout": 600,
-}
-cfg_path = os.path.join(data_dir, "swe_ppo_npu.yaml")
-with open(cfg_path, "w", encoding="utf-8") as fh:
-    yaml.safe_dump(cfg, fh, sort_keys=False, allow_unicode=True)
-
-with open(os.environ["GITHUB_ENV"], "a") as fh:
-    fh.write(f"AWEAGENT_ROOT={aweagent_root}\n")
-    fh.write(f"AREAL_SWE_CONFIG={cfg_path}\n")
-print(f"prepared AReaL-SWEAgent at {aweagent_root}", flush=True)
-print(f"generated {cfg_path} and {fixture}", flush=True)
 PY
 fi
