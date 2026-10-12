@@ -83,6 +83,14 @@ python --version
 Python 3.12...
 ```
 
+安装 `torch` / `torch_npu` / `torchaudio`：
+
+```shell #test-setup
+uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.9.0
+uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torchaudio==2.9.0
+uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi torch_npu==2.9.0.post2
+```
+
 检查 torch / torch_npu / torchaudio 是否装好且 NPU 设备可用，下面代码用 **python** 跑：
 
 ```python #test id="check-torch"
@@ -97,9 +105,9 @@ print('count:', torch.npu.device_count())
 输出结果如下：
 
 ```shell #test-result id="check-torch" 
-torch= ...
-torch_npu= ...
-torchaudio= ...
+torch= 2.9.0+cpu
+torch_npu= 2.9.0.post2
+torchaudio= 2.9.0
 is_available: True
 count: 1
 ```
