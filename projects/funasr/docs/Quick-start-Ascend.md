@@ -144,11 +144,6 @@ uv pip install -e .
 python -c "import funasr; print('funasr', funasr.__version__)"
 ```
 
-```{admonition} Note
-:class: note
-`<ref>` 为安装的最新的 release tag。
-```
-
 输出结果类似如下（开头是 FunASR 在 import 时打印的提示行：无 ffmpeg 时回落 `torchaudio` 的 Notice、以及版本号，均无害，被 `...` 吸收）：
 
 ```shell #test-result id="funasr-install-source" 
@@ -158,12 +153,7 @@ funasr ...
 
 ```{admonition} Note
 :class: note
-`...` 表示最新的版本号。
-```
-
-```{admonition} Note
-:class: note
-如果机器在国内、无稳定外网，模型下载默认走 ModelScope（`hub="ms"`），比 Hugging Face 更稳；python 包走 [huawei pypi 镜像](https://repo.huaweicloud.com/ascend/repos/pypi) 配 `pip install -i ...`。
+`<ref>` 为安装的最新的 release tag，`...` 表示最新的版本号。
 ```
 
 ### CLI 自检：`funasr --version`
@@ -360,13 +350,3 @@ has_text: True
 ```
 
 其他常用 CLI 形态：`funasr audio.wav -f srt -o ./subs` 生成字幕、`funasr audio.wav --spk --timestamps` 带说话人与时间戳、`funasr audio.wav --model paraformer --language zh` 指定模型与语言。
-
-## 故障排查
-
-| 现象 | 可能原因 | 建议 |
-| --- | --- | --- |
-| `Notice: ffmpeg is not installed` | 容器未装 ffmpeg，FunASR 自动回落 `torchaudio` | 无害；如需 ffmpeg 后端再 `apt install ffmpeg` |
-| 模型权重落在 `cpu` 而非 `npu:0` | `torch_npu` 未 import，或 `device` 写错 | 确保 block 里先 `import torch_npu`，`device="npu:0"` |
-| 模型下载慢 / 失败 | ModelScope 网络波动 | 重跑；模型缓存在 `~/.cache/modelscope`，二次运行命中 |
-| `count: 0` / `torch.npu.is_available() == False` | NPU 未挂载或驱动问题 | 检查 `/dev/davinci0`；回到 `npu-smi info` 一节 |
-| 流式文本为空 | 音频采样率非 16k 或块配置不对 | 用 16k 单声道音频，核对 `chunk_size` / `chunk_stride` |
