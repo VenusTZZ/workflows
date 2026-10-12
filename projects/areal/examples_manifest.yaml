@@ -6,7 +6,7 @@ scan:
   # root + include_extensions 两个键；实现模块、上游自测等一律进
   # unsupported 段（带分组注释与理由）。
   # 对账口径：release 树（当前 v2.1.0）114 个 .py/.sh =
-  # supported(12) + unsupported(102)。
+  # supported(11) + unsupported(103)。
 
 # 看护 release 线（workflow target_ref 留空，由引擎按 latest release
 # 解析）。supported 配方用专用镜像 ghcr.io/hwvanici/areal_npu:v1.0.5-a2
@@ -96,52 +96,16 @@ supported:
       # start_session/set_reward calls get HTTP 401. Align both to the same
       # value (+ = add the missing key under rollout.agent).
       - +rollout.agent.admin_api_key=sk-areal-ci
+      # 超时调参（no-patch）：hermes_loop.py 把 /v1/responses 客户端超时硬编码
+      # 120s（:47），而 agent system prompt ~11.5K token，整个回合压在边界。
+      # 用 engine_max_tokens 封 prompt+completion 总长（client.py:1257）；值必须
+      # > 实际 prompt（~11.5K），留余量取 11800（completion≤~300），
+      # gconfig.max_new_tokens 降到 64 兜底。若报 "exceeds max_total_tokens"
+      # 往上调；若仍 "Read timed out (read timeout=120)" 说明 prefill 成本过高。
+      - +rollout.agent.engine_max_tokens=11800
       - vllm.gpu_memory_utilization=0.25
       - vllm.max_model_len=16384
-      - gconfig.max_new_tokens=256
-      - +rollout.setup_timeout=1800
-      - total_train_steps=1
-      - total_train_epochs=1
-    timeout_minutes: 90
-  # OpenClaw 在线 RL（覆盖"任意 OpenAI 兼容 agent runtime"的通用在线路径，
-  # 与 hermes 互补：hermes 绑定 hermes-agent 包，本条目走纯 OpenAI
-  # chat-completions 协议）。config.yaml 无 _version（默认 v1），且
-  # rollout.agent.admin_api_key 与 rollout.admin_api_key 都已在 config 里设成
-  # sk-test123456（无需 hermes 那样的 401 对齐修复）。**不需要 ZeroClaw 外部
-  # 二进制**：上游自带 examples/openclaw/demo_lifecycle.py 就是无头全生命周期
-  # 驱动（health → rl/start_session → chat/completions → rl/set_reward →
-  # refresh），由 run_example.sh 的 openclaw 分支后台调用。单卡 DP=1（在线
-  # 单轨迹约束，同 hermes）。
-  - path: examples/openclaw/train.py
-    profile: areal-openclaw-grpo
-    runner: linux-aarch64-a2-1
-    npu_devices: '0'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/openclaw/config.yaml
-      - rollout.backend=vllm:d1p1t1
-      - actor.backend=fsdp:d1p1t1
-      - +actor.fsdp.offload_params=true
-      - ++actor.weight_update_mode=disk
-      - actor.path=${AREAL_MODEL_PATH}
-      # Online mode consumes ONE rewarded trajectory per step, but openclaw's
-      # config diverges from hermes' here: train_dataset.batch_size=4 makes
-      # rollout.consumer_batch_size=4, so the trainer waits for FOUR exported
-      # trajectories before its first step. The demo only ever exports one
-      # (episode N's refresh exports episode N-1; the last episode is never
-      # refreshed), so the trainer hangs forever -> run never exits. Drop to 1
-      # (== hermes). Also null the actor's reward/adv norm, exactly as hermes'
-      # yaml does: group/batch normalization on a singleton group (n_samples=1)
-      # erases the reward signal (cli_args.py:1900 warns on this exact case).
-      - train_dataset.batch_size=1
-      - actor.reward_norm=null
-      - actor.adv_norm=null
-      # openclaw 的对话很短（demo_lifecycle 只发一句数学题，没有 hermes 那种
-      # 11.5K token 的 system prompt），KV 需求极小：0.2 已足够，且给同卡的
-      # FSDP actor 让出更多 PPO 峰值余量（hermes 因长 prompt 取 0.25）。
-      - vllm.gpu_memory_utilization=0.2
-      - vllm.max_model_len=16384
-      - gconfig.max_new_tokens=256
+      - gconfig.max_new_tokens=64
       - +rollout.setup_timeout=1800
       - total_train_steps=1
       - total_train_epochs=1
@@ -526,11 +490,16 @@ unsupported:
   - examples/docs/debug/cmp_rollout.py
   - examples/sandbox_daytona/reward_example.py
   - examples/tau2/agent.py
-  # OpenClaw 在线 RL 的驱动文件：demo_lifecycle.py 是无头全生命周期驱动
-  # （health → rl/start_session → chat/completions → rl/set_reward → refresh），
-  # 由 supported 的 examples/openclaw/train.py 看护编排调用（run_example.sh 的
-  # openclaw 分支后台拉起）；_fmt.py 是它的输出格式化依赖。start_session.py /
-  # set_reward.py 是等价的独立 CLI（人工交互调试用），非入口。
+  # OpenClaw 在线 RL（2026-10-12 降级，UPSTREAM_TIMEOUT；调参无效）：
+  # 上游 examples/openclaw/demo_lifecycle.py 把 /chat/completions 客户端超时
+  # 硬编码 30s（:264），max_tokens=512（:156）/ system prompt（:151）同样写死，
+  # 无 CLI/env 出口。no-patch 下已试 +rollout.agent.engine_max_tokens=96 +
+  # gconfig.max_new_tokens=64 压缩生成长度，仍 "Read timed out (read timeout=30)"，
+  # online RL 等不到轨迹（NPU 生成速 <30s 容纳范围）。
+  # 回归条件：上游把该超时做成可配置（env/CLI）后应转绿。
+  # 同组 demo_lifecycle.py 是无头全生命周期驱动，_fmt.py 是其输出格式化依赖；
+  # start_session.py / set_reward.py 是等价的独立 CLI（人工交互调试用），非入口。
+  - examples/openclaw/train.py
   - examples/openclaw/_fmt.py
   - examples/openclaw/demo_lifecycle.py
   - examples/openclaw/set_reward.py

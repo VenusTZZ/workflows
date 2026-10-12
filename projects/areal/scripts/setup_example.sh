@@ -50,7 +50,7 @@ case "$PROFILE" in
   areal-hermes-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; HERMES_PREP=1 ;;
   # openclaw/train.py: online RL through the OpenAI-compatible proxy gateway;
   # no agent runtime package to install (demo_lifecycle.py is pure HTTP).
-  # OPENCLAW_PREP only patches demo_lifecycle.py's HTTP timeouts (section 1f).
+  # No source patch (no-patch policy) - demo_lifecycle.py runs as shipped.
   # Reuses hermes' model, already in the cache-seed volume.
   areal-openclaw-grpo) MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"; OPENCLAW_PREP=1 ;;
   # hhrlhf_dpo.py: DPO pipeline is model-agnostic; upstream yaml's 7B swapped
@@ -132,124 +132,6 @@ if [[ "$HERMES_PREP" == 1 ]]; then
   uv pip install --system \
     --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
     hermes-agent==0.19.0
-fi
-
-# -------------------------------------------------------
-# 1d. NPU portability patch: lazy MegatronEngine import.
-# areal/v2/training_service/worker/awex.py:_create_training_adapter
-# imports areal.engine.megatron_engine (and the megatron weight-update
-# adapter) unconditionally, so even FSDP-only runs load megatron.bridge ->
-# peft/lora_layers.py -> `import transformer_engine`, a CUDA-only package
-# with no Ascend wheel (same class as bitsandbytes on aarch64). Defer both
-# imports until the engine is known to be Megatron - behaviour-preserving;
-# the editable install reads the patched file live.
-# TODO(npu-upstream): drop once upstream guards the import.
-# -------------------------------------------------------
-python3 - <<'PY'
-import os
-
-path = os.path.join(
-    os.environ["TARGET_ROOT"],
-    "areal", "v2", "training_service", "worker", "awex.py",
-)
-with open(path, encoding="utf-8") as fh:
-    text = fh.read()
-
-old = '''    from areal.engine.fsdp_engine import FSDPEngine
-    from areal.engine.megatron_engine import MegatronEngine
-    from areal.v2.weight_update.awex.fsdp_adapter import AwexFSDPAdapter
-    from areal.v2.weight_update.awex.megatron_adapter import (
-        AwexMegatronAdapter,
-    )
-
-    if isinstance(engine, FSDPEngine):
-        return AwexFSDPAdapter(engine)
-'''
-new = '''    from areal.engine.fsdp_engine import FSDPEngine
-    from areal.v2.weight_update.awex.fsdp_adapter import AwexFSDPAdapter
-
-    if isinstance(engine, FSDPEngine):
-        return AwexFSDPAdapter(engine)
-
-    # NPU: defer the Megatron imports - megatron.bridge drags the CUDA-only
-    # transformer_engine, which has no Ascend wheel.
-    from areal.engine.megatron_engine import MegatronEngine
-    from areal.v2.weight_update.awex.megatron_adapter import (
-        AwexMegatronAdapter,
-    )
-'''
-assert text.count(old) == 1, "awex.py layout changed; update the NPU patch"
-with open(path, "w", encoding="utf-8") as fh:
-    fh.write(text.replace(old, new))
-print("patched awex.py: MegatronEngine import is now lazy", flush=True)
-PY
-
-# -------------------------------------------------------
-# 1e. hermes profile: raise hermes_loop's httpx timeout.
-# The CLI hardcodes httpx.AsyncClient(timeout=120.0) for the
-# /v1/responses round trip; the Hermes agent's system prompt alone is
-# ~11.5K tokens, and prefilling 16K context + generating up to 512 tokens
-# on a 1.5B model over NPU can exceed 120s -> httpx.ReadTimeout kills the
-# orchestration before the agent ever answers. Raise to 600s (hermes
-# profile only - other examples never call this script).
-# -------------------------------------------------------
-if [[ "$HERMES_PREP" == 1 ]]; then
-python3 - <<'PY'
-import os
-
-path = os.path.join(
-    os.environ["TARGET_ROOT"], "examples", "hermes", "hermes_loop.py"
-)
-with open(path, encoding="utf-8") as fh:
-    text = fh.read()
-
-old = "httpx.AsyncClient(timeout=120.0)"
-new = "httpx.AsyncClient(timeout=600.0)"
-assert text.count(old) == 1, "hermes_loop.py timeout layout changed"
-with open(path, "w", encoding="utf-8") as fh:
-    fh.write(text.replace(old, new))
-print("patched hermes_loop.py: httpx timeout 120s -> 600s", flush=True)
-PY
-fi
-
-# -------------------------------------------------------
-# 1f. openclaw profile: raise demo_lifecycle's HTTP timeouts.
-# The bundled driver (examples/openclaw/demo_lifecycle.py, the headless
-# lifecycle client) hardcodes requests.post(..., timeout=30) on the
-# /chat/completions call. A real generation of up to 512 tokens on a 1.5B
-# model served by NPU vLLM far exceeds 30s, so the client times out, never
-# sends set_reward, and the trainer's online rollout then waits forever
-# (observed as a 900s hang, then "Server disconnected" on teardown). Raise
-# the read timeout to 600s and cap max_tokens at 256 to bound the slow
-# generation (the demo answer needs far fewer tokens).
-# -------------------------------------------------------
-if [[ "$OPENCLAW_PREP" == 1 ]]; then
-python3 - <<'PY'
-import os
-
-path = os.path.join(
-    os.environ["TARGET_ROOT"], "examples", "openclaw", "demo_lifecycle.py"
-)
-with open(path, encoding="utf-8") as fh:
-    text = fh.read()
-
-old = "timeout=30,"
-new = "timeout=600,"
-assert text.count(old) == 1, "demo_lifecycle.py chat timeout layout changed"
-text = text.replace(old, new)
-
-old_mt = '"max_tokens": 512,'
-new_mt = '"max_tokens": 256,'
-assert text.count(old_mt) == 1, "demo_lifecycle.py max_tokens layout changed"
-text = text.replace(old_mt, new_mt)
-
-with open(path, "w", encoding="utf-8") as fh:
-    fh.write(text)
-print(
-    "patched demo_lifecycle.py: chat timeout 30s -> 600s, max_tokens 512 -> 256",
-    flush=True,
-)
-PY
 fi
 
 # -------------------------------------------------------
