@@ -74,6 +74,12 @@ supported:
     image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
     overlay_args:
       - --config examples/hermes/config.yaml
+      # Single card / DP=1: online RL feeds ONE session trajectory per step
+      # ("online mode consumes one independently rewarded trajectory per
+      # group"), but a 2-card actor (fsdp:d2p1t1, dp=2) makes
+      # train_controller.balanced_greedy_partition(items=1, K=2) raise
+      # "Number of items (1) must be >= K (2)". One card avoids the split;
+      # rollout colocated on the same card keeps colocate valid.
       - rollout.backend=vllm:d1p1t2
       - rollout._version=v1
       - actor.backend=fsdp:d2p1t1
