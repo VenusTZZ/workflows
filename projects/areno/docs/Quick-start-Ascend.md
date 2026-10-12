@@ -172,7 +172,7 @@ cli_serve_ok
 
 对齐 README「Tiny training smoke test」：Qwen3-0.6B 在 GSM8K 上跑 GSPO，一条命令串起 CLI、数据集加载（`examples/math/dataset_loader.py` 把 GSM8K 的 `question`/`answer` 规整成训练 prompt）、奖励函数（`examples/math/math_verify_reward.py` 用 math-verify 校验 `\boxed{}` 答案）、rollout 与训练步。
 
-本文档为控制 CI 资源把训练压到 1 步（`--max-steps 1`）、生成长度压到 256 token（`--max-new-tokens 256`），并让 checkpoint 落盘（`--save-path` + `--save-interval 1`）供下一节推理服务复用；想跑完整训练，去掉这几个参数即可。模型与数据集走 ModelScope（AReno 默认 hub），首次运行自动下载：
+本文档为控制 CI 资源把训练压到 1 步（`--max-steps 1`）、生成长度压到 256 token（`--max-new-tokens 256`），并让 checkpoint 落盘（`--save-path` + `--save-interval 1`）供下一节推理服务复用；想跑完整训练，去掉这几个参数即可。注意力后端显式选择 `--attn-backend native`：安装依赖 `flash-attn-npu==0.3.0` 存在时默认的 flash 解码路径会在 NPU graph capture 中触发 `aclrtMemcpy` 107030（capture 模式不支持该操作），native 路径无此问题。模型与数据集走 ModelScope（AReno 默认 hub），首次运行自动下载：
 
 ```shell #test-setup id="train-smoke-run"
 cd AReno
@@ -185,6 +185,7 @@ ASCEND_RT_VISIBLE_DEVICES=0 areno train \
   --reward-fn-path examples/math/math_verify_reward.py \
   --algo gspo \
   --backend npu \
+  --attn-backend native \
   --tp-size 1 \
   --world-size 1 \
   --batch-size 1 \
@@ -233,6 +234,8 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 ASCEND_RT_VISIBLE_DEVICES=0 areno serve \
   --model-path <ckpt> \
   --backend npu \
+  --attn-backend native \
+  --max-running-prompts 2 \
   --tp-size 1 \
   --world-size 1 \
   --port 8000 > /tmp/areno_serve.log 2>&1 &
@@ -244,7 +247,7 @@ done
 curl -fsS http://127.0.0.1:8000/health
 ```
 
-> `areno serve` 的启动日志在 `/tmp/areno_serve.log`；`--attn-backend native` 可显式选择 NPU 原生注意力（本文档使用默认值）。
+> `areno serve` 的启动日志在 `/tmp/areno_serve.log`。`--attn-backend native` 与训练侧同理（flash-attn-npu 的 kvcache 路径与 NPU graph capture 不兼容）；`--max-running-prompts 2` 控制 KV cache 池规模——默认 16 并发 × 模型 32k 上下文的预留约 60 GB，会把单卡 HBM 占满导致请求期 OOM，冒烟场景 2 个并发槽已足够。
 
 查看服务暴露的模型列表（单条目，`owned_by` 固定为 `areno`）：
 
