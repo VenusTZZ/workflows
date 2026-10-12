@@ -90,8 +90,8 @@ supported:
       # start_session/set_reward calls get HTTP 401. Align both to the same
       # value (+ = add the missing key under rollout.agent).
       - +rollout.agent.admin_api_key=sk-areal-ci
-      - vllm.gpu_memory_utilization=0.3
-      - vllm.max_model_len=8192
+      - vllm.gpu_memory_utilization=0.4
+      - vllm.max_model_len=16384
       - gconfig.max_new_tokens=256
       - +rollout.setup_timeout=1800
       - total_train_steps=1
