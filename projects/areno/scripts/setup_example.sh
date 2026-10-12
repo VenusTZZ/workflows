@@ -120,7 +120,9 @@ PY
 # NPU source build below); a profile that needs extra dependencies would branch
 # on PROFILE here, before the shared steps.
 SUPPORTED_PROFILES="bash_game_npu codebreaker_npu coding_npu"
+SUPPORTED_PROFILES="bash_game_npu codebreaker_npu coding_npu"
 case "$PROFILE" in
+  bash_game_npu | codebreaker_npu | coding_npu) ;;
   bash_game_npu | codebreaker_npu | coding_npu) ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
