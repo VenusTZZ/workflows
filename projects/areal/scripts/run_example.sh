@@ -282,6 +282,94 @@ PY
       tail -n 120 "$TRAIN_LOG"
     fi
     ;;
+  examples/openclaw/train.py)
+    # Online RL via the proxy gateway - same architecture as hermes, except
+    # the agent runtime is any OpenAI-compatible client rather than a bundled
+    # framework. The upstream examples/openclaw/demo_lifecycle.py already is
+    # the headless driver: health -> rl/start_session -> chat/completions
+    # (real generation; tokens + logprobs recorded) -> rl/set_reward -> a
+    # second start_session refreshes the session (ends it, exports the
+    # trajectory). --episodes 2 guarantees episode 1 is exported.
+    # demo_lifecycle runs in the BACKGROUND: episode 2's tail races the
+    # trainer's post-step-1 exit (generation is ~1.5 tok/s on a 1.5B NPU,
+    # training finishes sooner), so its exit code is NOT authoritative - the
+    # trainer's exit code is.
+    OC_ADMIN_KEY="sk-test123456"
+    TRAIN_LOG="$PWD/openclaw_train.log"
+    DEMO_LOG="$PWD/openclaw_demo.log"
+
+    openclaw_cleanup() {
+      if [[ -n "${DEMO_PID:-}" ]] && kill -0 "$DEMO_PID" 2>/dev/null; then
+        kill "$DEMO_PID" 2>/dev/null || true
+      fi
+      if [[ -n "${TRAINER_PID:-}" ]] && kill -0 "$TRAINER_PID" 2>/dev/null; then
+        kill "$TRAINER_PID" 2>/dev/null || true
+      fi
+    }
+    trap openclaw_cleanup EXIT
+
+    # 1) Trainer in the background; its log carries the gateway address.
+    "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}" >"$TRAIN_LOG" 2>&1 &
+    TRAINER_PID=$!
+
+    GW=""
+    for i in $(seq 1 120); do
+      GW=$(grep 'Proxy gateway available at' "$TRAIN_LOG" 2>/dev/null | tail -1 \
+        | grep -oE 'https?://[A-Za-z0-9._:-]+' | tail -1 || true)
+      [[ -n "$GW" ]] && break
+      if ! kill -0 "$TRAINER_PID" 2>/dev/null; then
+        echo "trainer exited before the gateway came up; tail of $TRAIN_LOG:"
+        tail -n 120 "$TRAIN_LOG"
+        exit 1
+      fi
+      echo "[wait $((i * 10))s] trainer: $(tail -n 1 "$TRAIN_LOG" 2>/dev/null | cut -c1-200)"
+      sleep 10
+    done
+    if [[ -z "$GW" ]]; then
+      echo "proxy gateway did not come up in 20min; tail of $TRAIN_LOG:"
+      tail -n 120 "$TRAIN_LOG"
+      exit 1
+    fi
+    echo "inference gateway: $GW"
+
+    # 2) Drive two episodes in the background (episode 2's refresh exports
+    #    episode 1's trajectory; see header for why the exit is not checked).
+    "$PYTHON" examples/openclaw/demo_lifecycle.py "$GW" \
+      --admin-key "$OC_ADMIN_KEY" --episodes 2 >"$DEMO_LOG" 2>&1 &
+    DEMO_PID=$!
+    echo "demo_lifecycle started (pid=$DEMO_PID, log=$DEMO_LOG)"
+
+    # 3) Wait for the trainer's single step and clean exit (bounded).
+    TRAIN_WAIT_S=900
+    waited=0
+    train_timed_out=0
+    while kill -0 "$TRAINER_PID" 2>/dev/null; do
+      if (( waited >= TRAIN_WAIT_S )); then
+        echo "trainer still running after ${TRAIN_WAIT_S}s - killing and dumping"
+        train_timed_out=1
+        kill "$TRAINER_PID" 2>/dev/null || true
+        sleep 5
+        kill -9 "$TRAINER_PID" 2>/dev/null || true
+        break
+      fi
+      sleep 15
+      waited=$((waited + 15))
+    done
+    kill "$DEMO_PID" 2>/dev/null || true
+    if (( train_timed_out )); then
+      run_rc=1
+      echo "trainer wait timed out; tail of $TRAIN_LOG:"
+      tail -n 120 "$TRAIN_LOG"
+      echo "--- demo_lifecycle tail ($DEMO_LOG) ---"
+      tail -n 40 "$DEMO_LOG" 2>/dev/null || true
+    elif wait "$TRAINER_PID"; then
+      echo "openclaw online-rl loop completed"
+    else
+      run_rc=$?
+      echo "trainer exited rc=$run_rc; tail of $TRAIN_LOG:"
+      tail -n 120 "$TRAIN_LOG"
+    fi
+    ;;
   *.sh)
     # Shell examples dispatch with bash (generic guard contract: .sh -> bash,
     # .py -> python).
