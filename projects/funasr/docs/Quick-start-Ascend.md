@@ -57,7 +57,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 npu-smi info
 ```
 
-输出如下类似结果（单卡）：
+输出如下类似结果：
 
 ```
 +------------------------------------------------------------------------------------------------+
@@ -83,7 +83,7 @@ python --version
 Python 3.12...
 ```
 
-检查 torch / torch_npu / torchaudio 是否装好且 NPU 设备可用，下面用 **python** 跑：
+检查 torch / torch_npu / torchaudio 是否装好且 NPU 设备可用，下面代码用 **python** 跑：
 
 ```python #test id="check-torch"
 import torch, torch_npu, torchaudio
@@ -167,7 +167,7 @@ funasr ...
 
 这是 FunASR 最典型的生产装配：一个 `AutoModel` 同时挂上 `vad_model`（语音活性检测）/ `punc_model`（标点恢复）/ `spk_model`（说话人嵌入），一次 `generate` 产出转写文本、字级时间戳和匿名说话人编号。模型默认从 ModelScope 拉取，`device="npu:0"` 让 ASR / VAD / 标点 / 说话人四个子模型都放到 NPU 上跑。
 
-下面用 **python** 跑（首次运行会下载约 4 个模型，之后命中缓存）：
+下面代码用 **python** 跑（首次运行会下载约 4 个模型，之后命中缓存）：
 
 ```python #test id="funasr-asr-pipeline"
 import torch, torch_npu
@@ -204,7 +204,7 @@ sentence_info_keys: ['end', 'spk', 'start', 'text', 'timestamp']
 
 ## 多语识别 + 情感 + 事件（SenseVoiceSmall）
 
-`SenseVoiceSmall` 一个模型同时输出**语种标签**（`<|zh|>` 等）、**情感标签**（`<|NEUTRAL|>` / `<|HAPPY|>` 等）与**事件标签**（`<|Speech|>` / `<|Applause|>` 等），原始 `text` 带上这些标签，用 `rich_transcription_postprocess` 可剥离得到干净文本。下面用 **python** 跑：
+`SenseVoiceSmall` 一个模型同时输出**语种标签**（`<|zh|>` 等）、**情感标签**（`<|NEUTRAL|>` / `<|HAPPY|>` 等）与**事件标签**（`<|Speech|>` / `<|Applause|>` 等），原始 `text` 带上这些标签，用 `rich_transcription_postprocess` 可剥离得到干净文本。下面代码用 **python** 跑：
 
 ```python #test id="funasr-sensevoice"
 import torch, torch_npu
@@ -245,7 +245,7 @@ clean_text: ...
 curl -sL -o /tmp/funasr_sample.wav https://isv-data.oss-cn-hangzhou.aliyuncs.com/ics/MaaS/ASR/test_audio/asr_example_zh.wav
 ```
 
-下面用 **python** 跑，把整段音频切成 600ms 一块依次喂给流式模型：
+下面代码用 **python** 跑，把整段音频切成 600ms 一块依次喂给流式模型：
 
 ```python #test id="funasr-streaming"
 import torch, torch_npu
@@ -287,7 +287,7 @@ streamed_text: ...
 
 ## 情感识别（emotion2vec_plus_large）
 
-独立的情感识别模型，`granularity="utterance"` 返回整句的情感标签分布。下面用 **python** 跑：
+独立的情感识别模型，`granularity="utterance"` 返回整句的情感标签分布。下面代码用 **python** 跑：
 
 ```python #test id="funasr-emotion"
 import torch, torch_npu
