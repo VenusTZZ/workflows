@@ -135,7 +135,7 @@ echo "${UPSTREAM_REF}"
 ```
 -->
 
-克隆上游仓库并 checkout 到最新 release tag，安装并且验证。FunASR 的 `setup.py` 不声明 `torch` / `torchaudio`，所以这里不会动前面装好的 torch 栈，只补 `modelscope` / `transformers` 等运行时依赖。
+克隆上游仓库并 checkout 到最新 release tag，安装并且验证。
 
 ```shell #test id="funasr-install-source" load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/modelscope/FunASR.git
