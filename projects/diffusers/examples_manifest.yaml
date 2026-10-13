@@ -8,7 +8,7 @@ scan:
   # 对齐收口：原 scan.exclude 的 33 条规则全部迁入
   # unsupported 段（上游自测 / helper / pipeline 模块 / community 整目录等，
   # 带分组注释与理由），scan 只保留 root + include_extensions 两个键。
-  # unsupported 覆盖全部 308 个扫描文件：supported(49) + unsupported(259)。
+  # unsupported 覆盖全部 308 个扫描文件：supported(48) + unsupported(260)。
 
 # 新版 diffusers 需求 huggingface-hub>=1.23，huggingface-hub>=1.23 需求
 # transformers>=5.x，任何 transformers<5.x 的用例都无法跑通
@@ -846,27 +846,27 @@ supported:
   #     - --max_train_steps 1
   #   timeout_minutes: 300
 
-  # SDXL LPL（Latent Prompt Learning）。这个 fork 本身就是给 NPU 写的：脚本自己
-  # import torch_npu、关掉 allow_internal_format，还带 --enable_npu_flash_attention
-  # （diffusers 的 NPU 专属接口，目前唯一覆盖它的一条）。全量 unet、训练前
-  # 会 del 文本编码器和 vae，显存账同 train_text_to_image_sdxl（a2-2 + ZeRO-2）。
-  - path: examples/research_projects/lpl/train_sdxl_lpl.py
-    profile: diffusers-sdxl-full
-    launcher: accelerate-deepspeed
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
-      - --variant fp16
-      - --dataset_name lambdalabs/naruto-blip-captions
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256
-      - --mixed_precision bf16
-      - --train_batch_size 1
-      - --gradient_checkpointing
-      - --max_train_steps 1
-    timeout_minutes: 120
+  # # SDXL LPL（Latent Prompt Learning）。这个 fork 本身就是给 NPU 写的：脚本自己
+  # # import torch_npu、关掉 allow_internal_format，还带 --enable_npu_flash_attention
+  # # （diffusers 的 NPU 专属接口，目前唯一覆盖它的一条）。全量 unet、训练前
+  # # 会 del 文本编码器和 vae，显存账同 train_text_to_image_sdxl（a2-2 + ZeRO-2）。
+  # - path: examples/research_projects/lpl/train_sdxl_lpl.py
+  #   profile: diffusers-sdxl-full
+  #   launcher: accelerate-deepspeed
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0,1'
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
+  #     - --variant fp16
+  #     - --dataset_name lambdalabs/naruto-blip-captions
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --resolution 256
+  #     - --mixed_precision bf16
+  #     - --train_batch_size 1
+  #     - --gradient_checkpointing
+  #     - --max_train_steps 1
+  #   timeout_minutes: 120
 
   # # SD1.5 多主体 DreamBooth。只喂一个 instance 目录就是普通 dreambooth（同已支持的
   # # train_dreambooth.py），数据用本地 fixture（DOG 图）。要跑"多主体"需传
@@ -886,41 +886,23 @@ supported:
   #     - --gradient_checkpointing
   #   timeout_minutes: 90
 
-  # SD1.5 多主体 inpainting DreamBooth。它的 Dataset 用 load_dataset 读本地目录
-  # （不是 load_from_disk），固定取 train/test 两个 split，列要 image/prompt/mask；
-  # 目录由 setup 现场生成（profile diffusers-multi-subject-inpaint）。
+  # SD1.5 多主体 inpainting DreamBooth。模型必须是 9 通道的 inpainting 版
+  # （${SD15_INPAINT_PATH}，基础版 SD1.5 的 unet 是 4 通道，会报 conv_in 通道数
+  # 不匹配）。它的 Dataset 用 load_dataset 读本地目录（不是 load_from_disk），
+  # 固定取 train/test 两个 split，列要 image/prompt/mask；目录由 setup 现场生成
+  # （profile diffusers-multi-subject-inpaint）。
   - path: examples/research_projects/multi_subject_dreambooth_inpainting/train_multi_subject_dreambooth_inpainting.py
     profile: diffusers-multi-subject-inpaint
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --pretrained_model_name_or_path ${SD15_MODEL_PATH}
+      - --pretrained_model_name_or_path ${SD15_INPAINT_PATH}
       - --instance_data_dir ${MULTI_SUBJECT_INPAINT_DATASET}
       - --output_dir ${CI_OUTPUT_DIR}
       - --resolution 512
       - --train_batch_size 1
       - --max_train_steps 1
     timeout_minutes: 90
-
-  # SD1.5 多向量 Textual Inversion（--num_vec_per_token 版）。依赖同目录的
-  # multi_token_clip.py（run_example 已把该目录加进 PYTHONPATH），数据用本地
-  # 图片目录。
-  - path: examples/research_projects/multi_token_textual_inversion/textual_inversion.py
-    profile: diffusers-textual-inversion
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path ${SD15_MODEL_PATH}
-      - --train_data_dir ${FIXTURE_DIR}/images
-      - --placeholder_token <cat-toy>
-      - --initializer_token a
-      - --num_vec_per_token 2
-      - --learnable_property object
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 512
-      - --train_batch_size 1
-      - --max_train_steps 1
-    timeout_minutes: 60
 
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
 unsupported:
@@ -1113,6 +1095,13 @@ unsupported:
   # is invalid for input of size 256。diffusers 0.4X 必须 transformers 5.x，无法降级。
   - examples/dreambooth/train_dreambooth_lora_lumina2.py
   - examples/dreambooth/train_dreambooth_lora_z_image.py
+  # INCOMPAT：transformers 5.x 起 CLIPTextModel 不再有 .text_model 属性（维护中的
+  # 例子都改成 `text_encoder.text_model if hasattr(text_encoder, "text_model") else
+  # text_encoder` 兼容），而此脚本 :636-638 硬编码 text_encoder.text_model.encoder/
+  # .final_layer_norm/.embeddings，没有兼容分支 → AttributeError。diffusers 0.4X
+  # 必须 transformers 5.x，不能降级，也不能改脚本。标准 textual_inversion 已用兼容
+  # 写法并 support，这条是未跟上的多向量变体。
+  - examples/research_projects/multi_token_textual_inversion/textual_inversion.py
   # OOM：Qwen-Image（20B）+ ZeRO-3 在 a2-4 上 host OOM（Signal 9 SIGKILL，内核
   # OOM killer）；去掉 ds_zero3.json 的 offload_param 后仍 OOM（DeepSpeed 初始化
   # 仍要把整个模型 + 文本编码器放到 CPU）

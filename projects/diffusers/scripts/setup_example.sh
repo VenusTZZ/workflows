@@ -139,13 +139,14 @@ install_example_stack() {
 }
 
 # download_assets <what>: comma-separated tokens from
-# {sdxl, sdxl-vae, sd15, 3d-icon, cogvideo, sana-sprint}. Each token exports a path to
-# GITHUB_ENV under the name overlay_args reference:
-#   sdxl      -> SDXL_BASE_PATH    (AI-ModelScope/stable-diffusion-xl-base-1.0)
-#   sdxl-vae  -> SDXL_VAE_PATH     (AI-ModelScope/sdxl-vae-fp16-fix)
-#   sd15      -> SD15_MODEL_PATH   (AI-ModelScope/stable-diffusion-v1-5)
-#   3d-icon   -> THREE_D_ICON_PATH (hf-mirror linoyts/3d_icon)
-#   cogvideo  -> COGVIDEOX_MODEL_PATH + COGVIDEOX_DATASET_DIR
+# {sdxl, sdxl-vae, sd15, sd15-inpaint, 3d-icon, cogvideo, sana-sprint}. Each token
+# exports a path to GITHUB_ENV under the name overlay_args reference:
+#   sdxl         -> SDXL_BASE_PATH      (AI-ModelScope/stable-diffusion-xl-base-1.0)
+#   sdxl-vae     -> SDXL_VAE_PATH       (AI-ModelScope/sdxl-vae-fp16-fix)
+#   sd15         -> SD15_MODEL_PATH     (AI-ModelScope/stable-diffusion-v1-5)
+#   sd15-inpaint -> SD15_INPAINT_PATH   (AI-ModelScope/stable-diffusion-inpainting)
+#   3d-icon      -> THREE_D_ICON_PATH   (hf-mirror linoyts/3d_icon)
+#   cogvideo     -> COGVIDEOX_MODEL_PATH + COGVIDEOX_DATASET_DIR
 download_assets() {
   DIFFUSERS_DOWNLOAD="$1" python - <<'PY'
 import os
@@ -266,6 +267,24 @@ if "sd15" in WANT:
         # Same as SDXL: the repo carries both .bin and .safetensors; only the
         # latter is needed.
         ignore_file_pattern=["*.fp16.*", "*.bin"],
+    )
+
+# SD 1.5 inpainting (9-channel unet: 4 latent + 4 masked-latent + 1 mask).
+# Only entries that train an inpainting unet need it. Same component-only
+# filter as SD1.5.
+if "sd15-inpaint" in WANT:
+    snapshot(
+        "SD15_INPAINT_PATH",
+        "AI-ModelScope/stable-diffusion-inpainting",
+        allow_file_pattern=[
+            "*.json", "*.txt", "*.model",
+            "unet/*", "vae/*",
+            "text_encoder/*", "tokenizer/*",
+            "scheduler/*", "feature_extractor/*",
+        ],
+        # This repo ships only .bin + *.fp16.safetensors (no full-precision
+        # safetensors), so keep .bin and drop only the fp16 duplicates.
+        ignore_file_pattern=["*.fp16.*"],
     )
 
 # SD 1.4 (the dreambooth examples' README base model). Same component-only
@@ -640,8 +659,9 @@ setup_diffusers_multi_subject_inpaint() {
   # 名字含 "mask" 的列。所以仿 Hub 数据集的落盘布局：平铺的
   # train-*.parquet / test-*.parquet，load_dataset 按扩展名推断 parquet builder、
   # 按文件名推断 split，features（Image）存在 schema metadata 里，读回即 PIL。
+  # 模型必须是 9 通道的 inpainting 版（不是基础版 SD1.5）。
   install_example_stack
-  download_assets sd15
+  download_assets sd15-inpaint
   python3 - <<'PY'
 import os
 from pathlib import Path
