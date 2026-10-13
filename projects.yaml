@@ -737,26 +737,17 @@ projects:
       examples: .github/workflows/liger-kernel-examples.yml
       quick_start: .github/workflows/liger-kernel-quick-start.yml
   # AReno: inclusionAI 的单机 RL post-training 工具包（SFT/DPO/GRPO/GSPO/
-  # PPO + OpenAI 兼容 serving）。NPU 后端按上游 docs/concepts/npu.rst 的
-  # 目标栈：CANN 9.0.0 + torch 2.10.0+cpu + torch_npu 2.10.0.post2（镜像
-  # 用 9.0.0 线，非多数项目用的 9.1.0）。源码安装时现场编译
-  # areno.accel._areno_accel_npu（Ascend C + CMake，无 Python 回退）。
-  # 安装源临时 checkout main：最新 release v0.0.8 尚未包含 NPU 后端（同
-  # wenet 的临时处理），待上游发布含 NPU 的 release 后回切 release tag。
-  # Quick start 在单卡 910B4 上跑 README「Tiny training smoke test」的
-  # NPU 版：GSPO-on-GSM8K 1 步 RLVR 冒烟（Qwen3-0.6B，ModelScope）+
-  # checkpoint 落盘 + areno serve --backend npu 的 /v1/chat/completions
-  # 冒烟。Examples 走共享引擎 examples-template.yml：release 线 v0.0.8
-  # 已带全部用例（examples/ 树与 main 一致），manifest 已把 bash_game、
-  # codebreaker、coding、duelgrid、shopping、terminal_hacking、tictactoe
-  # （tool-call + XML no-tool 两变体）、math（GSM8K RLVR）、alpaca（SFT）等
-  # 链路登记 supported；其中除 alpaca 外均已跑绿、当前注释禁用省卡（入口暂列
-  # unsupported），alpaca 生效；ave_event_recognition / tictactoe_image 为
-  # 「不支持」（NPU 多模态未支持）；其余共 58 个 .py 逐文件登记 unsupported。
-  # 生效的 supported 在单卡 a2-1 上由 projects/areno/scripts/{setup,run}_example.sh
-  # 现场装 main（v0.0.8 无 NPU 后端，同 quick-start 的临时处理）跑 1 步。
-  # category/support_level 按姊妹项目 areal 的口径暂记，如与项目
-  # 表不符以表为准。
+  # PPO + OpenAI 兼容 serving）。NPU 后端按上游 docs/concepts/npu.rst 的目标
+  # 栈：CANN 9.0.0 + torch 2.10.0+cpu + torch_npu 2.10.0.post2（镜像用 9.0.0
+  # 线，非多数项目用的 9.1.0）。源码安装时现场编译 areno.accel._areno_accel_npu
+  # （Ascend C + CMake，无 Python 回退）。
+  # Quick start 在单卡 910B4 上跑 README「Tiny training smoke test」的 NPU 版：
+  # GSPO-on-GSM8K 1 步 RLVR（Qwen3-0.6B，ModelScope）+ checkpoint 落盘 +
+  # areno serve --backend npu 的 /v1/chat/completions。Examples 走共享引擎
+  # examples-template.yml；supported 列表见 projects/areno/examples_manifest.yaml
+  # （bash_game / codebreaker / coding / duelgrid / shopping / terminal_hacking /
+  # tictactoe 两变体 / math / alpaca / pi），ave_event_recognition /
+  # tictactoe_image 等见 unsupported。
   - name: areno
     category: 训练加速
     support_level: 基础支持

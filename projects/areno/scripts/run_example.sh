@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
-# Run one supported AReno example from the CI working copy.
-# $1 is the manifest entry path (relative to the examples root); it is only
-# checked for existence. Everything example-specific travels in the manifest's
-# overlay_args (OVERLAY_ARGS, a JSON array): dataset path, loader, reward,
-# agent entry, algo and CI-scaling flags. The shared single-card NPU smoke
-# harness (native attention, Qwen3-0.6B via ModelScope, one checkpoint per
-# profile) lives here, so adding an example only touches the manifest.
-# Never git add/commit/push.
+# 运行一个 supported AReno 用例（从 CI 工作区）。
+# $1 = manifest 条目路径（相对 examples 根），仅用于存在性检查。逐用例参数都在
+# manifest 的 overlay_args（OVERLAY_ARGS，JSON 数组）里：dataset / loader /
+# reward / agent 入口 / algo 与 CI 缩放参数。共享的单卡 NPU 冒烟档（native
+# attention、ModelScope 的 Qwen3-0.6B、每个 profile 一个 checkpoint）就在这里，
+# 因此新增用例只改 manifest。禁止 git add/commit/push。
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
@@ -26,8 +24,8 @@ EXAMPLE_PATH="$EXAMPLES_ROOT/$EXAMPLE_REL"
 mkdir -p "$CI_OUTPUT_DIR"
 
 source_vendor_env() {
-  # CANN env scripts assume a login shell and reference optional variables
-  # without ${VAR:-} guards; relax strict mode while sourcing vendor code.
+  # CANN 的 set_env.sh 假设登录 shell 且引用未加 ${VAR:-} 的变量；临时关严格
+  # 模式再 source。
   local vendor_file="$1"
   if [[ ! -f "$vendor_file" ]]; then
     echo "vendor env script not found, skipping: $vendor_file"
@@ -47,9 +45,8 @@ export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
 python -c "import torch, torch_npu; print('NPU available:', torch.npu.is_available(), 'devices:', torch.npu.device_count())"
 
 expand_overlay() {
-  # The workflow serializes manifest.overlay_args as JSON. Expand each item
-  # with shell quoting intact, then allow CI paths such as ${FIXTURE_DIR} /
-  # ${EXAMPLES_ROOT} to resolve only in this job's environment.
+  # workflow 把 manifest.overlay_args 序列化成 JSON。逐项按原引号展开，并让
+  # ${FIXTURE_DIR} / ${EXAMPLES_ROOT} 等 CI 路径只在本 job 环境里解析。
   python - <<'PY'
 import json
 import os
@@ -83,10 +80,9 @@ if ((${#EXTRA_ARGS[@]})); then
   printf 'overlay arg: %q\n' "${EXTRA_ARGS[@]}"
 fi
 
-# Shared single-card NPU smoke harness. --attn-backend native avoids the
-# flash-attn-npu kvcache path that is incompatible with NPU graph capture.
-# Per-example flags follow in overlay_args and override any of these because
-# argparse keeps the last occurrence of a repeated flag.
+# 共享的单卡 NPU 冒烟档。--attn-backend native 避开与 NPU graph capture 不兼容的
+# flash-attn-npu kvcache 路径。逐用例参数在 overlay_args 里；argparse 取最后一次
+# 出现，故 overlay 会覆盖这里。
 save="$CI_OUTPUT_DIR/${PROFILE}-ckpt"
 cd "$TARGET_ROOT"
 areno train \

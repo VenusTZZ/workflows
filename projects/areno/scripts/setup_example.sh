@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
-# Prepare the CI environment for one supported AReno example.
-# $1 is the manifest profile. Unknown profiles fail before any install.
-# AReno installs from the target checkout (TARGET_ROOT). The engine checks
-# out the monitored ref (latest release); because v0.0.8 predates the NPU
-# backend, the checkout is switched to upstream main when the NPU sources
-# are absent - temporary handling, same as areno-quick-start.yml. The
-# source build compiles areno.accel._areno_accel_npu (Ascend C + CMake, no
-# Python fallback).
+# 为某个 supported AReno example 准备 CI 环境。
+# $1 = manifest profile；未知 profile 在任何安装前即失败。
+# AReno 从目标 checkout（TARGET_ROOT，即引擎解析到的最新 release）源码安装；
+# v0.9.0 已自带 NPU 后端。安装时现场编译 areno.accel._areno_accel_npu
+# （Ascend C + CMake，无 Python 回退）。
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -26,9 +23,8 @@ CLUSTER_PIP_HOST=cache-service.nginx-pypi-cache.svc.cluster.local
 export CLUSTER_PIP_INDEX="http://${CLUSTER_PIP_HOST}/pypi/simple"
 
 source_vendor_env() {
-  # CANN/ATB env scripts assume a login shell and reference optional
-  # variables without ${VAR:-} guards; relax strict mode while sourcing
-  # vendor code, then restore it.
+  # CANN/ATB 的 set_env.sh 假设登录 shell，且直接引用未加 ${VAR:-} 的变量；
+  # 这里临时关掉严格模式再 source。
   local vendor_file="$1"
   if [[ ! -f "$vendor_file" ]]; then
     echo "vendor env script not found, skipping: $vendor_file"
@@ -41,9 +37,8 @@ source_vendor_env() {
 }
 
 select_pip_index() {
-  # Runners live in mainland China: prefer the cluster pip cache, fall
-  # back to the Tsinghua mirror. The ascend index stays available via
-  # PIP_EXTRA_INDEX_URL (set by the workflow) for torch_npu wheels.
+  # runner 在国内：优先集群 pip 缓存，退回清华镜像；Ascend 源经
+  # PIP_EXTRA_INDEX_URL（workflow 已设）供 torch_npu wheel。
   if python -c "
 import urllib.error
 import urllib.request
@@ -62,7 +57,7 @@ except urllib.error.HTTPError:
 }
 
 ensure_build_tools() {
-  # Building the Ascend C extension needs cmake and binutils (nm).
+  # 编译 Ascend C 扩展需要 cmake 与 binutils（nm）。
   command -v cmake >/dev/null 2>&1 || {
     apt-get update -qq >/dev/null
     apt-get install -y -qq cmake binutils >/dev/null
@@ -71,12 +66,8 @@ ensure_build_tools() {
 }
 
 ensure_torch_stack() {
-  # The CANN 9.0.0 image ships no torch, so install the pinned pair. Fetch
-  # torch from the Ascend/Huawei index instead of the upstream +cpu
-  # find-links mirror: the Ascend repo hosts the torch build paired with
-  # torch_npu and the Huawei CDN is fast from the mainland runners - the same
-  # approach as trl / accelerate / dgl - avoiding a slow single-connection
-  # 146 MB aliyun download.
+  # 镜像不带 torch；torch 从 Ascend/华为源取（与 torch_npu 配套，华为 CDN 在
+  # 国内快），避开上游 +cpu find-links 的单连接慢下载。
   if python -c "import torch, torch_npu; print('found torch', torch.__version__, 'torch_npu', torch_npu.__version__)"; then
     echo "reusing image torch stack"
     return
@@ -91,27 +82,13 @@ ensure_torch_stack() {
   python -c "import torch, torch_npu; print('torch', torch.__version__, 'torch_npu', torch_npu.__version__)"
 }
 
-use_npu_capable_source() {
-  # v0.0.8 (the guarded release) has no NPU backend; switch the workspace
-  # copy to upstream main so the source build can produce the NPU
-  # extension. Manual dispatch with target_ref=main is a no-op here.
-  if [[ ! -d "$TARGET_ROOT/areno/accel/csrc/npu" ]]; then
-    echo "NPU sources absent at $(git -C "$TARGET_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown); switching to upstream main"
-    git -C "$TARGET_ROOT" fetch --depth 1 origin main
-    git -C "$TARGET_ROOT" checkout --detach FETCH_HEAD
-  fi
-  echo "building from $(git -C "$TARGET_ROOT" rev-parse --short HEAD)"
-}
-
 install_areno() {
   source_vendor_env /usr/local/Ascend/ascend-toolkit/set_env.sh
-  # Build AReno + its Ascend C extension, but skip the two heavy optional deps
-  # the CI never uses: flash-attn-npu (only for --attn-backend flash; the legs
-  # pin native) and flash-linear-attention (only for KDA / linear-attention
-  # models; the legs use dense Qwen3, and areno routes NPU lightning attn to
-  # its own accel.npu.seg_la). Building both from source (kernel compile + git
-  # clone) is the slowest part of setup, so install AReno with --no-deps and
-  # then install the remaining npu.txt deps from wheels.
+  # 只编译 AReno 与其 Ascend C 扩展，跳过 CI 用不到的两个重包：flash-attn-npu
+  # （只服务 --attn-backend flash，leg 固定 native）与 flash-linear-attention
+  # （只服务 KDA/线性注意力模型，leg 用 dense 底座，且 areno 在 NPU 上把
+  # lightning attn 路由到自研 accel.npu.seg_la）。故用 --no-deps 装 AReno，再按
+  # requirements/npu.txt 从 wheel 安装其余依赖。
   python -m pip install -e "$TARGET_ROOT" --no-build-isolation --no-deps
   local deps
   deps=$(grep -vE '^[[:space:]]*(#|flash-attn-npu|flash-linear-attention)' \
@@ -128,12 +105,63 @@ print('areno NPU extension ok')
 PY
 }
 
-# Known profiles. Every current profile shares the same preparation (the AReno
-# NPU source build below); a profile that needs extra dependencies would branch
-# on PROFILE here, before the shared steps.
-SUPPORTED_PROFILES="bash_game_npu codebreaker_npu coding_npu duelgrid_npu shopping_npu terminal_hacking_npu tictactoe_npu tictactoe_no_tool_npu math_npu alpaca_npu"
+install_pi_toolchain() {
+  # pi（pi.dev）是外部 Node.js CLI，示例通过自带环境变量
+  # （ARENO_PI_EXECUTABLE / ARENO_PI_PYTHON / ARENO_PI_RESULT_DIR）驱动。全部从
+  # 国内可达的镜像安装：Node 走 npmmirror 二进制、pi 走 npmmirror 的 npm 包
+  # @earendil-works/pi-coding-agent、fd/ripgrep 走 apt、SWE-smith 数据用示例
+  # generate_dataset.py 从 ModelScope 生成。路径经 GITHUB_ENV 传出。
+  local node_ver="${ARENO_PI_NODE_VERSION:-22.19.0}"
+  if ! command -v node >/dev/null 2>&1; then
+    echo "installing Node ${node_ver} (aarch64) from npmmirror"
+    curl -fsSL "https://cdn.npmmirror.com/binaries/node/v${node_ver}/node-v${node_ver}-linux-arm64.tar.gz" \
+      | tar -xz -C /usr/local --strip-components=1
+  fi
+  node --version
+  npm --version
+
+  echo "installing pi from the npmmirror npm registry"
+  npm install -g --ignore-scripts --registry=https://registry.npmmirror.com \
+    @earendil-works/pi-coding-agent
+  local pi_bin
+  pi_bin="$(command -v pi)"
+  "$pi_bin" --version
+
+  # pi 的 bash 工具需要 fd / ripgrep。
+  command -v rg >/dev/null 2>&1 || {
+    apt-get update -qq >/dev/null
+    apt-get install -y -qq fd-find ripgrep >/dev/null
+  }
+  command -v fd >/dev/null 2>&1 || ln -sf /usr/bin/fdfind /usr/local/bin/fd
+  command -v fd && command -v rg
+
+  # 示例的任务 Python（pi 的 bash 工具 + 打分器）只需要 pytest，主环境已有。
+  local task_py
+  task_py="$(command -v python)"
+  # generate_dataset.py 的数据准备依赖（modelscope + pyarrow）。
+  python -m pip install -q -r "$TARGET_ROOT/examples/agentic/pi/requirements.txt"
+
+  local data="$GITHUB_WORKSPACE/pi-swesmith.jsonl"
+  local results="$GITHUB_WORKSPACE/pi-results"
+  mkdir -p "$results"
+  echo "generating SWE-smith tasks from ModelScope -> $data"
+  python "$TARGET_ROOT/examples/agentic/pi/generate_dataset.py" \
+    --python "$task_py" --output "$data"
+
+  {
+    echo "ARENO_PI_EXECUTABLE=$pi_bin"
+    echo "ARENO_PI_PYTHON=$task_py"
+    echo "ARENO_PI_RESULT_DIR=$results"
+    echo "ARENO_PI_DATA=$data"
+  } >> "$GITHUB_ENV"
+}
+
+# 已知 profile。当前各 profile 共用同一套准备（下面的 AReno NPU 源码构建）；
+# 需要额外依赖的 profile 在这里按 PROFILE 分支。pi 已不支持（QLoRA 为 CUDA-only），
+# 保留 pi_npu 与 install_pi_toolchain 以备将来试非 QLoRA 变体。
+SUPPORTED_PROFILES="bash_game_npu codebreaker_npu coding_npu duelgrid_npu shopping_npu terminal_hacking_npu tictactoe_npu tictactoe_no_tool_npu math_npu alpaca_npu pi_npu"
 case "$PROFILE" in
-  bash_game_npu | codebreaker_npu | coding_npu | duelgrid_npu | shopping_npu | terminal_hacking_npu | tictactoe_npu | tictactoe_no_tool_npu | math_npu | alpaca_npu) ;;
+  bash_game_npu | codebreaker_npu | coding_npu | duelgrid_npu | shopping_npu | terminal_hacking_npu | tictactoe_npu | tictactoe_no_tool_npu | math_npu | alpaca_npu | pi_npu) ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -144,13 +172,14 @@ select_pip_index
 python -m pip install -U pip 'setuptools>=69' wheel
 ensure_build_tools
 ensure_torch_stack
-use_npu_capable_source
 install_areno
-# pytest backs the coding example's run_command test execution: its tasks run
-# `python -m pytest ...` inside the per-task workspace during rollout.
+# 供 coding 用例的 run_command 跑测试（其任务在 rollout 时执行 `python -m pytest`）。
 python -m pip install -q pytest
-# All three supported examples run agentic rollouts: their run_agent.py drives
-# an OpenAI-compatible client against the local rollout proxy. AReno's NPU
-# requirements list `openai`, but the base image can already satisfy `openai`
-# without pulling its `httpx` dependency, so install both explicitly.
+# agentic 用例的 run_agent.py 经 OpenAI 兼容客户端打本地 rollout 代理；AReno 的
+# NPU 依赖列了 openai，但镜像可能已满足 openai 而未带其 httpx 依赖，故两个都装。
 python -m pip install -q openai httpx
+
+# 逐 profile 的额外工具链（AReno 之外的外部依赖）。
+case "$PROFILE" in
+  pi_npu) install_pi_toolchain ;;
+esac
