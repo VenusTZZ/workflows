@@ -27,6 +27,7 @@ supported:
   #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
   #   timeout_minutes: 90
   #   overlay_args:
+  #     - --ckpt inclusionAI/Ling-3.0-tiny
   #     - --dataset-path ${FIXTURE_DIR}/ci_bash_game_8.jsonl
   #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/bash_game/dataset_loader.py
   #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/bash_game/reward.py
@@ -92,6 +93,7 @@ supported:
   #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
   #   timeout_minutes: 90
   #   overlay_args:
+  #     - --ckpt google/gemma-4-E2B-it
   #     - --dataset-path ${FIXTURE_DIR}/ci_duelgrid_8.jsonl
   #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/duelgrid/dataset_loader.py
   #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/duelgrid/reward.py
@@ -127,7 +129,7 @@ supported:
   # # terminal_hacking：单步候选词演绎 RLVR（GSPO，上下文老虎机式）。run_agent.py
   # # 经本地 rollout 代理做一次 submit_candidates 工具调用（对可观测内存转储里的
   # # 候选词过滤），reward.py 用稠密非对称奖励（多猜重罚、漏猜轻罚）。底座用
-  # # Qwen3-0.6B。数据走仓内 fixture（fixtures/ci_terminal_hacking_8.jsonl，上游
+  # # Ling-3.0-tiny（bailing/KDA，需 fla）。数据走仓内 fixture（fixtures/ci_terminal_hacking_8.jsonl，上游
   # # dataset_generator.py seed 2026 生成）；组件与 web_ui 见 unsupported。
   # - path: examples/agentic/terminal_hacking/run_agent.py
   #   profile: terminal_hacking_npu
@@ -135,6 +137,7 @@ supported:
   #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
   #   timeout_minutes: 90
   #   overlay_args:
+  #     - --ckpt inclusionAI/Ling-3.0-tiny
   #     - --dataset-path ${FIXTURE_DIR}/ci_terminal_hacking_8.jsonl
   #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/terminal_hacking/dataset_loader.py
   #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/terminal_hacking/reward.py

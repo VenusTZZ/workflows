@@ -218,7 +218,17 @@ install_fla_attention() {
   # flash-linear-attention（仓库里 install_areno 为 dense 底座把它跳过了）。
   python -m pip install -q \
     "flash-linear-attention @ git+https://github.com/fla-org/flash-linear-attention.git@e52dbc0ea19d3a40d7ab7f9eed855d2b473994d2"
-  python -c "import fla; print('flash-linear-attention ok')"
+  # 校验 areno 判 _HAVE_FLA_GDN 用的同一组导入（dynamo_wrappers.py:17-19）；
+  # 只 import fla 不够——顶层能进、fla.ops.gated_delta_rule 未必能进（多半卡在 triton）。
+  python - <<'PY'
+from fla.modules.convolution import causal_conv1d  # noqa: F401
+from fla.ops.gated_delta_rule import (  # noqa: F401
+    chunk_gated_delta_rule,
+    fused_recurrent_gated_delta_rule,
+)
+
+print("flash-linear-attention GDN imports ok")
+PY
 }
 
 install_ave_media_deps() {
@@ -272,6 +282,7 @@ PY
 
 # 逐 profile 的额外工具链（AReno 之外的外部依赖）。
 case "$PROFILE" in
+  bash_game_npu | terminal_hacking_npu) install_fla_attention ;;
   tictactoe_image_npu) install_vl_image_deps; install_fla_attention ;;
   ave_event_recognition_npu) install_ave_media_deps; stage_ave_fixture ;;
   pi_npu) install_pi_toolchain ;;
