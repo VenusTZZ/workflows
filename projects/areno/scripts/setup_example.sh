@@ -179,18 +179,32 @@ python -m pip install -q pytest
 # NPU 依赖列了 openai，但镜像可能已满足 openai 而未带其 httpx 依赖，故两个都装。
 python -m pip install -q openai httpx
 
+ensure_media_deps() {
+  # requirements/default.txt 的多模态媒体栈在 requirements/npu.txt 里被有意省略
+  # （npu.txt 只收公共依赖）。但 VL 的 Fast 图像处理器
+  # （Qwen2VLImageProcessorFast，见 checkpoint 的 preprocessor_config.json）需要
+  # torchvision：缺它 AutoProcessor.from_pretrained 直接抛错，被
+  # load_processor 吞成 None，随后报 "multimodal rows require a checkpoint
+  # processor"。音视频还要 av / librosa / soundfile。dataset_generator 用 Pillow。
+  # 装时用 constraints 把 torch 钉在现装的 CANN 版，避免 pip 顺带把 torch 换成
+  # PyPI 的 CPU 版而破坏 torch_npu。
+  local constraints
+  constraints="$(mktemp)"
+  echo "torch==$(python -c 'import torch; print(torch.__version__)')" > "$constraints"
+  python -m pip install -q -c "$constraints" Pillow torchvision "$@"
+  rm -f "$constraints"
+  python -c "import torchvision, PIL; print('media deps ok: torchvision', torchvision.__version__)"
+}
+
 install_vl_image_deps() {
-  # tictactoe_image：dataset_generator.py（被 dataset_loader import）用 Pillow
-  # 合成板图，缺 Pillow 时 loader 在 import 阶段即失败。transformers 的 VL
-  # processor 也走 Pillow，故一并满足。
-  python -m pip install -q Pillow
+  # tictactoe_image：图像路径只需 Pillow + torchvision。
+  ensure_media_deps
 }
 
 install_ave_media_deps() {
-  # ave_event_recognition 的源码直接依赖 Pillow（图像）与 soundfile（音频）；
-  # Gemma4 的音视频 processor 解容器用 PyAV、音频重采样用 librosa，抽音轨的
-  # dataset_generator 需要 ffmpeg。
-  python -m pip install -q Pillow soundfile librosa av
+  # ave_event_recognition：音视频路径需 av（解容器）/ librosa（重采样）/
+  # soundfile（areno 直接 import）以及抽音轨用的 ffmpeg。
+  ensure_media_deps "av>=12" "librosa>=0.11" "soundfile>=0.13"
   command -v ffmpeg >/dev/null 2>&1 || {
     apt-get update -qq >/dev/null
     apt-get install -y -qq ffmpeg >/dev/null
