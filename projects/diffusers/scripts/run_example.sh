@@ -130,11 +130,17 @@ count_npus() {
 }
 
 # Materialize an accelerate+DeepSpeed launch config whose num_processes follows
-# the visible NPU count. ZeRO-3 shards params/grads/optimizer across the cards,
-# so entries that OOM on a single card (e.g. full SDXL fine-tune) can run on
-# a2-2 / a2-4. LAUNCHER=accelerate-deepspeed.
+# the visible NPU count. ZeRO-2 (configs/ds_zero2.json): gradients sharded,
+# optimizer states CPU-offloaded, parameters NOT sharded. Do not go back to
+# ZeRO-3: with stage 3 transformers auto-constructs every from_pretrained model
+# with partitioned (zero.Init) params, and frozen modules that are never wrapped
+# by a DeepSpeedEngine - the text encoders - stay broken: the position-embedding
+# table reads shape[0]=0 and CLIPTextModel.forward raises "Sequence length must
+# be less than max_position_embeddings" (verified on a2-2, 2026-10-13;
+# zero3_init_flag is NOT the trigger - only the stage is).
+# LAUNCHER=accelerate-deepspeed.
 prepare_deepspeed_configs() {
-  local ds_json="${PROJECT_ROOT:?PROJECT_ROOT is required}/configs/ds_zero3.json"
+  local ds_json="${PROJECT_ROOT:?PROJECT_ROOT is required}/configs/ds_zero2.json"
   local cfg_dir="$GITHUB_WORKSPACE/ci_patch"
   mkdir -p "$cfg_dir"
   local npus
@@ -143,11 +149,6 @@ prepare_deepspeed_configs() {
 compute_environment: LOCAL_MACHINE
 deepspeed_config:
   deepspeed_config_file: $ds_json
-  # zero3_init_flag off: with it on, accelerate patches from_pretrained with
-  # deepspeed.zero.Init and transformers 5.x CLIP configs load broken under
-  # that path (max_position_embeddings reads 0 -> "Sequence length must be
-  # less than max_position_embeddings"). Without it, models load normally
-  # and DeepSpeedEngine partitions them at init instead.
   zero3_init_flag: false
 distributed_type: DEEPSPEED
 machine_rank: 0

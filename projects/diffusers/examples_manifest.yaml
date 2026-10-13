@@ -8,7 +8,7 @@ scan:
   # 对齐收口：原 scan.exclude 的 33 条规则全部迁入
   # unsupported 段（上游自测 / helper / pipeline 模块 / community 整目录等，
   # 带分组注释与理由），scan 只保留 root + include_extensions 两个键。
-  # unsupported 覆盖全部 308 个扫描文件：supported(45) + unsupported(263)。
+  # unsupported 覆盖全部 308 个扫描文件：supported(44) + unsupported(264)。
 
 # 新版 diffusers 需求 huggingface-hub>=1.23，huggingface-hub>=1.23 需求
 # transformers>=5.x，任何 transformers<5.x 的用例都无法跑通
@@ -826,26 +826,6 @@ supported:
       - --seed 42
     timeout_minutes: 60
 
-  # LCM 全量蒸馏（4 卡：teacher SDXL fp32 ~14GB 逐卡复制 + 学生分片，双卡太紧）。
-  # 纯 fp32（同其余全量条目：文本嵌入 dtype 流转与混精度冲突）。
-  - path: examples/consistency_distillation/train_lcm_distill_sdxl_wds.py
-    profile: diffusers-lcm-zero3
-    launcher: accelerate-deepspeed
-    runner: linux-aarch64-a2-4
-    npu_devices: '0,1,2,3'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_teacher_model stabilityai/stable-diffusion-xl-base-1.0
-      - --pretrained_vae_model_name_or_path madebyollin/sdxl-vae-fp16-fix
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256
-      - --max_train_steps 1
-      - --max_train_samples 1
-      - --dataloader_num_workers 1
-      - --train_shards_path_or_url "pipe:curl -L -s https://www.modelscope.cn/datasets/laion/conceptual-captions-12m-webdataset/resolve/master/data/{00000..00000}.tar"
-      - --train_batch_size 1
-    timeout_minutes: 240
-
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
 unsupported:
   # ===== Flax/JAX 系列 =====
@@ -1016,6 +996,14 @@ unsupported:
   # decoder + image encoder 组装 pipeline，依赖面最重；多卡 ZeRO-3 理论
   # 可分片但依赖多、未实测，暂不支持。
   - examples/kandinsky2_2/text_to_image/train_text_to_image_prior.py
+  # LCM 全量蒸馏：teacher + 学生 + EMA target 三张 SDXL unet 同时驻留显存。
+  # bf16 + --cast_teacher_unet 后静态仍 ~27.7GB（target_unet 不参与 cast），
+  # 加梯度 ~30GB/卡 > 29.5GB；ZeRO-2 参数逐卡复制、加卡无效；ZeRO-3 分片
+  # 又被 transformers 的 zero.Init 冻结模块 bug 打坏（teacher/target/文本
+  # 编码器全是冻结模块，同 CLIP max_position_embeddings=0 那个坑）。LoRA 版
+  # （supported）已覆盖该蒸馏链路。回归条件：transformers 修复 zero.Init 下
+  # 冻结模块的构造，或上游给 target_unet 提供 cast 选项。
+  - examples/consistency_distillation/train_lcm_distill_sdxl_wds.py
   # OOM：LoRA SDXL LCM 蒸馏在 a2-1（29.5GiB）forward 即 OOM（已分配 24.4GiB）。
   # DDP 不省单卡显存；ZeRO-3 又撞上游 bug——训练循环 L1358
   # `solver.ddim_step(...).to(unet.dtype)`，模型被 DeepSpeedEngine 包裹后无 .dtype。
