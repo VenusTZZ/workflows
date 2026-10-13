@@ -763,6 +763,16 @@ dest.mkdir(parents=True, exist_ok=True)
 snapshot_download(
     repo,
     local_dir=str(dest),
+    # Only the model components. Skip asset/ (README images + samples.txt that
+    # hf-mirror keeps timing out on) and the unused fp16 weight duplicates.
+    allow_patterns=[
+        "model_index.json",
+        "scheduler/*",
+        "tokenizer/*",
+        "text_encoder/*",
+        "transformer/*",
+        "vae/*",
+    ],
     ignore_patterns=["*.fp16.*", "*.bin", "*.ckpt"],
 )
 with open(os.environ["GITHUB_ENV"], "a") as fh:

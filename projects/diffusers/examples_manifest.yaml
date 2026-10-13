@@ -857,47 +857,47 @@ supported:
   #     - --max_train_steps 1
   #   timeout_minutes: 90
 
-  # # PixArt-α ControlNet 训练（T5 文本编码器；无硬编码 cuda，用 accelerate）。
-  # # 模型 PixArt-alpha/PixArt-XL-2-512x512 由 setup 预下到本地（${PIXART_MODEL_PATH}，
-  # # hf_transfer 并行 + 跳过用不上的 fp16 分片），run 步不占下载时间；数据集
-  # # fusing/fill50k 走 hf-mirror 在线取（均公开、非 gated）。脚本同级导入
-  # # pipeline_pixart_alpha_controlnet、仓库根相对导入
-  # # examples.research_projects.pixart.controlnet_pixart_alpha——在 run_example 的
-  # # cwd=仓库根 + PYTHONPATH=脚本目录下都能解析。--train_batch_size 默认 16，必须压
-  # # 到 1；--mixed_precision 默认 fp32，用 bf16 + gradient_checkpointing 压显存；
-  # # --report_to 默认 tensorboard（非 wandb）。
-  # - path: examples/research_projects/pixart/train_pixart_controlnet_hf.py
-  #   profile: diffusers-pixart
-  #   runner: linux-aarch64-a2-1
-  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-  #   overlay_args:
-  #     - --pretrained_model_name_or_path ${PIXART_MODEL_PATH}
-  #     - --dataset_name fusing/fill50k
-  #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --train_batch_size 1
-  #     - --gradient_checkpointing
-  #     - --mixed_precision bf16
-  #     - --max_train_steps 1
-  #   timeout_minutes: 120
-
-  # ReFiLL（reference-based inpainting）SD1.5-inpainting LoRA 微调。脚本无硬编码
-  # cuda（全程 accelerator.device，仅 :163 一处 no-op 的 empty_cache）。
-  # RealFillDataset 认死 <root>/ref/*.png + <root>/target/target.png +
-  # <root>/target/mask.png（缺任一 ValueError），由 setup 现场合成 fixture；模型用
-  # ${SD15_INPAINT_PATH}（9 通道 inpainting，profile 下）。
-  - path: examples/research_projects/realfill/train_realfill.py
-    profile: diffusers-realfill
+  # PixArt-α ControlNet 训练（T5 文本编码器；无硬编码 cuda，用 accelerate）。
+  # 模型 PixArt-alpha/PixArt-XL-2-512x512 由 setup 预下到本地（${PIXART_MODEL_PATH}，
+  # hf_transfer 并行 + 跳过用不上的 fp16 分片），run 步不占下载时间；数据集
+  # fusing/fill50k 走 hf-mirror 在线取（均公开、非 gated）。脚本同级导入
+  # pipeline_pixart_alpha_controlnet、仓库根相对导入
+  # examples.research_projects.pixart.controlnet_pixart_alpha——在 run_example 的
+  # cwd=仓库根 + PYTHONPATH=脚本目录下都能解析。--train_batch_size 默认 16，必须压
+  # 到 1；--mixed_precision 默认 fp32，用 bf16 + gradient_checkpointing 压显存；
+  # --report_to 默认 tensorboard（非 wandb）。
+  - path: examples/research_projects/pixart/train_pixart_controlnet_hf.py
+    profile: diffusers-pixart
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --pretrained_model_name_or_path ${SD15_INPAINT_PATH}
-      - --train_data_dir ${REALFILL_DATASET}
+      - --pretrained_model_name_or_path ${PIXART_MODEL_PATH}
+      - --dataset_name fusing/fill50k
       - --output_dir ${CI_OUTPUT_DIR}
       - --train_batch_size 1
       - --gradient_checkpointing
       - --mixed_precision bf16
       - --max_train_steps 1
-    timeout_minutes: 90
+    timeout_minutes: 120
+
+  # # ReFiLL（reference-based inpainting）SD1.5-inpainting LoRA 微调。脚本无硬编码
+  # # cuda（全程 accelerator.device，仅 :163 一处 no-op 的 empty_cache）。
+  # # RealFillDataset 认死 <root>/ref/*.png + <root>/target/target.png +
+  # # <root>/target/mask.png（缺任一 ValueError），由 setup 现场合成 fixture；模型用
+  # # ${SD15_INPAINT_PATH}（9 通道 inpainting，profile 下）。
+  # - path: examples/research_projects/realfill/train_realfill.py
+  #   profile: diffusers-realfill
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --pretrained_model_name_or_path ${SD15_INPAINT_PATH}
+  #     - --train_data_dir ${REALFILL_DATASET}
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --train_batch_size 1
+  #     - --gradient_checkpointing
+  #     - --mixed_precision bf16
+  #     - --max_train_steps 1
+  #   timeout_minutes: 90
 
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
 unsupported:
