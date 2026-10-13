@@ -29,6 +29,7 @@ SUPPORTED_PROFILES=(
   diffusers-controlnet-sdxl diffusers-llada2 diffusers-gligen diffusers-controlnet-wds
   diffusers-orpo-wds diffusers-sdxl-full diffusers-lcm-zero3
   diffusers-kandinsky-prior diffusers-multi-subject-inpaint diffusers-pixart
+  diffusers-realfill
 )
 profile_known=0
 for _p in "${SUPPORTED_PROFILES[@]}"; do
@@ -693,6 +694,78 @@ split.to_parquet(str(root / "test-00000-of-00001.parquet"))
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"MULTI_SUBJECT_INPAINT_DATASET={root}\n")
 print(f"prepared multi-subject inpainting fixture (train+test parquet) at {root}", flush=True)
+PY
+}
+
+setup_diffusers_realfill() {
+  # train_realfill.py 的 RealFillDataset 认死一个目录结构：
+  #   <root>/ref/*.png + <root>/target/target.png + <root>/target/mask.png
+  # 缺任一就直接 ValueError（:445）。这里现场合成一个最小 fixture（纯合成图，零下载）。
+  # 模型是 SD1.5-inpainting（同样 9 通道）。
+  install_example_stack
+  download_assets sd15-inpaint
+  python3 - <<'PY'
+import os
+from pathlib import Path
+
+from PIL import Image, ImageDraw
+
+size = 512
+root = Path(os.environ["GITHUB_WORKSPACE"]) / "realfill_fixture"
+(ref := root / "ref").mkdir(parents=True, exist_ok=True)
+(target := root / "target").mkdir(parents=True, exist_ok=True)
+
+
+def scene(seed):
+    img = Image.new("RGB", (size, size), (40 + seed % 160, 110, 150))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([80, 80, size - 80, size - 80], outline=(240, 240, 240), width=8)
+    draw.ellipse([180, 180, 330, 330], fill=(210, 90, 60))
+    return img
+
+
+for i in range(3):
+    scene(i).save(ref / f"ref{i}.png")
+scene(9).save(target / "target.png")
+mask = Image.new("L", (size, size), 0)
+ImageDraw.Draw(mask).rectangle([80, 80, size - 80, size - 80], fill=255)
+mask.save(target / "mask.png")
+
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"REALFILL_DATASET={root}\n")
+print(f"prepared realfill fixture at {root}", flush=True)
+PY
+}
+
+setup_diffusers_pixart() {
+  # PixArt-alpha/PixArt-XL-2-512x512 在 ModelScope 无镜像，只能走 hf-mirror。
+  # 它的 text_encoder 是 T5-XXL：脚本按默认（不带 --variant）加载，只会用 fp32
+  # 权重（4 分片 ~19GB），另有一套 fp16 分片（~9GB）用不上——预下时跳过 *.fp16.*
+  # 省掉一半。预下放在 setup（不占 run 步预算、带重试）并落到本地目录，run 步直接
+  # 读本地路径（避免 from_pretrained 的 model_info 网络抖动）；同时装 hf_transfer
+  # 走并行下载，剩余的数据集下载也能受益。
+  install_example_stack
+  if python -m pip install hf_transfer; then
+    export HF_HUB_ENABLE_HF_TRANSFER=1
+    echo "HF_HUB_ENABLE_HF_TRANSFER=1" >> "$GITHUB_ENV"
+  fi
+  PIXART_REPO="PixArt-alpha/PixArt-XL-2-512x512" python3 - <<'PY'
+import os
+from pathlib import Path
+
+from huggingface_hub import snapshot_download
+
+repo = os.environ["PIXART_REPO"]
+dest = Path(os.environ["GITHUB_WORKSPACE"]) / "pixart_model"
+dest.mkdir(parents=True, exist_ok=True)
+snapshot_download(
+    repo,
+    local_dir=str(dest),
+    ignore_patterns=["*.fp16.*", "*.bin", "*.ckpt"],
+)
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"PIXART_MODEL_PATH={dest}\n")
+print(f"pre-downloaded {repo} -> {dest}", flush=True)
 PY
 }
 

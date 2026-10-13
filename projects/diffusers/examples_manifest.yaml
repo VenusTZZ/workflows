@@ -8,7 +8,7 @@ scan:
   # 对齐收口：原 scan.exclude 的 33 条规则全部迁入
   # unsupported 段（上游自测 / helper / pipeline 模块 / community 整目录等，
   # 带分组注释与理由），scan 只保留 root + include_extensions 两个键。
-  # unsupported 覆盖全部 308 个扫描文件：supported(48) + unsupported(260)。
+  # unsupported 覆盖全部 308 个扫描文件：supported(49) + unsupported(259)。
 
 # 新版 diffusers 需求 huggingface-hub>=1.23，huggingface-hub>=1.23 需求
 # transformers>=5.x，任何 transformers<5.x 的用例都无法跑通
@@ -858,18 +858,20 @@ supported:
   #   timeout_minutes: 90
 
   # PixArt-α ControlNet 训练（T5 文本编码器；无硬编码 cuda，用 accelerate）。
-  # 模型 PixArt-alpha/PixArt-XL-2-512x512（含 T5）与数据集 fusing/fill50k 都走
-  # hf-mirror 在线取（均公开、非 gated）。脚本同级导入 pipeline_pixart_alpha_controlnet、
-  # 仓库根相对导入 examples.research_projects.pixart.controlnet_pixart_alpha——在
-  # run_example 的 cwd=仓库根 + PYTHONPATH=脚本目录下都能解析。--train_batch_size
-  # 默认 16，必须压到 1；--mixed_precision 默认 fp32，用 bf16 + gradient_checkpointing
-  # 压显存；--report_to 默认 tensorboard（非 wandb）。
+  # 模型 PixArt-alpha/PixArt-XL-2-512x512 由 setup 预下到本地（${PIXART_MODEL_PATH}，
+  # hf_transfer 并行 + 跳过用不上的 fp16 分片），run 步不占下载时间；数据集
+  # fusing/fill50k 走 hf-mirror 在线取（均公开、非 gated）。脚本同级导入
+  # pipeline_pixart_alpha_controlnet、仓库根相对导入
+  # examples.research_projects.pixart.controlnet_pixart_alpha——在 run_example 的
+  # cwd=仓库根 + PYTHONPATH=脚本目录下都能解析。--train_batch_size 默认 16，必须压
+  # 到 1；--mixed_precision 默认 fp32，用 bf16 + gradient_checkpointing 压显存；
+  # --report_to 默认 tensorboard（非 wandb）。
   - path: examples/research_projects/pixart/train_pixart_controlnet_hf.py
     profile: diffusers-pixart
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --pretrained_model_name_or_path PixArt-alpha/PixArt-XL-2-512x512
+      - --pretrained_model_name_or_path ${PIXART_MODEL_PATH}
       - --dataset_name fusing/fill50k
       - --output_dir ${CI_OUTPUT_DIR}
       - --train_batch_size 1
@@ -877,6 +879,25 @@ supported:
       - --mixed_precision bf16
       - --max_train_steps 1
     timeout_minutes: 120
+
+  # ReFiLL（reference-based inpainting）SD1.5-inpainting LoRA 微调。脚本无硬编码
+  # cuda（全程 accelerator.device，仅 :163 一处 no-op 的 empty_cache）。
+  # RealFillDataset 认死 <root>/ref/*.png + <root>/target/target.png +
+  # <root>/target/mask.png（缺任一 ValueError），由 setup 现场合成 fixture；模型用
+  # ${SD15_INPAINT_PATH}（9 通道 inpainting，profile 下）。
+  - path: examples/research_projects/realfill/train_realfill.py
+    profile: diffusers-realfill
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path ${SD15_INPAINT_PATH}
+      - --train_data_dir ${REALFILL_DATASET}
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --train_batch_size 1
+      - --gradient_checkpointing
+      - --mixed_precision bf16
+      - --max_train_steps 1
+    timeout_minutes: 90
 
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
 unsupported:
@@ -985,107 +1006,96 @@ unsupported:
   - examples/profiling/run_profiling.sh
   - examples/research_projects/flux_lora_quantization/compute_embeddings.py # GATED_MODEL
   - examples/research_projects/flux_lora_quantization/train_dreambooth_lora_flux_miniature.py # GATED_MODEL
-  # --device 的 choices 只有 cuda/cpu
+  - examples/research_projects/realfill/infer.py
+  - examples/research_projects/sd3_lora_colab/compute_embeddings.py # GATED_MODEL
+  - examples/server/server.py # GATED_MODEL
+  - examples/server-async/serverasync.py # GATED_MODEL
+  # device 只认 cuda/cpu
   - examples/community/cogvideox_ddim_inversion.py
+  - examples/research_projects/pixart/run_pixart_alpha_controlnet_pipeline.py
   # device_map="auto" + trust_remote_code
   - examples/discrete_diffusion/sample_llada2.py
   # colossalai（依赖 CUDA/NCCL）
   - examples/research_projects/colossalai/inference.py
   - examples/research_projects/colossalai/train_dreambooth_colossalai.py
-
-  # 上游 test_custom_diffusion.py 对 transformers>=4.57.5 直接 skip（"Size mismatch"）：
-  # line 874 token_embeds[x]=token_embeds[y]，新 transformers 把 modifier token
-  # <new1> 切成多个 token（[3,32]），与 initializer_token 的 [32] 维度不一致 →
-  # RuntimeError: expand。纯 transformers 版本不兼容，与 NPU 无关。
-  # 但新版 diffusers 刚需 transformers 5.x，无法降级
+  # ===== transformers 版本不兼容 ==================================================
+  # 上游 transformers 5.x 的 API 变动导致这些脚本无法兼容：
+  # 1) custom_diffusion：新 transformers 把 modifier token <new1> 切成多个 token，
+  #    与 initializer_token 的 [32] 维度不一致 → RuntimeError: expand
+  # 2) Lumina2/Z-Image/QwenImage/Krea：transformers 5.x 下文本编码器 attention
+  #    的 q_proj.view() 形状错 → RuntimeError
+  # 3) multi_token_textual_inversion：transformers 5.x 起 CLIPTextModel 不再有
+  #    .text_model 属性 → AttributeError
+  # diffusers 0.4X 必须 transformers 5.x，无法降级
   - examples/custom_diffusion/train_custom_diffusion.py
-  # run_diffuser_locomotion：import d4rl + gym，gym.make("hopper-medium-v2")；README
-  # 要求 gym==0.24.1 + free-mujoco-py + d4rl（MuJoCo 二进制，aarch64/py3.12 装不上）
-  - examples/reinforcement_learning/run_diffuser_locomotion.py
-  - examples/research_projects/autoencoder_rae/train_autoencoder_rae.py
-  # OTHER_BACKEND：intel_extension_for_pytorch / neural_compressor
-  - examples/research_projects/intel_opts/inference_bf16.py
-  - examples/research_projects/intel_opts/textual_inversion/textual_inversion_bf16.py
-  - examples/research_projects/intel_opts/textual_inversion_dfq/text2images.py
-  - examples/research_projects/intel_opts/textual_inversion_dfq/textual_inversion.py
-  # OTHER_BACKEND：onnxruntime training（ORT）
-  - examples/research_projects/onnxruntime/text_to_image/train_text_to_image.py
-  - examples/research_projects/onnxruntime/textual_inversion/textual_inversion.py
-  - examples/research_projects/onnxruntime/unconditional_image_generation/train_unconditional.py
-  # PixArt 不是 ORT。下面两条跟 train_pixart_controlnet_hf.py（已迁 supported）不同：
-  # run_pixart_alpha_controlnet_pipeline.py 是独立 demo——device 回退 CPU（cuda 不可用即
-  # cpu）、硬编码 images/0_7.jpg 输入输出路径、还要装 controlnet_aux + HEDdetector；.sh
-  # 只是启动壳（硬编码 MODEL_DIR/OUTPUT_DIR + --report_to=wandb），不单独可跑。
-  - examples/research_projects/pixart/run_pixart_alpha_controlnet_pipeline.py
-  - examples/research_projects/pixart/train_controlnet_hf_diffusers.sh
-  # OTHER_BACKEND：torch_xla（TPU）
-  - examples/research_projects/pytorch_xla/inference/flux/flux_inference.py
-  - examples/research_projects/pytorch_xla/inference/flux/flux_inference_spmd.py
-  - examples/research_projects/pytorch_xla/training/text_to_image/train_text_to_image_xla.py
-  # CUDA_DEP：infer.py 硬编码 cuda；train_realfill.py 另需自定义 realfill 数据集
-  - examples/research_projects/realfill/infer.py
-  - examples/research_projects/realfill/train_realfill.py
-  # GATED_MODEL + CUDA_DEP：SD3 需 gated；且用 bitsandbytes load_in_8bit + device_map（CUDA-only）
-  - examples/research_projects/sd3_lora_colab/compute_embeddings.py
-  # CUDA_DEP + GATED_MODEL：硬编码 cuda/mps（无 NPU 分支，L49-66）；模型为 SD3.5（gated）
-  - examples/server/server.py
-  # CUDA_DEP + GATED_MODEL：import 时即加载 SD3.5（Pipelines.py 无 cuda/mps 抛错）；且为常驻 HTTP 服务
-  - examples/server-async/serverasync.py
-  # LCM 全量蒸馏：teacher + 学生 + EMA target 三张 SDXL unet 同时驻留显存。
-  # bf16 + --cast_teacher_unet 后静态仍 ~27.7GB（target_unet 不参与 cast），
-  # 加梯度 ~30GB/卡 > 29.5GB；ZeRO-2 参数逐卡复制、加卡无效；ZeRO-3 分片
-  # 又被 transformers 的 zero.Init 冻结模块 bug 打坏（teacher/target/文本
-  # 编码器全是冻结模块，同 CLIP max_position_embeddings=0 那个坑）。LoRA 版
-  # （supported）已覆盖该蒸馏链路。回归条件：transformers 修复 zero.Init 下
-  # 冻结模块的构造，或上游给 target_unet 提供 cast 选项。
-  - examples/consistency_distillation/train_lcm_distill_sdxl_wds.py
-  # scheduled_huber 全量版（research fork）：fork 缺 canonical :1104 的
-  # `.to(dtype=weight_dtype)`，而 DS 的 bf16/fp16 不做 autocast——输入 fp32 与
-  # bf16 权重在 conv_in 直接 dtype 冲突（Input float vs bias BFloat16），修它
-  # 必须改源码；纯 fp32 下 DS 初始化平坦缓冲 ~19GB 叠加 base 后 38GB > 29.5GB
-  # OOM，且该缓冲每卡全量（2 卡实测未减半）→ 加卡无效。canonical 的
-  # t2i_sdxl（support，普通 MSE）已覆盖同链路。回归条件：上游给 fork 补上
-  # weight_dtype cast / .to(dtype=weight_dtype)，或删除该 research 变体。
-  - examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image_sdxl.py
-  # OOM：LoRA SDXL LCM 蒸馏在 a2-1（29.5GiB）forward 即 OOM（已分配 24.4GiB）。
-  # DDP 不省单卡显存；ZeRO-3 又撞上游 bug——训练循环 L1358
-  # `solver.ddim_step(...).to(unet.dtype)`，模型被 DeepSpeedEngine 包裹后无 .dtype。
-  - examples/consistency_distillation/train_lcm_distill_lora_sdxl.py
-  # BUG：final validation 用 AutoencoderKL.from_pretrained(output_dir) 加载到 CPU，
-  # 未 .to(accelerator.device)，NPU 上 conv 报 "weight is on cpu, different from ...
-  # npu:0"；该路径无条件执行，去掉 --validation_image 还会 enumerate(None) 报错
-  - examples/research_projects/autoencoderkl/train_autoencoderkl.py
-  # INCOMPAT：transformers 5.x 下文本编码器 attention 的 q_proj.view() 形状错
-  # （Lumina2 的 Gemma2 / Z-Image 的 Qwen3 / Qwen-Image 的 Qwen3-VL）：
-  # RuntimeError shape '[1, N, -1, H]' is invalid for input of size ...。
-  # diffusers 0.4X 必须 transformers 5.x，无法降级。
   - examples/dreambooth/train_dreambooth_lora_lumina2.py
   - examples/dreambooth/train_dreambooth_lora_z_image.py
   - examples/dreambooth/train_dreambooth_lora_qwenimage21.py
   - examples/dreambooth/train_dreambooth_lora_qwenimage21_img2img.py
   - examples/dreambooth/train_dreambooth_lora_krea2.py # GATED_MODEL
-  # INCOMPAT：transformers 5.x 起 CLIPTextModel 不再有 .text_model 属性（维护中的
-  # 例子都改成 `text_encoder.text_model if hasattr(text_encoder, "text_model") else
-  # text_encoder` 兼容），而此脚本 :636-638 硬编码 text_encoder.text_model.encoder/
-  # .final_layer_norm/.embeddings，没有兼容分支 → AttributeError。diffusers 0.4X
-  # 必须 transformers 5.x，不能降级，也不能改脚本。标准 textual_inversion 已用兼容
-  # 写法并 support，这条是未跟上的多向量变体。
   - examples/research_projects/multi_token_textual_inversion/textual_inversion.py
-  # OOM：Qwen-Image（20B）+ ZeRO-3 在 a2-4 上 host OOM（Signal 9 SIGKILL，内核
-  # OOM killer）；去掉 ds_zero3.json 的 offload_param 后仍 OOM（DeepSpeed 初始化
-  # 仍要把整个模型 + 文本编码器放到 CPU）
+  # ===== OOM（显存溢出） ==========================================================
+  # 这些用例在 CI 的 a2-1/a2-4 等规格上因显存不足而 OOM 崩溃：
+  # 1) LCM 全量蒸馏：teacher + 学生 + EMA target 三张 SDXL unet 同时驻留显存，
+  #    bf16 后仍 ~27.7GB，加梯度 >30GB/卡 > 29.5GB；ZeRO-3 又被 transformers
+  #    的 zero.Init 冻结模块 bug 打坏
+  # 2) scheduled_huber 全量版：fork 缺 .to(dtype=weight_dtype)，DS 的 bf16/fp16
+  #    不做 autocast → input fp32 与 bf16 权重在 conv_in 直接 dtype 冲突；
+  #    纯 fp32 下 DS 初始化平坦缓冲 ~19GB 叠加 base 后 38GB > 29.5GB OOM
+  # 3) LoRA SDXL LCM 蒸馏：forward 即 OOM（已分配 24.4GiB），DDP 不省单卡显存；
+  #    ZeRO-3 又撞上游 bug——训练循环中 solver.ddim_step(...).to(unet.dtype)，
+  #    模型被 DeepSpeedEngine 包裹后无 .dtype
+  # 4) Qwen-Image（20B）+ ZeRO-3：host OOM（Signal 9 SIGKILL，内核 OOM killer）；
+  #    去掉 offload_param 后仍 OOM（DeepSpeed 初始化仍要把整个模型+文本编码器放到 CPU）
+  - examples/consistency_distillation/train_lcm_distill_sdxl_wds.py
+  - examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image_sdxl.py
+  - examples/consistency_distillation/train_lcm_distill_lora_sdxl.py
   - examples/dreambooth/train_dreambooth_lora_qwen_image.py
-  # SANA-Sprint 蒸馏：卡在 torch_npu 算子缺口
-  # SCM 蒸馏损失硬依赖 torch.func.jvp（:1425，jvp=True 写死、无参数可关），
-  # 而 NPU 的 matmul(linear) 未实现前向 AD：NotImplementedError "Trying to use
-  # forward AD with matmul ... not been implemented"。回归条件：torch_npu 补
-  # matmul 的前向 AD，或上游提供非 jvp 的蒸馏实现。
+  # ===== NPU 算子/功能缺口 =======================================================
+  # 这些用例需要 NPU 尚未实现的 PyTorch 功能：
+  # SANA-Sprint 蒸馏：SCM 蒸馏损失硬依赖 torch.func.jvp（前向自动微分），
+  # 而 NPU 的 matmul(linear) 未实现前向 AD → NotImplementedError
+  # 回归条件：torch_npu 补 matmul 的前向 AD，或上游提供非 jvp 的蒸馏实现
   - examples/research_projects/sana/train_sana_sprint_diffusers.py
-  # =====================================================================
-  # ===== 2026-10-08 收口：以下各组自 scan.exclude 迁入，
-  # ===== scan 段自此只保留 root + include_extensions。
-  # =====================================================================
+  # ===== 代码BUG ================================================================
+  # 这些用例存在明确的代码缺陷，修复后可恢复：
+  # autoencoderkl：final validation 用 AutoencoderKL.from_pretrained(output_dir)
+  # 加载到 CPU，未 .to(accelerator.device)，NPU 上 conv 报 "weight is on cpu,
+  # different from ... npu:0"；该路径无条件执行，去掉 --validation_image 还会
+  # enumerate(None) 报错
+  - examples/research_projects/autoencoderkl/train_autoencoderkl.py
+  # ===== 外部依赖/环境不可用 =====
+  # 这些用例依赖 CI 环境中无法安装或不可用的外部依赖：
+  # 1) run_diffuser_locomotion：import d4rl + gym，gym.make("hopper-medium-v2")；
+  #    README 要求 gym==0.24.1 + free-mujoco-py + d4rl（MuJoCo 二进制，
+  #    aarch64/py3.12 装不上）
+  # 2) train_controlnet_hf_diffusers.sh：pixart controlnet 的启动脚本，
+  #    非标准训练脚本，依赖特定环境配置
+  # 3) autoencoder_rae：需进一步分析具体失败原因（文件名暗示 RAE 自编码器训练）
+  - examples/reinforcement_learning/run_diffuser_locomotion.py
+  - examples/research_projects/pixart/train_controlnet_hf_diffusers.sh
+  - examples/research_projects/autoencoder_rae/train_autoencoder_rae.py
+  # ===== OTHER_BACKEND（其他训练后端） =====
+  # 这些用例使用非 PyTorch 原生训练后端，昇腾 NPU 不支持：
+  # 1) intel_extension_for_pytorch / neural_compressor：Intel 针对 Xeon/Core Ultra/
+  #    Intel GPU/Gaudi 的扩展，不是昇腾 NPU 后端
+  # 2) onnxruntime training（ORT）：ORT-Trainer 原生只深度适配 NVIDIA CUDA 和
+  #    Intel 硬件，昇腾 NPU 无 ORT 训练后端
+  # 3) torch_xla（TPU）：Google TPU 专用后端，与昇腾 NPU 无关
+  - examples/research_projects/intel_opts/inference_bf16.py
+  - examples/research_projects/intel_opts/textual_inversion/textual_inversion_bf16.py
+  - examples/research_projects/intel_opts/textual_inversion_dfq/text2images.py
+  - examples/research_projects/intel_opts/textual_inversion_dfq/textual_inversion.py
+  - examples/research_projects/onnxruntime/text_to_image/train_text_to_image.py
+  - examples/research_projects/onnxruntime/textual_inversion/textual_inversion.py
+  - examples/research_projects/onnxruntime/unconditional_image_generation/train_unconditional.py
+  - examples/research_projects/pytorch_xla/inference/flux/flux_inference.py
+  - examples/research_projects/pytorch_xla/inference/flux/flux_inference_spmd.py
+  - examples/research_projects/pytorch_xla/training/text_to_image/train_text_to_image_xla.py
 
+  # =====================================================================
+  # ===== 工具类套件
+  # =====================================================================
   # 上游自测与 pytest 基础设施（test_*.py / conftest.py），非可守卫 example。
   - examples/advanced_diffusion_training/test_dreambooth_lora_flux_advanced.py
   - examples/conftest.py
