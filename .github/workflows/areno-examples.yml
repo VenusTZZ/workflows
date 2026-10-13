@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       target_ref:
-        description: 要测的 inclusionAI/AReno 分支/tag/SHA（留空=上游最新 release）
+        description: Branch, tag, or SHA to test (empty = latest upstream release)
         required: false
         default: ''
         type: string
