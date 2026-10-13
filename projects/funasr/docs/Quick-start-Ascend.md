@@ -119,7 +119,7 @@ count: 1
 
 ## 安装 FunASR
 
-### 从源码安装
+### 从源码安装（可选）
 
 <!-- 工作流注入的 UPSTREAM_REF（最新 release tag）通过这个隐藏的 #test-setup 捕获并注入到下方 install 命令中-->
 <!--
@@ -154,9 +154,10 @@ uv pip install funasr
 python -c "import funasr; print('funasr', funasr.__version__)"
 ```
 
-输出结果类似如下（开头是 FunASR 对音频后端的提示，`funasr ...` 为版本号）：
+输出结果类似如下：
 
 ```shell #test-result id="funasr-install-binary" 
+Notice: ffmpeg is not installed. torchaudio is used to load audio
 ...
 funasr ...
 ```
