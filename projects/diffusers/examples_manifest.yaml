@@ -823,29 +823,28 @@ supported:
   #     - --seed 42
   #   timeout_minutes: 60
 
-  # SANA-Sprint 蒸馏训练（1.6B，teacher 本地预下）。数据走自造 parquet：
-  # 脚本 __getitem__ 把 item["image"] 当原始 bytes 用 Image.open(io.BytesIO)，
-  # 而上游数据集（brivangl/midjourney-v6-llava）的 image 是 HF Image 特征、被
-  # datasets 自动解码成 PIL 会崩——本地 parquet 的 image 列是纯 binary，不触发
-  # 解码。dataset_name=parquet + file_path 直达本地文件。persistent_workers
-  # 要求 workers>0，必须传 1。
-  - path: examples/research_projects/sana/train_sana_sprint_diffusers.py
-    profile: diffusers-sana
-    runner: linux-aarch64-a2-1
+  # Qwen-Image 2.1 LoRA DreamBooth（20B MMDiT + Qwen3-VL 文本编码器）。8 卡 +
+  # ZeRO-3 是唯一可能：ZeRO-2 参数复制 40GB/卡装不下；ZeRO-3 需宿主暂存
+  # ~56GB（bf16），且冻结文本编码器可能被 stage 3 的 zero.Init 打坏（同 SDXL
+  # CLIP 坑）——本轮就是验证这两道墙。
+  - path: examples/dreambooth/train_dreambooth_lora_qwenimage21.py
+    profile: diffusers-qwen-image
+    launcher: accelerate-deepspeed-zero3
+    runner: linux-aarch64-a2-8
+    npu_devices: '0,1,2,3,4,5,6,7'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --pretrained_model_name_or_path ${SANA_SPRINT_TEACHER_PATH}
-      - --dataset_name parquet
-      - --file_path ${SANA_FIXTURE_PARQUET}
+      - --pretrained_model_name_or_path Qwen/Qwen-Image-2.1
+      - --instance_data_dir ${FIXTURE_DIR}/images
+      - --instance_prompt "a photo of sks dog"
       - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 512
+      - --resolution 256
       - --train_batch_size 1
-      - --gradient_accumulation_steps 1
       - --gradient_checkpointing
+      - --cache_latents
       - --mixed_precision bf16
-      - --dataloader_num_workers 1
       - --max_train_steps 1
-    timeout_minutes: 60
+    timeout_minutes: 300
 
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
 unsupported:
@@ -1047,6 +1046,12 @@ unsupported:
   # OOM killer）；去掉 ds_zero3.json 的 offload_param 后仍 OOM（DeepSpeed 初始化
   # 仍要把整个模型 + 文本编码器放到 CPU）
   - examples/dreambooth/train_dreambooth_lora_qwen_image.py
+  # SANA-Sprint 蒸馏：卡在 torch_npu 算子缺口
+  # SCM 蒸馏损失硬依赖 torch.func.jvp（:1425，jvp=True 写死、无参数可关），
+  # 而 NPU 的 matmul(linear) 未实现前向 AD：NotImplementedError "Trying to use
+  # forward AD with matmul ... not been implemented"。回归条件：torch_npu 补
+  # matmul 的前向 AD，或上游提供非 jvp 的蒸馏实现。
+  - examples/research_projects/sana/train_sana_sprint_diffusers.py
   # =====================================================================
   # ===== 2026-10-08 收口：以下各组自 scan.exclude 迁入，
   # ===== scan 段自此只保留 root + include_extensions。
@@ -1241,8 +1246,6 @@ unsupported:
   - examples/community/unclip_image_interpolation.py
   - examples/community/unclip_text_interpolation.py
   - examples/community/wildcard_stable_diffusion.py
-  # Qwen-Image 2.1 新增变体（上游 0.41 新增）：同
-  # train_dreambooth_lora_qwen_image（上方 OOM 组）的 20B 级模型，
-  # 单卡 CI 不可行。
-  - examples/dreambooth/train_dreambooth_lora_qwenimage21.py
+  # Qwen-Image 2.1 img2img 变体：同 20B 级，等 t2i 变体（supported，8 卡
+  # ZeRO-3）验证后再带上。
   - examples/dreambooth/train_dreambooth_lora_qwenimage21_img2img.py
