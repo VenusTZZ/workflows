@@ -784,46 +784,24 @@ supported:
   #     - --max_train_steps 1
   #     - --checkpointing_steps 9999
   #   timeout_minutes: 60
-  # scheduled_huber 全量版（数据集 naruto）。bf16：DS 初始化的平坦缓冲在 fp32 下
-  # ~19GB 且不随卡数减半（2 卡实测），fp32 已 OOM；bf16 后缓冲与 unet 均减半
-  # （DS 维护 fp32 master），总量 ~19GB。同构的 t2i_sdxl（fp32）已跑绿。
-  - path: examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image_sdxl.py
-    profile: diffusers-sdxl-full
-    launcher: accelerate-deepspeed
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
-      - --variant fp16
-      - --dataset_name lambdalabs/naruto-blip-captions
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256 --center_crop --random_flip
-      - --train_batch_size 1
-      - --gradient_checkpointing
-      - --mixed_precision bf16
-      - --max_train_steps 1
-      - --checkpointing_steps 9999
-    timeout_minutes: 60
-
-  # kandinsky prior 全量训练（naruto）。只训 prior，CLIP 双塔冻结，图像嵌入
-  # 循环内现算（无 Arrow 往返）。bf16 + ZeRO-2：静态 ~8GB/卡，富余。prior 仓
-  # 各组件按需拉 ~9GB，收尾无条件组装完整 pipeline 再拉 decoder 仓 9.8GB
-  # （CPU 上组装保存，不占卡）→ 长 timeout。
-  - path: examples/kandinsky2_2/text_to_image/train_text_to_image_prior.py
-    profile: diffusers-kandinsky-prior
-    launcher: accelerate-deepspeed
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --dataset_name lambdalabs/naruto-blip-captions
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 512
-      - --train_batch_size 1
-      - --mixed_precision bf16
-      - --max_train_steps 1
-    timeout_minutes: 240
+  # # kandinsky prior 全量训练（naruto）。只训 prior，CLIP 双塔冻结，图像嵌入
+  # # 循环内现算（无 Arrow 往返）。bf16 + ZeRO-2：静态 ~8GB/卡，富余。prior 仓
+  # # 各组件按需拉 ~9GB，收尾无条件组装完整 pipeline 再拉 decoder 仓 9.8GB
+  # # （CPU 上组装保存，不占卡）→ 长 timeout。
+  # - path: examples/kandinsky2_2/text_to_image/train_text_to_image_prior.py
+  #   profile: diffusers-kandinsky-prior
+  #   launcher: accelerate-deepspeed
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0,1'
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --dataset_name lambdalabs/naruto-blip-captions
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --resolution 512
+  #     - --train_batch_size 1
+  #     - --mixed_precision bf16
+  #     - --max_train_steps 1
+  #   timeout_minutes: 240
   # # InstructPix2Pix SDXL 全量（同上，数据集 fusing/instructpix2pix-1000-samples）
   # - path: examples/instruct_pix2pix/train_instruct_pix2pix_sdxl.py
   #   profile: diffusers-sdxl-full
@@ -844,6 +822,30 @@ supported:
   #     - --conditioning_dropout_prob 0.05
   #     - --seed 42
   #   timeout_minutes: 60
+
+  # SANA-Sprint 蒸馏训练（1.6B，teacher 本地预下）。数据走自造 parquet：
+  # 脚本 __getitem__ 把 item["image"] 当原始 bytes 用 Image.open(io.BytesIO)，
+  # 而上游数据集（brivangl/midjourney-v6-llava）的 image 是 HF Image 特征、被
+  # datasets 自动解码成 PIL 会崩——本地 parquet 的 image 列是纯 binary，不触发
+  # 解码。dataset_name=parquet + file_path 直达本地文件。persistent_workers
+  # 要求 workers>0，必须传 1。
+  - path: examples/research_projects/sana/train_sana_sprint_diffusers.py
+    profile: diffusers-sana
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path ${SANA_SPRINT_TEACHER_PATH}
+      - --dataset_name parquet
+      - --file_path ${SANA_FIXTURE_PARQUET}
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --resolution 512
+      - --train_batch_size 1
+      - --gradient_accumulation_steps 1
+      - --gradient_checkpointing
+      - --mixed_precision bf16
+      - --dataloader_num_workers 1
+      - --max_train_steps 1
+    timeout_minutes: 60
 
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
 unsupported:
@@ -1020,6 +1022,14 @@ unsupported:
   # （supported）已覆盖该蒸馏链路。回归条件：transformers 修复 zero.Init 下
   # 冻结模块的构造，或上游给 target_unet 提供 cast 选项。
   - examples/consistency_distillation/train_lcm_distill_sdxl_wds.py
+  # scheduled_huber 全量版（research fork）：fork 缺 canonical :1104 的
+  # `.to(dtype=weight_dtype)`，而 DS 的 bf16/fp16 不做 autocast——输入 fp32 与
+  # bf16 权重在 conv_in 直接 dtype 冲突（Input float vs bias BFloat16），修它
+  # 必须改源码；纯 fp32 下 DS 初始化平坦缓冲 ~19GB 叠加 base 后 38GB > 29.5GB
+  # OOM，且该缓冲每卡全量（2 卡实测未减半）→ 加卡无效。canonical 的
+  # t2i_sdxl（support，普通 MSE）已覆盖同链路。回归条件：上游给 fork 补上
+  # weight_dtype cast / .to(dtype=weight_dtype)，或删除该 research 变体。
+  - examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image_sdxl.py
   # OOM：LoRA SDXL LCM 蒸馏在 a2-1（29.5GiB）forward 即 OOM（已分配 24.4GiB）。
   # DDP 不省单卡显存；ZeRO-3 又撞上游 bug——训练循环 L1358
   # `solver.ddim_step(...).to(unet.dtype)`，模型被 DeepSpeedEngine 包裹后无 .dtype。
@@ -1037,12 +1047,6 @@ unsupported:
   # OOM killer）；去掉 ds_zero3.json 的 offload_param 后仍 OOM（DeepSpeed 初始化
   # 仍要把整个模型 + 文本编码器放到 CPU）
   - examples/dreambooth/train_dreambooth_lora_qwen_image.py
-  # DATA_FORMAT：脚本 __getitem__ 把 item["image"] 当原始 bytes 做
-  # Image.open(io.BytesIO(...))，但 brivangl/midjourney-v6-llava 的 image 是 HF
-  # Image 特征、被 datasets 自动解码成 PIL → TypeError: a bytes-like object is
-  # required, not 'JpegImageFile'。需改脚本或自造二进制 image 列的 parquet。
-  - examples/research_projects/sana/train_sana_sprint_diffusers.py
-
   # =====================================================================
   # ===== 2026-10-08 收口：以下各组自 scan.exclude 迁入，
   # ===== scan 段自此只保留 root + include_extensions。
@@ -1115,7 +1119,7 @@ unsupported:
   - examples/server-async/utils/wrappers.py
   - examples/vqgan/discriminator.py
   # 转换 / 数据预处理 / README 式启动脚本：纯配套工具，非训练入口
-  # （sana_sprint 的 .sh 是 README 式下载+启动指南，其 .py 见上方 DATA_FORMAT）。
+  # （sana_sprint 的 .sh 是 README 式下载+启动指南，其 .py 已 supported）。
   - examples/cosmos/create_prompts_for_gr1_dataset.py
   - examples/cosmos/download_and_preprocess_datasets.sh
   - examples/dreambooth/convert_to_imagefolder.py

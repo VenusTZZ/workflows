@@ -416,7 +416,6 @@ declare -A PROFILE_ASSETS=(
   [diffusers-lcm]="sd15"
   [diffusers-cogvideo]="cogvideo"
   [diffusers-cogvideo-i2v]="cogvideo-dataset"
-  [diffusers-sana]="sana-sprint"
 )
 
 # fusing/fill50k is a script-based dataset, so the controlnet examples need it.
@@ -586,6 +585,52 @@ with tarfile.open(tar_path, "w") as tf:
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"ORPO_WDS_SHARDS={tar_path}\n")
 print(f"prepared {num_samples}-sample orpo webdataset shard at {tar_path}", flush=True)
+PY
+}
+
+# sana (sprint distill): teacher from ModelScope/hf-mirror, plus a local parquet
+# fixture. The script's __getitem__ does Image.open(io.BytesIO(item["image"])),
+# and the upstream dataset's image column is auto-decoded to PIL by datasets
+# (TypeError). A hand-built parquet keeps "image" as plain binary so datasets
+# returns bytes. Columns must be exactly llava (str) + image (bytes).
+setup_diffusers_sana() {
+  install_example_stack
+  download_assets sana-sprint
+  python3 - <<'PY'
+import io
+import os
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+from PIL import Image, ImageDraw
+
+num_samples = 64
+size = 512
+root = os.path.join(os.environ["GITHUB_WORKSPACE"], "sana_fixture")
+os.makedirs(root, exist_ok=True)
+path = os.path.join(root, "sana_train.parquet")
+
+prompts = []
+images = []
+for i in range(num_samples):
+    image = Image.new("RGB", (size, size), (60 + i % 180, 120, 160))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle([64, 64, size - 64, size - 64], outline=(240, 240, 240), width=6)
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG")
+    images.append(buf.getvalue())
+    prompts.append(f"a synthetic line drawing scene {i}")
+
+table = pa.table(
+    {
+        "llava": pa.array(prompts, type=pa.string()),
+        "image": pa.array(images, type=pa.binary()),
+    }
+)
+pq.write_table(table, path)
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"SANA_FIXTURE_PARQUET={path}\n")
+print(f"prepared {num_samples}-sample sana fixture parquet at {path}", flush=True)
 PY
 }
 
