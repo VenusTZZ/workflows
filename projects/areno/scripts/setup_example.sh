@@ -159,9 +159,9 @@ install_pi_toolchain() {
 # 已知 profile。当前各 profile 共用同一套准备（下面的 AReno NPU 源码构建）；
 # 需要额外依赖的 profile 在这里按 PROFILE 分支。pi 已不支持（QLoRA 为 CUDA-only），
 # 保留 pi_npu 与 install_pi_toolchain 以备将来试非 QLoRA 变体。
-SUPPORTED_PROFILES="bash_game_npu codebreaker_npu coding_npu duelgrid_npu shopping_npu terminal_hacking_npu tictactoe_npu tictactoe_no_tool_npu math_npu alpaca_npu tictactoe_image_npu ave_event_recognition_npu pi_npu"
+SUPPORTED_PROFILES="bash_game_npu codebreaker_npu coding_npu duelgrid_npu shopping_npu terminal_hacking_npu tictactoe_npu tictactoe_no_tool_npu math_npu alpaca_npu pi_npu"
 case "$PROFILE" in
-  bash_game_npu | codebreaker_npu | coding_npu | duelgrid_npu | shopping_npu | terminal_hacking_npu | tictactoe_npu | tictactoe_no_tool_npu | math_npu | alpaca_npu | tictactoe_image_npu | ave_event_recognition_npu | pi_npu) ;;
+  bash_game_npu | codebreaker_npu | coding_npu | duelgrid_npu | shopping_npu | terminal_hacking_npu | tictactoe_npu | tictactoe_no_tool_npu | math_npu | alpaca_npu | pi_npu) ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -179,111 +179,7 @@ python -m pip install -q pytest
 # NPU 依赖列了 openai，但镜像可能已满足 openai 而未带其 httpx 依赖，故两个都装。
 python -m pip install -q openai httpx
 
-ensure_media_deps() {
-  # requirements/default.txt 的多模态媒体栈在 requirements/npu.txt 里被有意省略
-  # （npu.txt 只收公共依赖）。但 VL 的 Fast 图像处理器
-  # （Qwen2VLImageProcessorFast，见 checkpoint 的 preprocessor_config.json）需要
-  # torchvision：缺它 AutoProcessor.from_pretrained 直接抛错，被
-  # load_processor 吞成 None，随后报 "multimodal rows require a checkpoint
-  # processor"。音视频还要 av / librosa / soundfile。dataset_generator 用 Pillow。
-  # 镜像里带的 torchvision 是残缺 stub：import 能过，但 torchvision.transforms
-  # 不是包、没有 transforms.v2，pip 又以为依赖已满足不会装真包。故强制重装与当前
-  # torch 配对的真 torchvision（--no-deps 只动它自己，避免连带换掉 torch/numpy）。
-  local torch_minor tv_ver
-  torch_minor="$(python -c 'import torch; print(torch.__version__.split("+")[0].split(".")[1])')"
-  tv_ver="0.$((torch_minor + 15)).0"  # torch 2.N <-> torchvision 0.(N+15)（2.6->0.21 ... 2.10->0.25）
-  echo "installing torchvision ${tv_ver} to match the local torch"
-  python -m pip install -q --force-reinstall --no-deps "torchvision==${tv_ver}"
-  python -m pip install -q Pillow "$@"
-  # 功能校验：transformers 的 Fast 图像处理器用的是 torchvision.transforms.v2；
-  # 不要依赖 torchvision.__version__（残缺 stub 没这个属性）。
-  python - <<'PY'
-import torch
-import torchvision
-import torchvision.transforms.v2  # noqa: F401 - transformers Fast 图像处理器依赖
-
-print("media deps ok: torch", torch.__version__, "torchvision", getattr(torchvision, "__version__", "n/a"), torchvision.__file__)
-PY
-}
-
-install_vl_image_deps() {
-  # tictactoe_image：图像路径只需 Pillow + torchvision。
-  ensure_media_deps
-}
-
-install_fla_attention() {
-  # Qwen3.5 是 GatedDeltaNet 混合线性注意力模型：qwen3_5/model.py 的推理路径
-  # 无条件 _require_fla_gdn()，没有 fla 直接 ImportError。NPU 的自研 accel.npu.seg_la
-  # 只服务 lightning-attn（accel/ops.py:151），不覆盖 GDN。故按 npu.txt 的 pin 装
-  # flash-linear-attention（仓库里 install_areno 为 dense 底座把它跳过了）。
-  python -m pip install -q \
-    "flash-linear-attention @ git+https://github.com/fla-org/flash-linear-attention.git@e52dbc0ea19d3a40d7ab7f9eed855d2b473994d2"
-  # 校验 areno 判 _HAVE_FLA_GDN 用的同一组导入（dynamo_wrappers.py:17-19）；
-  # 只 import fla 不够——顶层能进、fla.ops.gated_delta_rule 未必能进（多半卡在 triton）。
-  python - <<'PY'
-from fla.modules.convolution import causal_conv1d  # noqa: F401
-from fla.ops.gated_delta_rule import (  # noqa: F401
-    chunk_gated_delta_rule,
-    fused_recurrent_gated_delta_rule,
-)
-
-print("flash-linear-attention GDN imports ok")
-PY
-}
-
-install_ave_media_deps() {
-  # ave_event_recognition：音视频路径需 av（解容器）/ librosa（重采样）/
-  # soundfile（areno 直接 import）以及抽音轨用的 ffmpeg。
-  ensure_media_deps "av>=12" "librosa>=0.11" "soundfile>=0.13"
-  command -v ffmpeg >/dev/null 2>&1 || {
-    apt-get update -qq >/dev/null
-    apt-get install -y -qq ffmpeg >/dev/null
-  }
-  command -v ffmpeg
-}
-
-stage_ave_fixture() {
-  # 上游示例的数据是整包 AVE（数十 GB 视频），CI 用一段 10s 合成音视频 +
-  # 单行 manifest 代替，让 loader/agent/reward/train 全链路照常跑。judge 由
-  # run_example.sh 的存根服务提供（引擎不校验奖励数值、只认退出码）。
-  local dir="$GITHUB_WORKSPACE/ave-fixture"
-  local manifest="$dir/manifest.jsonl"
-  if [[ ! -f "$manifest" ]]; then
-    mkdir -p "$dir"
-    ffmpeg -nostdin -loglevel error -y \
-      -f lavfi -i "testsrc=size=224x224:rate=8:duration=10" \
-      -f lavfi -i "sine=frequency=440:sample_rate=16000:duration=10" \
-      -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest "$dir/clip.mp4"
-    ffmpeg -nostdin -loglevel error -y -i "$dir/clip.mp4" -vn -ac 1 -ar 16000 "$dir/clip.wav"
-    python - "$dir" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-root = Path(sys.argv[1]).resolve()
-row = {
-    "id": "ci-ave-00000",
-    "dataset_root": str(root),
-    "split": "train",
-    "video_id": "ci-ave",
-    "video_path": "clip.mp4",
-    "audio_path": "clip.wav",
-    "event_classes": ["Speech"],
-    "qualities": ["good"],
-    "start_seconds": 0.0,
-    "end_seconds": 10.0,
-}
-(root / "manifest.jsonl").write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
-print(f"wrote ave fixture manifest {root / 'manifest.jsonl'}")
-PY
-  fi
-  echo "AVE_DATASET=$manifest" >> "$GITHUB_ENV"
-}
-
 # 逐 profile 的额外工具链（AReno 之外的外部依赖）。
 case "$PROFILE" in
-  bash_game_npu | terminal_hacking_npu) install_fla_attention ;;
-  tictactoe_image_npu) install_vl_image_deps; install_fla_attention ;;
-  ave_event_recognition_npu) install_ave_media_deps; stage_ave_fixture ;;
   pi_npu) install_pi_toolchain ;;
 esac
