@@ -141,17 +141,22 @@ uv pip install -e .
 `<ref>` 为安装的最新的 release tag。
 ```
 
+<!--
+```shell #test-setup
+uv pip uninstall funasr -y
+```
+-->
+
 ### 使用 pip 进行安装
 
-```shell
+```shell #test id="funasr-install-binary"
 uv pip install funasr
 python -c "import funasr; print('funasr', funasr.__version__)"
 ```
 
 输出结果类似如下（开头是 FunASR 对音频后端的提示，`funasr ...` 为版本号）：
 
-```text
-Notice: ffmpeg is not installed. torchaudio is used to load audio
+```shell #test-result id="funasr-install-binary" 
 ...
 funasr ...
 ```
