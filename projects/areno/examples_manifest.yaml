@@ -10,8 +10,8 @@ version: 1
 # example 文件 import 的共享模块」（工具依赖）统一挪到末尾；README /
 # dataset.jsonl / 图片资产不进扫描。supported 与 unsupported 的区分是「本看护
 # 体系是否调度它」，不代表昇腾原理上能否运行；unsupported 里的硬阻塞（NPU 未
-# 支持 / 外部依赖无法自包含）在注释中标明。构建按上游 NPU 文档的栈：CANN 9.0.0
-# + torch 2.10.0+cpu + torch_npu 2.10.0.post2，源码安装现场编译
+# 支持 / 外部依赖无法自包含）在注释中标明。构建栈：CANN 9.0.0 + torch
+# 2.10.0+cpu + torch_npu 2.10.0.post2，源码安装现场编译
 # areno.accel._areno_accel_npu。
 scan:
   root: examples
