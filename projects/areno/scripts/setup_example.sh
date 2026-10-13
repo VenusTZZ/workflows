@@ -193,7 +193,15 @@ ensure_media_deps() {
   echo "torch==$(python -c 'import torch; print(torch.__version__)')" > "$constraints"
   python -m pip install -q -c "$constraints" Pillow torchvision "$@"
   rm -f "$constraints"
-  python -c "import torchvision, PIL; print('media deps ok: torchvision', torchvision.__version__)"
+  # 功能校验：transformers 的 Fast 图像处理器用的是 torchvision.transforms.v2；
+  # 不要依赖 torchvision.__version__（部分昇腾环境里的 torchvision 是 shim，没这个属性）。
+  python - <<'PY'
+import torch
+import torchvision
+import torchvision.transforms.v2  # noqa: F401 - transformers Fast 图像处理器依赖
+
+print("media deps ok: torch", torch.__version__, "torchvision", getattr(torchvision, "__version__", "n/a"))
+PY
 }
 
 install_vl_image_deps() {
