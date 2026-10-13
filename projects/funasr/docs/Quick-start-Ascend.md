@@ -46,7 +46,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | torch | 2.9.0+cpu |
 | torch_npu | 2.9.0.post2 |
 | torchaudio | 2.9.0 |
-| funasr | 本仓库源码（`uv pip install -e .`，对应 release tag 见下） |
+| funasr | 最新 release 版本 |
 | 模型 | [paraformer-zh](https://github.com/modelscope/FunASR) / [SenseVoiceSmall](https://github.com/FunAudioLLM/SenseVoice) / [emotion2vec_plus_large](https://github.com/modelscope/FunASR) 等，默认从 ModelScope 下载 |
 
 ### 检查前置是否满足
@@ -91,7 +91,7 @@ uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torchaudio==2.9.
 uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi torch_npu==2.9.0.post2
 ```
 
-检查 torch / torch_npu / torchaudio 是否装好且 NPU 设备可用，下面代码用 **python** 跑：
+检查 torch / torch_npu / torchaudio 是否装好且 NPU 设备可用（下面代码用 python 运行）：
 
 ```python #test id="check-torch"
 import torch, torch_npu, torchaudio
@@ -118,13 +118,6 @@ count: 1
 ```
 
 ## 安装 FunASR
-
-### 使用 pip 进行安装（二进制，用户自选）
-
-```shell
-uv pip install funasr
-python -c "import funasr; print('funasr', funasr.__version__)"
-```
 
 ### 从源码安装
 
@@ -156,6 +149,13 @@ funasr ...
 `<ref>` 为安装的最新的 release tag，`...` 表示最新的版本号。
 ```
 
+### 使用 pip 进行安装（二进制，用户自选）
+
+```shell
+uv pip install funasr
+python -c "import funasr; print('funasr', funasr.__version__)"
+```
+
 ### CLI 自检：`funasr --version`
 
 `funasr` 是 FunASR 自带的命令行转写工具，装好后就能用：
@@ -178,9 +178,7 @@ funasr ...
 
 ## 语音识别生产级 pipeline（ASR + VAD + 标点 + 说话人）
 
-这是 FunASR 最典型的生产装配：一个 `AutoModel` 同时挂上 `vad_model`（语音活性检测）/ `punc_model`（标点恢复）/ `spk_model`（说话人嵌入），一次 `generate` 产出转写文本、字级时间戳和匿名说话人编号。模型默认从 ModelScope 拉取，`device="npu:0"` 让 ASR / VAD / 标点 / 说话人四个子模型都放到 NPU 上跑。
-
-下面代码用 **python** 跑（首次运行会下载约 4 个模型，之后命中缓存）：
+这是 FunASR 最典型的生产装配：一个 `AutoModel` 同时挂上 `vad_model`（语音活性检测）/ `punc_model`（标点恢复）/ `spk_model`（说话人嵌入），一次 `generate` 产出转写文本、字级时间戳和匿名说话人编号。模型默认从 ModelScope 拉取，`device="npu:0"` 让 ASR / VAD / 标点 / 说话人四个子模型都放到 NPU 上跑（下面代码用 python 运行）：
 
 ```python #test id="funasr-asr-pipeline"
 import torch, torch_npu
@@ -217,7 +215,7 @@ sentence_info_keys: ['end', 'spk', 'start', 'text', 'timestamp']
 
 ## 多语识别 + 情感 + 事件（SenseVoiceSmall）
 
-`SenseVoiceSmall` 一个模型同时输出**语种标签**（`<|zh|>` 等）、**情感标签**（`<|NEUTRAL|>` / `<|HAPPY|>` 等）与**事件标签**（`<|Speech|>` / `<|Applause|>` 等），原始 `text` 带上这些标签，用 `rich_transcription_postprocess` 可剥离得到干净文本。下面代码用 **python** 跑：
+`SenseVoiceSmall` 一个模型同时输出**语种标签**（`<|zh|>` 等）、**情感标签**（`<|NEUTRAL|>` / `<|HAPPY|>` 等）与**事件标签**（`<|Speech|>` / `<|Applause|>` 等），原始 `text` 带上这些标签，用 `rich_transcription_postprocess` 可剥离得到干净文本（下面代码用 python 运行）：
 
 ```python #test id="funasr-sensevoice"
 import torch, torch_npu
@@ -258,7 +256,7 @@ clean_text: ...
 curl -sL -o /tmp/funasr_sample.wav https://isv-data.oss-cn-hangzhou.aliyuncs.com/ics/MaaS/ASR/test_audio/asr_example_zh.wav
 ```
 
-下面代码用 **python** 跑，把整段音频切成 600ms 一块依次喂给流式模型：
+把整段音频切成 600ms 一块依次喂给流式模型（下面代码用 python 运行）：
 
 ```python #test id="funasr-streaming"
 import torch, torch_npu
@@ -300,7 +298,7 @@ streamed_text: ...
 
 ## 情感识别（emotion2vec_plus_large）
 
-独立的情感识别模型，`granularity="utterance"` 返回整句的情感标签分布。下面代码用 **python** 跑：
+独立的情感识别模型，`granularity="utterance"` 返回整句的情感标签分布（下面代码用 python 运行）：
 
 ```python #test id="funasr-emotion"
 import torch, torch_npu
