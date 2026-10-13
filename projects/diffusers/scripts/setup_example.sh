@@ -28,7 +28,7 @@ SUPPORTED_PROFILES=(
   diffusers-cogvideo-i2v diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet
   diffusers-controlnet-sdxl diffusers-llada2 diffusers-gligen diffusers-controlnet-wds
   diffusers-orpo-wds diffusers-sdxl-full diffusers-lcm-zero3
-  diffusers-kandinsky-prior
+  diffusers-kandinsky-prior diffusers-multi-subject-inpaint
 )
 profile_known=0
 for _p in "${SUPPORTED_PROFILES[@]}"; do
@@ -631,6 +631,40 @@ pq.write_table(table, path)
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"SANA_FIXTURE_PARQUET={path}\n")
 print(f"prepared {num_samples}-sample sana fixture parquet at {path}", flush=True)
+PY
+}
+
+setup_diffusers_multi_subject_inpaint() {
+  # multi_subject_dreambooth_inpainting 的 Dataset 用 load_dataset(path)
+  # 读本地目录，且固定取 ["train"] 与 ["test"] 两个 split（列 image + prompt），
+  # 所以这里落一个带双 split 的 DatasetDict（load_dataset 会按 saved 目录读回）。
+  install_example_stack
+  download_assets sd15
+  python3 - <<'PY'
+import os
+from pathlib import Path
+
+from datasets import Dataset, DatasetDict, Features, Image, Value
+from PIL import Image as PILImage
+from PIL import ImageDraw
+
+size = 512
+num_samples = 4
+prompts = [f"a photo of sks dog in scene {i}" for i in range(num_samples)]
+images = []
+for i in range(num_samples):
+    image = PILImage.new("RGB", (size, size), (60 + i % 180, 120, 160))
+    ImageDraw.Draw(image).rectangle([64, 64, size - 64, size - 64], outline=(240, 240, 240), width=6)
+    images.append(image)
+
+features = Features({"image": Image(), "prompt": Value("string")})
+split = Dataset.from_dict({"image": images, "prompt": prompts}, features=features)
+
+root = Path(os.environ["GITHUB_WORKSPACE"]) / "multi_subject_inpaint_fixture"
+DatasetDict({"train": split, "test": split}).save_to_disk(str(root))
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"MULTI_SUBJECT_INPAINT_DATASET={root}\n")
+print(f"prepared multi-subject inpainting fixture (train+test) at {root}", flush=True)
 PY
 }
 

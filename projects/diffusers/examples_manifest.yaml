@@ -8,7 +8,7 @@ scan:
   # 对齐收口：原 scan.exclude 的 33 条规则全部迁入
   # unsupported 段（上游自测 / helper / pipeline 模块 / community 整目录等，
   # 带分组注释与理由），scan 只保留 root + include_extensions 两个键。
-  # unsupported 覆盖全部 308 个扫描文件：supported(45) + unsupported(263)。
+  # unsupported 覆盖全部 308 个扫描文件：supported(49) + unsupported(259)。
 
 # 新版 diffusers 需求 huggingface-hub>=1.23，huggingface-hub>=1.23 需求
 # transformers>=5.x，任何 transformers<5.x 的用例都无法跑通
@@ -823,28 +823,103 @@ supported:
   #     - --seed 42
   #   timeout_minutes: 60
 
-  # Qwen-Image 2.1 LoRA DreamBooth（20B MMDiT + Qwen3-VL 文本编码器）。8 卡 +
-  # ZeRO-3 是唯一可能：ZeRO-2 参数复制 40GB/卡装不下；ZeRO-3 需宿主暂存
-  # ~56GB（bf16），且冻结文本编码器可能被 stage 3 的 zero.Init 打坏（同 SDXL
-  # CLIP 坑）——本轮就是验证这两道墙。
-  - path: examples/dreambooth/train_dreambooth_lora_qwenimage21.py
-    profile: diffusers-qwen-image
-    launcher: accelerate-deepspeed-zero3
-    runner: linux-aarch64-a2-8
-    npu_devices: '0,1,2,3,4,5,6,7'
+  # # Qwen-Image 2.1 LoRA DreamBooth（20B MMDiT + Qwen3-VL 文本编码器）。8 卡 +
+  # # ZeRO-3 是唯一可能：ZeRO-2 参数复制 40GB/卡装不下；ZeRO-3 需宿主暂存
+  # # ~56GB（bf16），且冻结文本编码器可能被 stage 3 的 zero.Init 打坏（同 SDXL
+  # # CLIP 坑）——本轮就是验证这两道墙。
+  # - path: examples/dreambooth/train_dreambooth_lora_qwenimage21.py
+  #   profile: diffusers-qwen-image
+  #   launcher: accelerate-deepspeed-zero3
+  #   runner: linux-aarch64-a2-8
+  #   npu_devices: '0,1,2,3,4,5,6,7'
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --pretrained_model_name_or_path Qwen/Qwen-Image-2.1
+  #     - --instance_data_dir ${FIXTURE_DIR}/images
+  #     - --instance_prompt "a photo of sks dog"
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --resolution 256
+  #     - --train_batch_size 1
+  #     - --gradient_checkpointing
+  #     - --cache_latents
+  #     - --mixed_precision bf16
+  #     - --max_train_steps 1
+  #   timeout_minutes: 300
+
+  # SDXL LPL（Latent Prompt Learning）。这个 fork 本身就是给 NPU 写的：脚本自己
+  # import torch_npu、关掉 allow_internal_format，还带 --enable_npu_flash_attention
+  # （diffusers 的 NPU 专属接口，目前唯一覆盖它的一条）。全量 unet、训练前
+  # 会 del 文本编码器和 vae，显存账同 train_text_to_image_sdxl（a2-2 + ZeRO-2）。
+  - path: examples/research_projects/lpl/train_sdxl_lpl.py
+    profile: diffusers-sdxl-full
+    launcher: accelerate-deepspeed
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --pretrained_model_name_or_path Qwen/Qwen-Image-2.1
-      - --instance_data_dir ${FIXTURE_DIR}/images
-      - --instance_prompt "a photo of sks dog"
+      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
+      - --variant fp16
+      - --dataset_name lambdalabs/naruto-blip-captions
       - --output_dir ${CI_OUTPUT_DIR}
       - --resolution 256
       - --train_batch_size 1
       - --gradient_checkpointing
-      - --cache_latents
-      - --mixed_precision bf16
       - --max_train_steps 1
-    timeout_minutes: 300
+    timeout_minutes: 120
+
+  # SD1.5 多主体 DreamBooth。只喂一个 instance 目录就是普通 dreambooth（同已支持的
+  # train_dreambooth.py），数据用本地 fixture（DOG 图）。要跑"多主体"需传
+  # --concepts_list JSON，本轮先按单主体跑通。
+  - path: examples/research_projects/multi_subject_dreambooth/train_multi_subject_dreambooth.py
+    profile: diffusers-dreambooth
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path ${SD15_MODEL_PATH}
+      - --instance_data_dir ${FIXTURE_DIR}/images
+      - --instance_prompt "a photo of sks dog"
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --resolution 512
+      - --train_batch_size 1
+      - --max_train_steps 1
+      - --gradient_checkpointing
+    timeout_minutes: 90
+
+  # SD1.5 多主体 inpainting DreamBooth。它的 Dataset 用 load_dataset 读本地目录，
+  # 固定取 train/test 两个 split（列 image + prompt），目录由 setup 现场生成
+  # （profile diffusers-multi-subject-inpaint）。
+  - path: examples/research_projects/multi_subject_dreambooth_inpainting/train_multi_subject_dreambooth_inpainting.py
+    profile: diffusers-multi-subject-inpaint
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path ${SD15_MODEL_PATH}
+      - --instance_data_dir ${MULTI_SUBJECT_INPAINT_DATASET}
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --resolution 512
+      - --train_batch_size 1
+      - --max_train_steps 1
+    timeout_minutes: 90
+
+  # SD1.5 多向量 Textual Inversion（--num_vec_per_token 版）。依赖同目录的
+  # multi_token_clip.py（run_example 已把该目录加进 PYTHONPATH），数据用本地
+  # 图片目录。
+  - path: examples/research_projects/multi_token_textual_inversion/textual_inversion.py
+    profile: diffusers-textual-inversion
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path ${SD15_MODEL_PATH}
+      - --train_data_dir ${FIXTURE_DIR}/images
+      - --placeholder_token <cat-toy>
+      - --initializer_token a
+      - --num_vec_per_token 2
+      - --learnable_property object
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --resolution 512
+      - --train_batch_size 1
+      - --max_train_steps 1
+    timeout_minutes: 60
 
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
 unsupported:
@@ -913,14 +988,6 @@ unsupported:
   - examples/custom_diffusion/train_custom_diffusion.py
   # device_map="auto" + trust_remote_code，不支持NPU
   - examples/discrete_diffusion/sample_llada2.py
-  # 以下7个：GATED_MODEL
-  - examples/dreambooth/train_dreambooth_lora_flux.py
-  - examples/dreambooth/train_dreambooth_lora_flux_kontext.py
-  - examples/dreambooth/train_dreambooth_lora_flux2.py
-  - examples/dreambooth/train_dreambooth_lora_flux2_img2img.py
-  - examples/dreambooth/train_dreambooth_lora_flux2_klein.py
-  - examples/dreambooth/train_dreambooth_lora_flux2_klein_img2img.py
-  - examples/dreambooth/train_dreambooth_lora_ideogram4.py
   # cuda 硬编码
   - examples/dreambooth/train_dreambooth_lora_krea2.py
   # profiling 硬编码 CUDA：helper profiling_utils.py 用 torch.cuda.Event /
@@ -966,10 +1033,6 @@ unsupported:
   - examples/research_projects/ip_adapter/tutorial_train_ip-adapter.py
   - examples/research_projects/ip_adapter/tutorial_train_plus.py
   - examples/research_projects/ip_adapter/tutorial_train_sdxl.py
-  - examples/research_projects/lpl/train_sdxl_lpl.py
-  - examples/research_projects/multi_subject_dreambooth/train_multi_subject_dreambooth.py
-  - examples/research_projects/multi_subject_dreambooth_inpainting/train_multi_subject_dreambooth_inpainting.py
-  - examples/research_projects/multi_token_textual_inversion/textual_inversion.py
   # ===== wuerstchen prior / lora_prior：模块挪进 deprecated，例子没跟上 =====
   # diffusers 把整条 wuerstchen 管线挪进了
   # pipelines/deprecated/wuerstchen/——WuerstchenPrior、DEFAULT_STAGE_C_TIMESTEPS
@@ -1001,7 +1064,7 @@ unsupported:
   - examples/server/server.py
   # CUDA_DEP + GATED_MODEL：import 时即加载 SD3.5（Pipelines.py 无 cuda/mps 抛错）；且为常驻 HTTP 服务
   - examples/server-async/serverasync.py
-  # 以下 10 个：GATED_MODEL
+  # 以下 17 个：GATED_MODEL
   - examples/controlnet/train_controlnet_flux.py
   - examples/controlnet/train_controlnet_sd3.py
   - examples/flux-control/train_control_flux.py
@@ -1012,6 +1075,13 @@ unsupported:
   - examples/dreambooth/train_dreambooth_sd3.py
   - examples/dreambooth/train_dreambooth_lora_hidream.py
   - examples/research_projects/sd3_lora_colab/train_dreambooth_lora_sd3_miniature.py
+  - examples/dreambooth/train_dreambooth_lora_flux.py
+  - examples/dreambooth/train_dreambooth_lora_flux_kontext.py
+  - examples/dreambooth/train_dreambooth_lora_flux2.py
+  - examples/dreambooth/train_dreambooth_lora_flux2_img2img.py
+  - examples/dreambooth/train_dreambooth_lora_flux2_klein.py
+  - examples/dreambooth/train_dreambooth_lora_flux2_klein_img2img.py
+  - examples/dreambooth/train_dreambooth_lora_ideogram4.py
 
   # LCM 全量蒸馏：teacher + 学生 + EMA target 三张 SDXL unet 同时驻留显存。
   # bf16 + --cast_teacher_unet 后静态仍 ~27.7GB（target_unet 不参与 cast），
