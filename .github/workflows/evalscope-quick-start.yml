@@ -14,12 +14,12 @@
 #   * result.json is written by the engine and validated against
 #     schemas/result.schema.json before upload.
 #
-# NOTE: only workflow_dispatch is enabled for now (per spec: same
-# onboarding rhythm as llama.cpp / whisper.cpp / trl / timm / fastchat).
-# Once the pipeline runs green and stable, re-enable the schedule block
-# below to start the periodic monitor loop. Until then, the engine's
-# schedule-only steps (monitor / record-monitor-outcome / cache save)
-# simply never run.
+# NOTE: the pipeline went green on the stabilised branch run, so the
+# daily schedule below is now ENABLED - it drives the engine's periodic
+# monitor loop (the schedule-only steps: monitor /
+# record-monitor-outcome / cache save). workflow_dispatch remains
+# available for on-demand runs; this matches the onboarding rhythm of
+# transformers / funasr, the other daily quick-starts.
 #
 # Bind mounts: three host-side caches persist across runs (see the
 # container_options block below for the volume list). The self-hosted
@@ -52,9 +52,16 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # schedule: deliberately NOT enabled yet - see the header note.
-  # Enable with e.g. `- cron: '45 */3 * * *'` once the pipeline is
-  # proven stable on manual runs.
+  schedule:
+    # Daily: '45 2 * * *' fires at 02:45 UTC (10:45 北京时间). The
+    # pipeline is green, so the periodic monitor loop is now enabled;
+    # once a day is enough for doc-hash changes (and upstream wheel
+    # updates) to propagate within a day. The minute :45 matches the
+    # eval-framework family here, and 02:45 UTC is deliberately
+    # staggered BEFORE transformers (03:30 UTC) and funasr (04:30 UTC)
+    # because funasr shares this single-card NPU runner
+    # (linux-aarch64-a2-1); the offset keeps the runner queue clean.
+    - cron: '45 2 * * *'
   workflow_dispatch:
 
 permissions:
