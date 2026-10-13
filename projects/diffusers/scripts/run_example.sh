@@ -168,10 +168,13 @@ case "$LAUNCH_PATH" in
     ;;
   *)
     cd "$TARGET_ROOT"
-    # Some examples import a package that sits next to them (e.g.
-    # examples/research_projects/ip_adapter imports `ip_adapter.ip_adapter`);
-    # add the example's own directory to PYTHONPATH.
-    export PYTHONPATH="$(dirname "$LAUNCH_PATH")${PYTHONPATH:+:$PYTHONPATH}"
+    # Examples import helper packages two ways: the module next to them (e.g.
+    # examples/research_projects/ip_adapter imports `ip_adapter.ip_adapter`) and
+    # the repo-root package namespace (e.g. the pixart scripts import
+    # `examples.research_projects.pixart.controlnet_pixart_alpha`). Put both the
+    # example's own directory and the repo root on PYTHONPATH (`python script.py`
+    # does not add the cwd, only the script's directory).
+    export PYTHONPATH="$(dirname "$LAUNCH_PATH"):$TARGET_ROOT${PYTHONPATH:+:$PYTHONPATH}"
     case "${LAUNCHER:-}" in
       accelerate-deepspeed)
         prepare_deepspeed_configs ds_zero2.json

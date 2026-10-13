@@ -28,7 +28,7 @@ SUPPORTED_PROFILES=(
   diffusers-cogvideo-i2v diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet
   diffusers-controlnet-sdxl diffusers-llada2 diffusers-gligen diffusers-controlnet-wds
   diffusers-orpo-wds diffusers-sdxl-full diffusers-lcm-zero3
-  diffusers-kandinsky-prior diffusers-multi-subject-inpaint
+  diffusers-kandinsky-prior diffusers-multi-subject-inpaint diffusers-pixart
 )
 profile_known=0
 for _p in "${SUPPORTED_PROFILES[@]}"; do

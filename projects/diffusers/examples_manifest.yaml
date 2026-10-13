@@ -44,7 +44,7 @@ supported:
 
   # # SD1.5 高级 Dreambooth LoRA。上游命令见
   # # examples/advanced_diffusion_training/README.md「3d icon example」的 SD1.5变体。
-  # #
+  
   # # 训练-only smoke：有意不传 --validation_prompt。SD1.5 的 validation 会走
   # # StableDiffusionPipeline.from_pretrained(<本地模型>)，加载 safety_checker /
   # # feature_extractor；setup 的 allow_file_pattern 为省 ~2.4 GB 没下这两个
@@ -89,7 +89,6 @@ supported:
   #     - --mixed_precision fp16
   #     - --train_batch_size 1
   #     - --max_train_steps 1
-  #     - --checkpointing_steps 1
   #     - --output_dir ${CI_OUTPUT_DIR}
   #   timeout_minutes: 60
 
@@ -118,7 +117,6 @@ supported:
   #     - --enable_slicing --enable_tiling
   #     - --train_batch_size 1
   #     - --max_train_steps 1
-  #     - --checkpointing_steps 1
   #     - --mixed_precision fp16
   #     - --output_dir ${CI_OUTPUT_DIR}
   #   timeout_minutes: 120
@@ -144,7 +142,6 @@ supported:
   #     - --train_shards_path_or_url "pipe:curl -L -s https://www.modelscope.cn/datasets/laion/conceptual-captions-12m-webdataset/resolve/master/data/{00000..00000}.tar"
   #     - --train_batch_size 1
   #     - --gradient_accumulation_steps 1
-  #     - --checkpointing_steps 1
   #   timeout_minutes: 120
 
   # # LCM LoRA 一致性蒸馏（webdataset 流式，LoRA rank=4）。同 profile，teacher
@@ -165,7 +162,6 @@ supported:
   #     - --dataloader_num_workers 1
   #     - --train_shards_path_or_url "pipe:curl -L -s https://www.modelscope.cn/datasets/laion/conceptual-captions-12m-webdataset/resolve/master/data/{00000..00000}.tar"
   #     - --train_batch_size 1
-  #     - --checkpointing_steps 1
   #   timeout_minutes: 120
 
   # # LCM LoRA 一致性蒸馏（SDXL teacher + fp16-fix VAE，webdataset 流式）。
@@ -188,7 +184,6 @@ supported:
   #     - --dataloader_num_workers 1
   #     - --train_shards_path_or_url "pipe:curl -L -s https://www.modelscope.cn/datasets/laion/conceptual-captions-12m-webdataset/resolve/master/data/{00000..00000}.tar"
   #     - --train_batch_size 1
-  #     - --checkpointing_steps 1
   #   timeout_minutes: 120
 
   # # ControlNet 训练（SD1.5 base）。上游命令见 examples/controlnet/README.md。
@@ -206,7 +201,6 @@ supported:
   #     - --resolution 512
   #     - --train_batch_size 1
   #     - --max_train_steps 1
-  #     - --checkpointing_steps 1
   #   timeout_minutes: 120
 
 
@@ -270,14 +264,10 @@ supported:
   #     - --pretrained_model_name_or_path ${SD15_MODEL_PATH}   # ModelScope: AI-ModelScope/stable-diffusion-v1-5
   #     - --dataset_name fusing/instructpix2pix-1000-samples
   #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --resolution 256 --random_flip
+  #     - --resolution 256
   #     - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
   #     - --max_train_steps 1
-  #     - --checkpointing_steps 9999
-  #     - --max_grad_norm 1
-  #     - --conditioning_dropout_prob 0.05
   #     - --mixed_precision fp16
-  #     - --seed 42
   #   timeout_minutes: 90
 
   # # Kandinsky 2.2 decoder（全量）。上游命令见
@@ -298,7 +288,6 @@ supported:
   #     - --gradient_accumulation_steps 1
   #     - --gradient_checkpointing
   #     - --max_train_steps 1
-  #     - --max_grad_norm 1
   #   timeout_minutes: 90
 
   # # research_projects / scheduled_huber_loss_training：SD1.5 + naruto（text_to_image）
@@ -311,7 +300,7 @@ supported:
   #     - --pretrained_model_name_or_path ${SD15_MODEL_PATH}   # ModelScope: AI-ModelScope/stable-diffusion-v1-5
   #     - --dataset_name lambdalabs/naruto-blip-captions
   #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --resolution 256 --center_crop --random_flip
+  #     - --resolution 256
   #     - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
   #     - --max_train_steps 1
   #   timeout_minutes: 90
@@ -324,7 +313,7 @@ supported:
   #     - --pretrained_model_name_or_path ${SD15_MODEL_PATH}   # ModelScope: AI-ModelScope/stable-diffusion-v1-5
   #     - --dataset_name lambdalabs/naruto-blip-captions
   #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --resolution 256 --center_crop --random_flip
+  #     - --resolution 256
   #     - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
   #     - --max_train_steps 1
   #   timeout_minutes: 90
@@ -356,9 +345,6 @@ supported:
   #     - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
   #     - --max_train_steps 1
   #   timeout_minutes: 90
-
-  # # ===== research_projects 第二批（2026-09-20 验证可跑）=====
-
   # # 一致性训练（cifar10，从零）。小步数必须配 --constant_discretization_steps。
   # - path: examples/research_projects/consistency_training/train_cm_ct_unconditional.py
   #   profile: diffusers-research-plain
@@ -418,7 +404,6 @@ supported:
   #     - --resolution 256
   #     - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
   #     - --max_train_steps 1
-  #     - --seed 42
   #   timeout_minutes: 90
 
   # # VAE roundtrip（纯推理；输入图用 fixtures/DOG.jpg）
@@ -444,7 +429,7 @@ supported:
   #     - --train_batch_size 1
   #     - --gradient_accumulation_steps 1
   #     - --max_train_steps 1
-  #     # 验证阶段--validation_*会走cuda
+  # #     # 验证阶段--validation_*会走cuda
   #   timeout_minutes: 60
 
   # # SD1.5 全量
@@ -456,7 +441,7 @@ supported:
   #     - --pretrained_model_name_or_path ${SD15_MODEL_PATH}
   #     - --dataset_name hf-internal-testing/dummy_image_text_data
   #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --resolution 64 --center_crop --random_flip
+  #     - --resolution 64
   #     - --train_batch_size 1 --gradient_accumulation_steps 1 --max_train_steps 2
   #   timeout_minutes: 60
 
@@ -469,7 +454,7 @@ supported:
   #     - --pretrained_model_name_or_path ${SD15_MODEL_PATH}
   #     - --dataset_name hf-internal-testing/dummy_image_text_data
   #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --resolution 64 --center_crop --random_flip
+  #     - --resolution 64
   #     - --train_batch_size 1 --gradient_accumulation_steps 1 --max_train_steps 2
   #   timeout_minutes: 60
 
@@ -554,8 +539,6 @@ supported:
   #     - --max_train_steps 2
   #   timeout_minutes: 90
 
-  # # ===== SDXL 系列（在线 hf-mirror，--variant fp16 ~6.6GB；2026-09-20 昇腾机验证可跑）=====
-
   # # Diffusion-DPO SDXL
   # - path: examples/research_projects/diffusion_dpo/train_diffusion_dpo_sdxl.py
   #   profile: diffusers-sdxl-online
@@ -568,7 +551,7 @@ supported:
   #     - --output_dir ${CI_OUTPUT_DIR}
   #     - --mixed_precision fp16 --resolution 512
   #     - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
-  #     - --max_train_steps 1 --checkpointing_steps 1 --seed 0
+  #     - --max_train_steps 1
   #   timeout_minutes: 120
 
   # # Diffusion-ORPO SDXL LoRA
@@ -583,7 +566,7 @@ supported:
   #     - --output_dir ${CI_OUTPUT_DIR}
   #     - --mixed_precision fp16 --resolution 512
   #     - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
-  #     - --max_train_steps 1 --checkpointing_steps 1
+  #     - --max_train_steps 1
   #   timeout_minutes: 120
 
   # # scheduled_huber / dreambooth LoRA SDXL
@@ -599,7 +582,7 @@ supported:
   #     - --output_dir ${CI_OUTPUT_DIR}
   #     - --resolution 256
   #     - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
-  #     - --max_train_steps 1 --checkpointing_steps 1
+  #     - --max_train_steps 1
   #   timeout_minutes: 120
 
   # # scheduled_huber / text_to_image LoRA SDXL
@@ -612,9 +595,9 @@ supported:
   #     - --variant fp16
   #     - --dataset_name lambdalabs/naruto-blip-captions
   #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --resolution 256 --center_crop --random_flip
+  #     - --resolution 256
   #     - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
-  #     - --max_train_steps 1 --checkpointing_steps 1
+  #     - --max_train_steps 1
   #   timeout_minutes: 120
 
   # # CogVideoX-5b-I2V LoRA（复用 Disney 数据集；2026-09-21 昇腾机验证可跑）
@@ -633,12 +616,11 @@ supported:
   #     - --enable_slicing --enable_tiling
   #     - --train_batch_size 1
   #     - --max_train_steps 1
-  #     - --checkpointing_steps 1
   #     - --mixed_precision fp16
   #     - --output_dir ${CI_OUTPUT_DIR}
   #   timeout_minutes: 180
 
-  #   # Sana 1600M LoRA（单卡 a2-1）
+  # # Sana 1600M LoRA（单卡 a2-1）
   # - path: examples/dreambooth/train_dreambooth_lora_sana.py
   #   profile: diffusers-sana
   #   runner: linux-aarch64-a2-1
@@ -689,7 +671,6 @@ supported:
   #     - --train_batch_size 1
   #     - --gradient_accumulation_steps 1
   #     - --max_train_steps 1
-  #     - --checkpointing_steps 1
   #     - --mixed_precision no
   #   timeout_minutes: 90
   # # ControlNet webdataset 训练（SDXL）：原 unsupported 的三个原因全部在 profile
@@ -761,7 +742,6 @@ supported:
   #     - --train_batch_size 1
   #     - --gradient_checkpointing
   #     - --max_train_steps 1
-  #     - --checkpointing_steps 9999
   #   timeout_minutes: 60
   # # ===== SDXL 全量微调（多卡 ZeRO-3，launcher=accelerate-deepspeed）=====
   # # 统一纯 fp32：脚本文本嵌入的 dtype 流转与混精度冲突（SDPA 处 query=half /
@@ -782,7 +762,6 @@ supported:
   #     - --train_batch_size 1
   #     - --gradient_checkpointing
   #     - --max_train_steps 1
-  #     - --checkpointing_steps 9999
   #   timeout_minutes: 60
   # # kandinsky prior 全量训练（naruto）。只训 prior，CLIP 双塔冻结，图像嵌入
   # # 循环内现算（无 Arrow 往返）。bf16 + ZeRO-2：静态 ~8GB/卡，富余。prior 仓
@@ -814,37 +793,11 @@ supported:
   #     - --variant fp16
   #     - --dataset_name fusing/instructpix2pix-1000-samples
   #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --resolution 256 --random_flip
-  #     - --train_batch_size 1
-  #     - --gradient_checkpointing
-  #     - --max_train_steps 1
-  #     - --checkpointing_steps 9999
-  #     - --conditioning_dropout_prob 0.05
-  #     - --seed 42
-  #   timeout_minutes: 60
-
-  # # Qwen-Image 2.1 LoRA DreamBooth（20B MMDiT + Qwen3-VL 文本编码器）。8 卡 +
-  # # ZeRO-3 是唯一可能：ZeRO-2 参数复制 40GB/卡装不下；ZeRO-3 需宿主暂存
-  # # ~56GB（bf16），且冻结文本编码器可能被 stage 3 的 zero.Init 打坏（同 SDXL
-  # # CLIP 坑）——本轮就是验证这两道墙。
-  # - path: examples/dreambooth/train_dreambooth_lora_qwenimage21.py
-  #   profile: diffusers-qwen-image
-  #   launcher: accelerate-deepspeed-zero3
-  #   runner: linux-aarch64-a2-8
-  #   npu_devices: '0,1,2,3,4,5,6,7'
-  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-  #   overlay_args:
-  #     - --pretrained_model_name_or_path Qwen/Qwen-Image-2.1
-  #     - --instance_data_dir ${FIXTURE_DIR}/images
-  #     - --instance_prompt "a photo of sks dog"
-  #     - --output_dir ${CI_OUTPUT_DIR}
   #     - --resolution 256
   #     - --train_batch_size 1
   #     - --gradient_checkpointing
-  #     - --cache_latents
-  #     - --mixed_precision bf16
   #     - --max_train_steps 1
-  #   timeout_minutes: 300
+  #   timeout_minutes: 60
 
   # # SDXL LPL（Latent Prompt Learning）。这个 fork 本身就是给 NPU 写的：脚本自己
   # # import torch_npu、关掉 allow_internal_format，还带 --enable_npu_flash_attention
@@ -886,27 +839,48 @@ supported:
   #     - --gradient_checkpointing
   #   timeout_minutes: 90
 
-  # SD1.5 多主体 inpainting DreamBooth。模型必须是 9 通道的 inpainting 版
-  # （${SD15_INPAINT_PATH}，基础版 SD1.5 的 unet 是 4 通道，会报 conv_in 通道数
-  # 不匹配）。它的 Dataset 用 load_dataset 读本地目录（不是 load_from_disk），
-  # 固定取 train/test 两个 split，列要 image/prompt/mask；目录由 setup 现场生成
-  # （profile diffusers-multi-subject-inpaint）。
-  - path: examples/research_projects/multi_subject_dreambooth_inpainting/train_multi_subject_dreambooth_inpainting.py
-    profile: diffusers-multi-subject-inpaint
+  # # SD1.5 多主体 inpainting DreamBooth。模型必须是 9 通道的 inpainting 版
+  # # （${SD15_INPAINT_PATH}，基础版 SD1.5 的 unet 是 4 通道，会报 conv_in 通道数
+  # # 不匹配）。它的 Dataset 用 load_dataset 读本地目录（不是 load_from_disk），
+  # # 固定取 train/test 两个 split，列要 image/prompt/mask；目录由 setup 现场生成
+  # # （profile diffusers-multi-subject-inpaint）。
+  # - path: examples/research_projects/multi_subject_dreambooth_inpainting/train_multi_subject_dreambooth_inpainting.py
+  #   profile: diffusers-multi-subject-inpaint
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --pretrained_model_name_or_path ${SD15_INPAINT_PATH}
+  #     - --instance_data_dir ${MULTI_SUBJECT_INPAINT_DATASET}
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --resolution 512
+  #     - --train_batch_size 1
+  #     - --max_train_steps 1
+  #   timeout_minutes: 90
+
+  # PixArt-α ControlNet 训练（T5 文本编码器；无硬编码 cuda，用 accelerate）。
+  # 模型 PixArt-alpha/PixArt-XL-2-512x512（含 T5）与数据集 fusing/fill50k 都走
+  # hf-mirror 在线取（均公开、非 gated）。脚本同级导入 pipeline_pixart_alpha_controlnet、
+  # 仓库根相对导入 examples.research_projects.pixart.controlnet_pixart_alpha——在
+  # run_example 的 cwd=仓库根 + PYTHONPATH=脚本目录下都能解析。--train_batch_size
+  # 默认 16，必须压到 1；--mixed_precision 默认 fp32，用 bf16 + gradient_checkpointing
+  # 压显存；--report_to 默认 tensorboard（非 wandb）。
+  - path: examples/research_projects/pixart/train_pixart_controlnet_hf.py
+    profile: diffusers-pixart
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --pretrained_model_name_or_path ${SD15_INPAINT_PATH}
-      - --instance_data_dir ${MULTI_SUBJECT_INPAINT_DATASET}
+      - --pretrained_model_name_or_path PixArt-alpha/PixArt-XL-2-512x512
+      - --dataset_name fusing/fill50k
       - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 512
       - --train_batch_size 1
+      - --gradient_checkpointing
+      - --mixed_precision bf16
       - --max_train_steps 1
-    timeout_minutes: 90
+    timeout_minutes: 120
 
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
 unsupported:
-  # ===== Flax/JAX 系列 =====
+  # ===== Flax/JAX 系列 ==================================================
   # 以下都是训练脚本的 Flax/JAX 版本，跑不通有三层原因：
   # 1) diffusers 0.40 起删除了全部 Flax 类（FlaxUNet2DConditionModel 等），
   #    transformers 5.x 起删除了 FlaxCLIPTextModel，脚本开头的 import 就失败；
@@ -943,62 +917,8 @@ unsupported:
   #    唯一能跑的办法（ignore_mismatched_sizes / 手术 state_dict）等于把时间
   #    嵌入随机初始化，"预训练"失去意义，且都属 patch。
   - examples/reinforcement_learning/diffusion_policy.py
-  # CUDA硬编码 text_encoding_pipeline.to("cuda")
-  - examples/cogview4-control/train_control_cogview4.py
-  # community/ 有入口的 5 条（其余 105 个无 __main__ 的 custom_pipeline 模块
-  # 已在 scan.exclude 里整目录排除）。要看护得为每条 pipeline 单独写 driver
-  # （加载+跑 1 次推理），上游没提供，ROI 低。
-  - examples/community/tiled_upscaling.py            # CUDA_DEP：硬编码 .to("cuda")
-  - examples/community/dps_pipeline.py               # CUDA_DEP：硬编码 .to("cuda")
-  - examples/community/run_onnx_controlnet.py        # OTHER_BACKEND：ONNX Runtime
-  - examples/community/run_tensorrt_controlnet.py    # OTHER_BACKEND：TensorRT
-  # CUDA_DEP：--device 的 choices 只有 cuda/cpu
-  - examples/community/cogvideox_ddim_inversion.py
-  # Cosmos-Predict2.5-2B 模型仓 gated=auto（需 token + 接受 license），
-  - examples/cosmos/eval_cosmos_predict25_lora.py
-  - examples/cosmos/eval_lora.sh
-  - examples/cosmos/train_cosmos_predict25_lora.py
-  - examples/cosmos/train_lora.sh
-  # Cosmos3-Nano 165.6GB / Cosmos3-Super 188GB（64.6B bf16），需多卡 TP/CP 分片，
-  # 单卡 CI 不可行；且硬编码 torch.device("cuda")/torch.cuda.set_device/
-  # init_device_mesh("cuda")/backend="nccl"
-  - examples/cosmos3/inference_cosmos3.py
-  # 上游 test_custom_diffusion.py 对 transformers>=4.57.5 直接 skip（"Size mismatch"）：
-  # line 874 token_embeds[x]=token_embeds[y]，新 transformers 把 modifier token
-  # <new1> 切成多个 token（[3,32]），与 initializer_token 的 [32] 维度不一致 →
-  # RuntimeError: expand。纯 transformers 版本不兼容，与 NPU 无关。
-  # 但新版 diffusers 刚需 transformers 5.x，无法降级
-  - examples/custom_diffusion/train_custom_diffusion.py
-  # device_map="auto" + trust_remote_code，不支持NPU
-  - examples/discrete_diffusion/sample_llada2.py
-  # cuda 硬编码
-  - examples/dreambooth/train_dreambooth_lora_krea2.py
-  # profiling 硬编码 CUDA：helper profiling_utils.py 用 torch.cuda.Event /
-  # ProfilerActivity.CUDA / pipe.to("cuda")（NPU 对应 torch.npu.Event /
-  # ProfilerActivity.NPU，API 不同）
-  - examples/profiling/profiling_pipelines.py
-  - examples/profiling/run_profiling.sh
-  # run_diffuser_locomotion：import d4rl + gym，gym.make("hopper-medium-v2")；README
-  # 要求 gym==0.24.1 + free-mujoco-py + d4rl（MuJoCo 二进制，aarch64/py3.12 装不上）
-  - examples/reinforcement_learning/run_diffuser_locomotion.py
-  - examples/research_projects/autoencoder_rae/train_autoencoder_rae.py
-  # OTHER_BACKEND：colossalai（依赖 CUDA/NCCL）
-  - examples/research_projects/colossalai/inference.py
-  - examples/research_projects/colossalai/train_dreambooth_colossalai.py
-  # CUDA_DEP：硬编码 .to("cuda")
-  - examples/research_projects/control_lora/control_lora.py
-  # GATED_MODEL + CUDA_DEP：FLUX.1-dev Gated + bitsandbytes
-  - examples/research_projects/flux_lora_quantization/compute_embeddings.py
-  - examples/research_projects/flux_lora_quantization/train_dreambooth_lora_flux_miniature.py
-  # OTHER_BACKEND：intel_extension_for_pytorch / neural_compressor
-  - examples/research_projects/intel_opts/inference_bf16.py
-  - examples/research_projects/intel_opts/textual_inversion/textual_inversion_bf16.py
-  - examples/research_projects/intel_opts/textual_inversion_dfq/text2images.py
-  - examples/research_projects/intel_opts/textual_inversion_dfq/textual_inversion.py
-  # DATA_UNREACHABLE：需自定义人脸数据集：用 insightface 提取人脸 normed_embedding
-  - examples/research_projects/ip_adapter/tutorial_train_faceid.py
-  # ===== IP-Adapter 三条不支持（2026-10-13，第三方包跟新版 diffusers 不兼容）=====
-  # 1) 这三个教程要用第三方的 ip_adapter 包——这是 diffusers 官方 examples
+  # ===== IP-Adapter 四条不支持（第三方包跟新版 diffusers 不兼容）=========
+  # 1) 这四个教程要用第三方的 ip_adapter 包——这是 diffusers 官方 examples
   #    的 requirements.txt 里指定要装的。
   # 2) 这个包从 2023 年 12 月起就没发过新版。它代码里写死了一句导入：
   #    from diffusers.pipelines.controlnet import MultiControlNetModel
@@ -1008,15 +928,17 @@ unsupported:
   # 3) 换版本也救不了：PyPI 上只有 2023 年那一个版本；官方仓库的 main
   #    分支也是同样的老代码，2024 年 6 月之后就没提交了。反过来把
   #    diffusers 降回旧版倒是能跑，但 diffusers 本身就是我们看护的对象，
-  #    不能为了三个教程把它降级。
+  #    不能为了四个教程把它降级。
   # 4) 之前能跑绿，是因为 setup 在装完包后会 patch 把那行导入改掉。按
   #    no-patch 这个做法已删除。
   # 恢复条件：等 ip_adapter 出适配 diffusers 0.41+ 的新版本（或上游把它
-  # 修好）后，把这三条移回 supported。会给上游提 issue 跟进。
+  # 修好）后，把这四条移回 supported。
+  # faceid 另需自造人脸数据：JSON 清单 + insightface 的 normed_embedding
   - examples/research_projects/ip_adapter/tutorial_train_ip-adapter.py
   - examples/research_projects/ip_adapter/tutorial_train_plus.py
   - examples/research_projects/ip_adapter/tutorial_train_sdxl.py
-  # ===== wuerstchen prior / lora_prior：模块挪进 deprecated，例子没跟上 =====
+  - examples/research_projects/ip_adapter/tutorial_train_faceid.py
+  # ===== wuerstchen prior / lora_prior：模块挪进 deprecated，用例没跟上 =====
   # diffusers 把整条 wuerstchen 管线挪进了
   # pipelines/deprecated/wuerstchen/——WuerstchenPrior、DEFAULT_STAGE_C_TIMESTEPS
   # 都还在，顶层的 DDPMWuerstchenScheduler / WuerstchenPriorPipeline 也照常
@@ -1027,27 +949,9 @@ unsupported:
   # 恢复条件：上游更新这两条例子的 import 路径
   - examples/research_projects/wuerstchen/text_to_image/train_text_to_image_prior.py
   - examples/research_projects/wuerstchen/text_to_image/train_text_to_image_lora_prior.py
-  # OTHER_BACKEND：onnxruntime training（ORT）
-  - examples/research_projects/onnxruntime/text_to_image/train_text_to_image.py
-  - examples/research_projects/onnxruntime/textual_inversion/textual_inversion.py
-  - examples/research_projects/onnxruntime/unconditional_image_generation/train_unconditional.py
-  - examples/research_projects/pixart/run_pixart_alpha_controlnet_pipeline.py
-  - examples/research_projects/pixart/train_controlnet_hf_diffusers.sh
-  - examples/research_projects/pixart/train_pixart_controlnet_hf.py
-  # OTHER_BACKEND：torch_xla（TPU）
-  - examples/research_projects/pytorch_xla/inference/flux/flux_inference.py
-  - examples/research_projects/pytorch_xla/inference/flux/flux_inference_spmd.py
-  - examples/research_projects/pytorch_xla/training/text_to_image/train_text_to_image_xla.py
-  # CUDA_DEP：infer.py 硬编码 cuda；train_realfill.py 另需自定义 realfill 数据集
-  - examples/research_projects/realfill/infer.py
-  - examples/research_projects/realfill/train_realfill.py
-  # GATED_MODEL + CUDA_DEP：SD3 需 gated；且用 bitsandbytes load_in_8bit + device_map（CUDA-only）
-  - examples/research_projects/sd3_lora_colab/compute_embeddings.py
-  # CUDA_DEP + GATED_MODEL：硬编码 cuda/mps（无 NPU 分支，L49-66）；模型为 SD3.5（gated）
-  - examples/server/server.py
-  # CUDA_DEP + GATED_MODEL：import 时即加载 SD3.5（Pipelines.py 无 cuda/mps 抛错）；且为常驻 HTTP 服务
-  - examples/server-async/serverasync.py
-  # 以下 17 个：GATED_MODEL
+  # ==== GATED_MODEL ===================================================
+  # 需接受作者设定的许可条款并使用有效的 Hugging Face Token（HF_TOKEN）
+  # 进行身份验证才能下载模型
   - examples/controlnet/train_controlnet_flux.py
   - examples/controlnet/train_controlnet_sd3.py
   - examples/flux-control/train_control_flux.py
@@ -1065,7 +969,68 @@ unsupported:
   - examples/dreambooth/train_dreambooth_lora_flux2_klein.py
   - examples/dreambooth/train_dreambooth_lora_flux2_klein_img2img.py
   - examples/dreambooth/train_dreambooth_lora_ideogram4.py
+  - examples/cosmos/eval_cosmos_predict25_lora.py
+  - examples/cosmos/eval_lora.sh
+  - examples/cosmos/train_cosmos_predict25_lora.py
+  - examples/cosmos/train_lora.sh
+  # ==== CUDA硬编码类 ==================================================
+  - examples/cogview4-control/train_control_cogview4.py
+  - examples/community/tiled_upscaling.py
+  - examples/community/dps_pipeline.py
+  - examples/community/run_onnx_controlnet.py
+  - examples/community/run_tensorrt_controlnet.py
+  - examples/research_projects/control_lora/control_lora.py
+  - examples/cosmos3/inference_cosmos3.py # GATED_MODEL
+  - examples/profiling/profiling_pipelines.py
+  - examples/profiling/run_profiling.sh
+  - examples/research_projects/flux_lora_quantization/compute_embeddings.py # GATED_MODEL
+  - examples/research_projects/flux_lora_quantization/train_dreambooth_lora_flux_miniature.py # GATED_MODEL
+  # --device 的 choices 只有 cuda/cpu
+  - examples/community/cogvideox_ddim_inversion.py
+  # device_map="auto" + trust_remote_code
+  - examples/discrete_diffusion/sample_llada2.py
+  # colossalai（依赖 CUDA/NCCL）
+  - examples/research_projects/colossalai/inference.py
+  - examples/research_projects/colossalai/train_dreambooth_colossalai.py
 
+  # 上游 test_custom_diffusion.py 对 transformers>=4.57.5 直接 skip（"Size mismatch"）：
+  # line 874 token_embeds[x]=token_embeds[y]，新 transformers 把 modifier token
+  # <new1> 切成多个 token（[3,32]），与 initializer_token 的 [32] 维度不一致 →
+  # RuntimeError: expand。纯 transformers 版本不兼容，与 NPU 无关。
+  # 但新版 diffusers 刚需 transformers 5.x，无法降级
+  - examples/custom_diffusion/train_custom_diffusion.py
+  # run_diffuser_locomotion：import d4rl + gym，gym.make("hopper-medium-v2")；README
+  # 要求 gym==0.24.1 + free-mujoco-py + d4rl（MuJoCo 二进制，aarch64/py3.12 装不上）
+  - examples/reinforcement_learning/run_diffuser_locomotion.py
+  - examples/research_projects/autoencoder_rae/train_autoencoder_rae.py
+  # OTHER_BACKEND：intel_extension_for_pytorch / neural_compressor
+  - examples/research_projects/intel_opts/inference_bf16.py
+  - examples/research_projects/intel_opts/textual_inversion/textual_inversion_bf16.py
+  - examples/research_projects/intel_opts/textual_inversion_dfq/text2images.py
+  - examples/research_projects/intel_opts/textual_inversion_dfq/textual_inversion.py
+  # OTHER_BACKEND：onnxruntime training（ORT）
+  - examples/research_projects/onnxruntime/text_to_image/train_text_to_image.py
+  - examples/research_projects/onnxruntime/textual_inversion/textual_inversion.py
+  - examples/research_projects/onnxruntime/unconditional_image_generation/train_unconditional.py
+  # PixArt 不是 ORT。下面两条跟 train_pixart_controlnet_hf.py（已迁 supported）不同：
+  # run_pixart_alpha_controlnet_pipeline.py 是独立 demo——device 回退 CPU（cuda 不可用即
+  # cpu）、硬编码 images/0_7.jpg 输入输出路径、还要装 controlnet_aux + HEDdetector；.sh
+  # 只是启动壳（硬编码 MODEL_DIR/OUTPUT_DIR + --report_to=wandb），不单独可跑。
+  - examples/research_projects/pixart/run_pixart_alpha_controlnet_pipeline.py
+  - examples/research_projects/pixart/train_controlnet_hf_diffusers.sh
+  # OTHER_BACKEND：torch_xla（TPU）
+  - examples/research_projects/pytorch_xla/inference/flux/flux_inference.py
+  - examples/research_projects/pytorch_xla/inference/flux/flux_inference_spmd.py
+  - examples/research_projects/pytorch_xla/training/text_to_image/train_text_to_image_xla.py
+  # CUDA_DEP：infer.py 硬编码 cuda；train_realfill.py 另需自定义 realfill 数据集
+  - examples/research_projects/realfill/infer.py
+  - examples/research_projects/realfill/train_realfill.py
+  # GATED_MODEL + CUDA_DEP：SD3 需 gated；且用 bitsandbytes load_in_8bit + device_map（CUDA-only）
+  - examples/research_projects/sd3_lora_colab/compute_embeddings.py
+  # CUDA_DEP + GATED_MODEL：硬编码 cuda/mps（无 NPU 分支，L49-66）；模型为 SD3.5（gated）
+  - examples/server/server.py
+  # CUDA_DEP + GATED_MODEL：import 时即加载 SD3.5（Pipelines.py 无 cuda/mps 抛错）；且为常驻 HTTP 服务
+  - examples/server-async/serverasync.py
   # LCM 全量蒸馏：teacher + 学生 + EMA target 三张 SDXL unet 同时驻留显存。
   # bf16 + --cast_teacher_unet 后静态仍 ~27.7GB（target_unet 不参与 cast），
   # 加梯度 ~30GB/卡 > 29.5GB；ZeRO-2 参数逐卡复制、加卡无效；ZeRO-3 分片
@@ -1091,10 +1056,14 @@ unsupported:
   # npu:0"；该路径无条件执行，去掉 --validation_image 还会 enumerate(None) 报错
   - examples/research_projects/autoencoderkl/train_autoencoderkl.py
   # INCOMPAT：transformers 5.x 下文本编码器 attention 的 q_proj.view() 形状错
-  # （Lumina2 的 Gemma2 / Z-Image 的 Qwen3）：RuntimeError shape '[1, 256, -1, 256]'
-  # is invalid for input of size 256。diffusers 0.4X 必须 transformers 5.x，无法降级。
+  # （Lumina2 的 Gemma2 / Z-Image 的 Qwen3 / Qwen-Image 的 Qwen3-VL）：
+  # RuntimeError shape '[1, N, -1, H]' is invalid for input of size ...。
+  # diffusers 0.4X 必须 transformers 5.x，无法降级。
   - examples/dreambooth/train_dreambooth_lora_lumina2.py
   - examples/dreambooth/train_dreambooth_lora_z_image.py
+  - examples/dreambooth/train_dreambooth_lora_qwenimage21.py
+  - examples/dreambooth/train_dreambooth_lora_qwenimage21_img2img.py
+  - examples/dreambooth/train_dreambooth_lora_krea2.py # GATED_MODEL
   # INCOMPAT：transformers 5.x 起 CLIPTextModel 不再有 .text_model 属性（维护中的
   # 例子都改成 `text_encoder.text_model if hasattr(text_encoder, "text_model") else
   # text_encoder` 兼容），而此脚本 :636-638 硬编码 text_encoder.text_model.encoder/
@@ -1306,6 +1275,3 @@ unsupported:
   - examples/community/unclip_image_interpolation.py
   - examples/community/unclip_text_interpolation.py
   - examples/community/wildcard_stable_diffusion.py
-  # Qwen-Image 2.1 img2img 变体：同 20B 级，等 t2i 变体（supported，8 卡
-  # ZeRO-3）验证后再带上。
-  - examples/dreambooth/train_dreambooth_lora_qwenimage21_img2img.py
