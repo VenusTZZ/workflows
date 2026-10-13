@@ -82,11 +82,14 @@ count: 1
 
 EvalScope 的 Native 后端基于 transformers，因此评测机需已具备 §2 的 `torch` / `torch_npu` 栈。直接用 `pip` 安装 EvalScope 本体（安装时会顺带拉取 transformers / modelscope 等导入期依赖），装完打印版本并再次确认 NPU 栈未被污染。
 
-注意还要**显式安装 `accelerate`**：EvalScope 的本地模型封装在加载时一定会把 `device_map=get_device()`（NPU 上即 `'npu'`）传给 `from_pretrained`，而 transformers ≥5 只要收到 `device_map` 就要求 `accelerate`，但 `evalscope` 的依赖清单里并没有声明它——漏装会在加载模型时报 `requires accelerate`。
+安装时注意两点：
+
+- **显式安装 `accelerate`**：EvalScope 的本地模型封装在加载时一定会把 `device_map=get_device()`（NPU 上即 `'npu'`）传给 `from_pretrained`，而 transformers ≥5 只要收到 `device_map` 就要求 `accelerate`，但 `evalscope` 的依赖清单里并没有声明它——漏装会在加载模型时报 `requires accelerate`。
+- **不要给 `numpy` 加上限（尤其别钉 `<2`）**：EvalScope 经 `modelscope[datasets]` 拉入的 `datasets` / `pyarrow` 新版（`pyarrow>=21` 起）在导入时**要求 NumPy ≥ 2**。若把 `numpy` 钉在 1.x，`import datasets` 会直接抛 `ImportError: pyarrow requires NumPy 2.0 or newer`。这里显式钉 `numpy>=2,<3`，与上游一致地留在 NumPy 2。
 
 ```shell #test id="install-evalscope"
-python -m pip install "evalscope==1.11.0" "numpy>=1.23.4,<2" accelerate
-python -c "import evalscope, transformers, modelscope, accelerate, torch, torch_npu; print('evalscope', evalscope.__version__); print('transformers', transformers.__version__); print('accelerate', accelerate.__version__); print('torch', torch.__version__); print('torch_npu', torch_npu.__version__); print('npu_available', torch.npu.is_available())"
+python -m pip install "evalscope==1.11.0" "numpy>=2.0,<3" accelerate
+python -c "import evalscope, transformers, modelscope, accelerate, numpy, torch, torch_npu; print('evalscope', evalscope.__version__); print('transformers', transformers.__version__); print('accelerate', accelerate.__version__); print('numpy', numpy.__version__); print('torch', torch.__version__); print('torch_npu', torch_npu.__version__); print('npu_available', torch.npu.is_available())"
 ```
 
 输出结果如下：
@@ -96,6 +99,7 @@ python -c "import evalscope, transformers, modelscope, accelerate, torch, torch_
 evalscope 1.11.0
 transformers xxx
 accelerate xxx
+numpy 2.xxx
 torch 2.9.0xxx
 torch_npu 2.9.0.post2
 npu_available True
@@ -238,6 +242,7 @@ evalscope scores in [0,1]: xxx
 | --- | --- | --- |
 | `torch.npu.is_available()` 为 `False` | 未 `source set_env.sh`，或设备未挂进容器 | 重做 §1–§2 |
 | 加载模型报 `Using a device_map ... requires accelerate` | EvalScope 未在依赖里声明 `accelerate`，漏装 | 按 §3 显式 `pip install accelerate`（或 `pip install "evalscope[...]"` 后再补装） |
+| `import datasets` 报 `pyarrow requires NumPy 2.0 or newer` | 手工把 `numpy` 钉在 1.x，而 EvalScope 经 `modelscope[datasets]` 拉入的新版 `pyarrow` 要求 NumPy ≥2 | 按 §3 安装（`numpy>=2,<3`），或 `python -m pip install "numpy>=2"` 后重跑 |
 | `pip` 把 `torch` 换成 CPU / CUDA 轮子 | 安装 EvalScope 时未锁定 NPU 栈 | 卸掉后按 §2–§3 重装 `torch` / `torch_npu` 再装 EvalScope |
 | `evalscope_npu_device` 为 `cpu` | `torch_npu` 没装上，或可见设备为空 | 检查 `npu_available` 和 `ASCEND_RT_VISIBLE_DEVICES` |
 | 评测极慢或显存/OOM | 模型被加载到 CPU，或 `limit` 过大 | 确认 §5.1 通过；CI 已用 `--limit 5` 压规模 |
