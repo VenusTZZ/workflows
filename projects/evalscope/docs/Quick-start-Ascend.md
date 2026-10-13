@@ -89,10 +89,11 @@ python -c "import evalscope, transformers, modelscope, torch, torch_npu; print('
 
 输出结果如下：
 
-```shell #test-result id="install-evalscope" fuzzy='xxx'
+```shell #test-result id="install-evalscope" fuzzy='...' fuzzy='xxx'
+...
 evalscope 1.11.0
 transformers xxx
-torch 2.9.0...
+torch 2.9.0xxx
 torch_npu 2.9.0.post2
 npu_available True
 ```
@@ -133,6 +134,7 @@ has_config True
 
 ```shell #test id="npu-device-check" load="model_path>>model_path"
 python -c "
+print('EVALSCOPE_NPU_DEVICE_CHECK_BEGIN')
 from transformers import AutoModelForCausalLM
 import torch
 m = AutoModelForCausalLM.from_pretrained('<model_path>', torch_dtype='auto', device_map='auto')
@@ -145,8 +147,8 @@ print('EVALSCOPE_NPU_DEVICE_OK')
 
 输出结果如下：
 
-```shell #test-result id="npu-device-check" fuzzy='xxx'
-...
+```shell #test-result id="npu-device-check" fuzzy='...'
+EVALSCOPE_NPU_DEVICE_CHECK_BEGIN...
 evalscope_npu_device npu:0
 EVALSCOPE_NPU_DEVICE_OK
 ```
@@ -155,24 +157,26 @@ EVALSCOPE_NPU_DEVICE_OK
 
 ### 5.2 运行 EvalScope 评测
 
-`evalscope eval` 命令在指定数据集上用默认配置评测模型。`--model` 指向本地权重，`--model-args` 传入 `device_map="auto"` 让 accelerate 自动把模型放到 NPU，`--work-dir` 指定固定输出目录便于结果校验，`--limit 5` 是跑通口径（不代表真实榜单值）。评测机已通过环境变量 `ASCEND_RT_VISIBLE_DEVICES=0` 限定单卡。
+`evalscope eval` 命令在指定数据集上用默认配置评测模型。`--model` 指向本地权重，`--model-args` 传入 `device_map="auto"` 让 accelerate 自动把模型放到 NPU，`--work-dir` 指定固定输出目录、`--no-timestamp` 让报告直接落在该目录（默认会在 `--work-dir` 下再追加时间戳子目录），`--limit 5` 是跑通口径（不代表真实榜单值）。评测机已通过环境变量 `ASCEND_RT_VISIBLE_DEVICES=0` 限定单卡。
 
 ```shell #test id="run-eval" load="model_path>>model_path"
+set -eo pipefail
+mkdir -p outputs
 evalscope eval \
   --model <model_path> \
   --datasets gsm8k arc \
   --limit 5 \
+  --no-timestamp \
   --model-args '{"device_map": "auto"}' \
   --work-dir outputs/evalscope_npu_qs \
   2>&1 | tee outputs/evalscope_npu_qs_run.log
 echo "EVALSCOPE_NPU_DONE"
 ```
 
-输出结果如下（评测日志较长，此处仅校验末尾标记与模型名）：
+输出结果如下（评测日志较长，此处仅校验模型名与末尾完成标记）：
 
-```shell #test-result id="run-eval" fuzzy='xxx'
-...
-Qwen2.5-0.5B-Instruct ...
+```shell #test-result id="run-eval" fuzzy='...'
+...Qwen2.5-0.5B-Instruct...
 ...
 EVALSCOPE_NPU_DONE
 ```
@@ -181,7 +185,7 @@ EVALSCOPE_NPU_DONE
 
 ## 6. 检查评测结果
 
-EvalScope 会把评测报告写入 `--work-dir` 下的 `reports/` 目录（JSON）。下面读取报告，断言所有出现的 `score` 字段都落在 [0,1] 区间并打印，作为冒烟通过的数值依据：
+EvalScope 会把评测报告写入 `--work-dir` 下的 `reports/<模型名>/<数据集>.json`。下面递归读取报告，断言所有出现的 `score` 字段都落在 [0,1] 区间并打印，作为冒烟通过的数值依据：
 
 ```shell #test id="check-acc"
 python << 'PY'
@@ -189,7 +193,7 @@ import glob
 import json
 
 found = []
-for path in glob.glob('outputs/evalscope_npu_qs/reports/*.json'):
+for path in glob.glob('outputs/evalscope_npu_qs/reports/**/*.json', recursive=True):
     try:
         data = json.load(open(path, encoding='utf-8'))
     except Exception:
@@ -218,8 +222,7 @@ PY
 输出结果如下：
 
 ```shell #test-result id="check-acc" fuzzy='xxx'
-...
-evalscope scores in [0,1]: ...
+evalscope scores in [0,1]: xxx
 ```
 
 更多数据集、批量评测与可视化看板用法见 [EvalScope 官方文档](https://evalscope.readthedocs.io/zh-cn/latest/)。
