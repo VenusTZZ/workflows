@@ -16,15 +16,29 @@ fi
 PROFILE="$1"
 
 # Validate the profile before installing anything (contract: unknown
-# profile must exit non-zero before any install).
-SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-research diffusers-research-plain diffusers-t2i-adapter diffusers-text-to-image diffusers-textual-inversion diffusers-unconditional diffusers-vqgan diffusers-sdxl-online diffusers-flux diffusers-sana diffusers-lumina2 diffusers-z-image diffusers-qwen-image diffusers-amused diffusers-cogvideo diffusers-cogvideo-i2v diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2 diffusers-gligen diffusers-controlnet-wds"
-case "$PROFILE" in
-  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-research|diffusers-research-plain|diffusers-t2i-adapter|diffusers-text-to-image|diffusers-textual-inversion|diffusers-unconditional|diffusers-vqgan|diffusers-sdxl-online|diffusers-flux|diffusers-sana|diffusers-lumina2|diffusers-z-image|diffusers-qwen-image|diffusers-amused|diffusers-cogvideo|diffusers-cogvideo-i2v|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2|diffusers-gligen|diffusers-controlnet-wds) ;;
-  *)
-    echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
-    exit 1
-    ;;
-esac
+# profile must exit non-zero before any install). This array is the single
+# profile registry; a new profile also needs a PROFILE_* table entry or a
+# bespoke setup_<profile>() function (see the Profiles section).
+SUPPORTED_PROFILES=(
+  diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix
+  diffusers-kandinsky diffusers-research diffusers-research-plain diffusers-t2i-adapter
+  diffusers-text-to-image diffusers-textual-inversion diffusers-unconditional
+  diffusers-vqgan diffusers-sdxl-online diffusers-flux diffusers-sana diffusers-lumina2
+  diffusers-z-image diffusers-qwen-image diffusers-amused diffusers-cogvideo
+  diffusers-cogvideo-i2v diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet
+  diffusers-controlnet-sdxl diffusers-llada2 diffusers-gligen diffusers-controlnet-wds
+  diffusers-orpo-wds
+)
+profile_known=0
+for _p in "${SUPPORTED_PROFILES[@]}"; do
+  if [[ "$_p" == "$PROFILE" ]]; then
+    profile_known=1
+  fi
+done
+if [[ "$profile_known" != 1 ]]; then
+  echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES[*]})" >&2
+  exit 1
+fi
 
 CLUSTER_PIP_HOST=cache-service.nginx-pypi-cache.svc.cluster.local
 export CLUSTER_PIP_INDEX="http://${CLUSTER_PIP_HOST}/pypi/simple"
@@ -119,7 +133,8 @@ install_example_stack() {
     "transformers>=5.0,<6.0" "accelerate>=1.0,<2.0" "peft>=0.6" \
     "datasets<4.0.0" ftfy tensorboard Jinja2 sentencepiece "torchvision==0.24.0" \
     prodigyopt "modelscope==1.37.0" wandb
-  python -c "import diffusers, transformers, accelerate, peft; print('diffusers', diffusers.__version__, '/ transformers', transformers.__version__, '/ accelerate', accelerate.__version__, '/ peft', peft.__version__)"
+  python -c "import diffusers, transformers, accelerate, peft; print('diffusers', diffusers.__version__, '/ transformers',\
+    transformers.__version__, '/ accelerate', accelerate.__version__, '/ peft', peft.__version__)"
 }
 
 # download_assets <what>: comma-separated tokens from
@@ -363,7 +378,8 @@ PY
 # install_example_stack() is the common stack; a profile declares only its
 # delta on top of it in the tables below, and profiles absent from all
 # three tables get the base stack alone. When adding a new example, diff
-# its requirements.txt against the base and extend the tables (or add a
+# its requirements.txt against the base, add the profile to the
+# SUPPORTED_PROFILES registry at the top, and extend the tables (or add a
 # setup_<profile>() function for genuinely bespoke steps); never
 # `pip install -r` it verbatim (it pins to git main / loose versions and
 # pulls CUDA-only deps).
@@ -458,8 +474,11 @@ PY
 # carry >1000 filter-passing samples - synthesized here because the upstream
 # laion URL is unreachable. Each sample: jpg+png (image and control_image
 # rename from image extensions), txt, and a json with original_width/height
-# >= 512 + pwatermark <= 0.5 for WebdatasetFilter. opencv-headless for the
-# canny control image.
+# >= 512 + pwatermark for WebdatasetFilter. NB pwatermark must be truthy AND
+# <= 0.5: the filter computes `(x or 1.0)`, so 0.0 evaluates to 1.0 and the
+# sample is rejected - a rejected sample never enters the shuffle buffer and
+# the run hangs silently (pwatermark=0.0 here cost a 55-min CI hang; 0.1
+# passes). opencv-headless for the canny control image.
 setup_diffusers_controlnet_wds() {
   install_example_stack
   python -m pip install "webdataset==0.2.86" braceexpand opencv-python-headless
@@ -476,7 +495,7 @@ size = 512
 root = os.path.join(os.environ["GITHUB_WORKSPACE"], "controlnet_wds")
 os.makedirs(root, exist_ok=True)
 tar_path = os.path.join(root, "train-00000.tar")
-meta = json.dumps({"original_width": size, "original_height": size, "pwatermark": 0.0}).encode()
+meta = json.dumps({"original_width": size, "original_height": size, "pwatermark": 0.1}).encode()
 
 
 def make_image(i):
@@ -507,6 +526,61 @@ with tarfile.open(tar_path, "w") as tf:
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"CONTROLNET_WDS_SHARDS={tar_path}\n")
 print(f"prepared {num_samples}-sample webdataset shard at {tar_path}", flush=True)
+PY
+}
+
+# orpo-webdataset: the upstream preference dataset (diffusion-preference-opt on
+# S3) went private, so the shard is synthesized here. Sample layout mirrors
+# get_dataset()'s rename: {key}.original_prompt.txt / jpg_0.jpg / jpg_1.jpg /
+# label_0.txt / label_1.txt (base_plus_ext groups by the first dot). The
+# dataloader's shuffle buffer is 690, so the shard carries 1024 samples.
+# Unlike controlnet-webdataset this uses the stock wds pipeline - no version
+# pin needed. label txt values decode to str, so the == 0.5/== 0 comparisons
+# never fire and the pair order is deterministically [jpg_0, jpg_1].
+setup_diffusers_orpo_wds() {
+  install_example_stack
+  python -m pip install webdataset braceexpand
+  python3 - <<'PY'
+import io
+import os
+import tarfile
+
+from PIL import Image, ImageDraw
+
+num_samples = 1024
+size = 512
+root = os.path.join(os.environ["GITHUB_WORKSPACE"], "orpo_wds")
+os.makedirs(root, exist_ok=True)
+tar_path = os.path.join(root, "train-00000.tar")
+
+
+def make_image(i):
+    image = Image.new("RGB", (size, size), (50 + i % 200, 110, 170))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse([64 + i % 64, 64, size - 64, size - 64 - i % 64], outline=(240, 240, 240), width=6)
+    return image
+
+
+def add(tf, name, data):
+    info = tarfile.TarInfo(name)
+    info.size = len(data)
+    tf.addfile(info, io.BytesIO(data))
+
+
+with tarfile.open(tar_path, "w") as tf:
+    for i in range(num_samples):
+        key = f"{i:06d}"
+        for name, image in (("jpg_0", make_image(i)), ("jpg_1", make_image(i + 256))):
+            buf = io.BytesIO()
+            image.save(buf, format="JPEG")
+            add(tf, f"{key}.{name}.jpg", buf.getvalue())
+        add(tf, f"{key}.original_prompt.txt", f"a synthetic ellipse scene {i}".encode())
+        add(tf, f"{key}.label_0.txt", b"1.0")
+        add(tf, f"{key}.label_1.txt", b"0.0")
+
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"ORPO_WDS_SHARDS={tar_path}\n")
+print(f"prepared {num_samples}-sample orpo webdataset shard at {tar_path}", flush=True)
 PY
 }
 

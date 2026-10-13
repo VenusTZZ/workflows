@@ -8,7 +8,10 @@ scan:
   # 对齐收口：原 scan.exclude 的 33 条规则全部迁入
   # unsupported 段（上游自测 / helper / pipeline 模块 / community 整目录等，
   # 带分组注释与理由），scan 只保留 root + include_extensions 两个键。
-  # unsupported 覆盖全部 308 个扫描文件：supported(39) + unsupported(269)。
+  # unsupported 覆盖全部 308 个扫描文件：supported(40) + unsupported(268)。
+
+# 新版 diffusers 需求 huggingface-hub>=1.23，huggingface-hub>=1.23 需求
+# transformers>=5.x，任何 transformers<5.x 的用例都无法跑通
 
 supported:
   # # ===== 已在昇腾单卡容器（CANN 9.1.0 / torch 2.9.0 / torch_npu 2.9.0.post2，
@@ -714,8 +717,72 @@ supported:
       - --mixed_precision fp16
     timeout_minutes: 180
 
+  # Diffusion-ORPO SDXL LoRA（webdataset 流式版，兄弟条目 train_diffusion_orpo_sdxl_lora.py
+  # 已 supported）。原 unsupported 原因：上游偏好数据集（S3 上的
+  # diffusion-preference-opt）转私有不可达。解法在 profile diffusers-orpo-wds：
+  # setup 现场合成 1024 样本 shard（每样本 original_prompt.txt / jpg_0.jpg /
+  # jpg_1.jpg / label_0.txt / label_1.txt 五件套，键名与 get_dataset() 的 rename
+  # 一一对应；1024 是为了填满 dataloader 写死的 690 shuffle 缓冲），--dataset_path
+  # 指向本地 tar。走标准 wds 管线，webdataset 无需钉版本。dataloader_num_workers
+  # 默认 0 会除零，必须显式传 1。模型栈与兄弟条目同构（fp16 + 512 + 梯度检查点）。
+  - path: examples/research_projects/diffusion_orpo/train_diffusion_orpo_sdxl_lora_wds.py
+    profile: diffusers-orpo-wds
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
+      - --variant fp16
+      - --dataset_path ${ORPO_WDS_SHARDS}
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --num_train_examples 1024
+      - --max_train_steps 1
+      - --resolution 512
+      - --per_gpu_batch_size 1
+      - --global_batch_size 1
+      - --dataloader_num_workers 1
+      - --gradient_checkpointing
+      - --mixed_precision fp16
+    timeout_minutes: 180
+
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
 unsupported:
+  # ===== Flax/JAX 系列 =====
+  # 以下都是训练脚本的 Flax/JAX 版本，跑不通有三层原因：
+  # 1) diffusers 0.40 起删除了全部 Flax 类（FlaxUNet2DConditionModel 等），
+  #    transformers 5.x 起删除了 FlaxCLIPTextModel，脚本开头的 import 就失败；
+  # 2) 版本没有出路：新版 diffusers 强制配 transformers 5.x（两边 hub 版本
+  #    要求互斥），降 diffusers 到 0.39 又等于停止看护最新 release；
+  # 3) JAX/Flax 没有昇腾 NPU 后端，前两条即使解决也上不了卡。
+  - examples/controlnet/train_controlnet_flax.py
+  - examples/dreambooth/train_dreambooth_flax.py
+  - examples/text_to_image/train_text_to_image_flax.py
+  - examples/textual_inversion/textual_inversion_flax.py
+  - examples/research_projects/multi_token_textual_inversion/textual_inversion_flax.py
+  - examples/research_projects/sdxl_flax/sdxl_single.py
+  - examples/research_projects/sdxl_flax/sdxl_single_aot.py
+  # ===== 旧式 LoRA 构造 API 系列：机制已被 diffusers 删除，等上游改写 =====
+  # 这 4 个例子还在用"自己构造 LoRAAttnProcessor 再训练"的老写法，而新版
+  # diffusers 已把这套机制删掉：这三个类还在，但 __init__ 只剩 pass（空壳），
+  # 传 hidden_size / cross_attention_dim / rank 直接 TypeError。就算把调用
+  # 改掉也没用——空壳里没有 LoRA 层，AttnProcsLayers 收集不到可训练参数。
+  # 官方其他 LoRA 例子早已改用 PEFT 写法，这 4 个是没跟上的遗留。
+  # 恢复条件：上游把它们改写成 PEFT LoRA 后一起升格。
+  - examples/kandinsky2_2/text_to_image/train_text_to_image_lora_decoder.py
+  - examples/kandinsky2_2/text_to_image/train_text_to_image_lora_prior.py
+  - examples/research_projects/lora/train_text_to_image_lora.py
+  - examples/research_projects/dreambooth_inpaint/train_dreambooth_inpaint_lora.py
+  # ===== diffusion_policy：教学推理 demo 不适合看护 =====
+  # 1) 它不是训练脚本：201 行里没有优化器/loss/训练循环，只是下载预训练
+  #    权重（dorsar/diffusion_policy/push_tblock.pt）跑一次 100 步去噪，
+  #    打印一条 16 步轨迹；
+  # 2) device 写死 cpu（__init__ 默认值 + __main__ 裸调用），全文零 CLI
+  #    参数——overlay 无处下手，不经 NPU，看护无意义；
+  # 3) checkpoint 是旧结构 state_dict：time_proj.weight [8] vs 当前 API 构造
+  #    出的 [128]，load_state_dict 直接崩；
+  # 4) 无解：repo id 写死换不了 checkpoint，diffusers 是被看护对象不能降版，
+  #    唯一能跑的办法（ignore_mismatched_sizes / 手术 state_dict）等于把时间
+  #    嵌入随机初始化，"预训练"失去意义，且都属 patch。
+  - examples/reinforcement_learning/diffusion_policy.py
   # CUDA硬编码 text_encoding_pipeline.to("cuda")
   - examples/cogview4-control/train_control_cogview4.py
   # community/ 有入口的 5 条（其余 105 个无 __main__ 的 custom_pipeline 模块
@@ -727,9 +794,6 @@ unsupported:
   - examples/community/run_tensorrt_controlnet.py    # OTHER_BACKEND：TensorRT
   # CUDA_DEP：--device 的 choices 只有 cuda/cpu
   - examples/community/cogvideox_ddim_inversion.py
-  # diffusers >= 0.40 需要 transformers >= 5.0
-  # Flax：transformers 5.x 已移除 FlaxCLIPTextModel（diffusers >=0.40 也移除了 Flax）
-  - examples/controlnet/train_controlnet_flax.py
   # Cosmos-Predict2.5-2B 模型仓 gated=auto（需 token + 接受 license），
   - examples/cosmos/eval_cosmos_predict25_lora.py
   - examples/cosmos/eval_lora.sh
@@ -743,11 +807,10 @@ unsupported:
   # line 874 token_embeds[x]=token_embeds[y]，新 transformers 把 modifier token
   # <new1> 切成多个 token（[3,32]），与 initializer_token 的 [32] 维度不一致 →
   # RuntimeError: expand。纯 transformers 版本不兼容，与 NPU 无关。
+  # 但新版 diffusers 刚需 transformers 5.x，无法降级
   - examples/custom_diffusion/train_custom_diffusion.py
   # device_map="auto" + trust_remote_code，不支持NPU
   - examples/discrete_diffusion/sample_llada2.py
-  # Flax不兼容新版本 diffusers 和 transformers
-  - examples/dreambooth/train_dreambooth_flax.py
   # 以下7个：GATED_MODEL
   - examples/dreambooth/train_dreambooth_lora_flux.py
   - examples/dreambooth/train_dreambooth_lora_flux_kontext.py
@@ -758,18 +821,11 @@ unsupported:
   - examples/dreambooth/train_dreambooth_lora_ideogram4.py
   # cuda 硬编码
   - examples/dreambooth/train_dreambooth_lora_krea2.py
-  # line 428 给 LoRAAttnAddedKVProcessor 传 hidden_size，
-  # 当前 diffusers 版本太高 __init__ 不收该参数 → TypeError
-  - examples/kandinsky2_2/text_to_image/train_text_to_image_lora_decoder.py
   # profiling 硬编码 CUDA：helper profiling_utils.py 用 torch.cuda.Event /
   # ProfilerActivity.CUDA / pipe.to("cuda")（NPU 对应 torch.npu.Event /
   # ProfilerActivity.NPU，API 不同）
   - examples/profiling/profiling_pipelines.py
   - examples/profiling/run_profiling.sh
-  # diffusion_policy：checkpoint dorsar/diffusion_policy 与当前 diffusers 的
-  # UNet1DModel 不兼容（time_proj.weight checkpoint [8] vs 当前 [128]，上游
-  # checkpoint 未跟上 API）；且主程序 device 默认 cpu，不经 NPU
-  - examples/reinforcement_learning/diffusion_policy.py
   # run_diffuser_locomotion：import d4rl + gym，gym.make("hopper-medium-v2")；README
   # 要求 gym==0.24.1 + free-mujoco-py + d4rl（MuJoCo 二进制，aarch64/py3.12 装不上）
   - examples/reinforcement_learning/run_diffuser_locomotion.py
@@ -779,10 +835,6 @@ unsupported:
   - examples/research_projects/colossalai/train_dreambooth_colossalai.py
   # CUDA_DEP：硬编码 .to("cuda")
   - examples/research_projects/control_lora/control_lora.py
-  # DATA_UNREACHABLE：get_dataset() 数据集写死键名，原数据集设置为私有无法下载
-  - examples/research_projects/diffusion_orpo/train_diffusion_orpo_sdxl_lora_wds.py
-  # dreambooth_inpaint_lora：需降级 diffusers（用已废弃的 LoRA processor 构造 API）
-  - examples/research_projects/dreambooth_inpaint/train_dreambooth_inpaint_lora.py
   # GATED_MODEL + CUDA_DEP：FLUX.1-dev Gated + bitsandbytes
   - examples/research_projects/flux_lora_quantization/compute_embeddings.py
   - examples/research_projects/flux_lora_quantization/train_dreambooth_lora_flux_miniature.py
@@ -811,14 +863,10 @@ unsupported:
   # 修好）后，把这两条移回 supported。会给上游提 issue 跟进。
   - examples/research_projects/ip_adapter/tutorial_train_ip-adapter.py
   - examples/research_projects/ip_adapter/tutorial_train_plus.py
-  # lora：用已废弃的 LoRAAttnProcessor(hidden_size=..., cross_attention_dim=...)
-  # 构造 API；当前 diffusers 的 LoRAAttnProcessor.__init__() 不收参数
-  - examples/research_projects/lora/train_text_to_image_lora.py
   - examples/research_projects/lpl/train_sdxl_lpl.py
   - examples/research_projects/multi_subject_dreambooth/train_multi_subject_dreambooth.py
   - examples/research_projects/multi_subject_dreambooth_inpainting/train_multi_subject_dreambooth_inpainting.py
   - examples/research_projects/multi_token_textual_inversion/textual_inversion.py
-  - examples/research_projects/multi_token_textual_inversion/textual_inversion_flax.py
   # OTHER_BACKEND：onnxruntime training（ORT）
   - examples/research_projects/onnxruntime/text_to_image/train_text_to_image.py
   - examples/research_projects/onnxruntime/textual_inversion/textual_inversion.py
@@ -835,9 +883,6 @@ unsupported:
   - examples/research_projects/realfill/train_realfill.py
   # GATED_MODEL + CUDA_DEP：SD3 需 gated；且用 bitsandbytes load_in_8bit + device_map（CUDA-only）
   - examples/research_projects/sd3_lora_colab/compute_embeddings.py
-  # OTHER_BACKEND：JAX/Flax
-  - examples/research_projects/sdxl_flax/sdxl_single.py
-  - examples/research_projects/sdxl_flax/sdxl_single_aot.py
   # wuerstchen prior / lora_prior：import diffusers.pipelines.wuerstchen，该模块在
   # 当前 diffusers 已删除（WuerstchenPrior / DEFAULT_STAGE_C_TIMESTEPS 都没了）
   - examples/research_projects/wuerstchen/text_to_image/train_text_to_image_prior.py
@@ -846,10 +891,6 @@ unsupported:
   - examples/server/server.py
   # CUDA_DEP + GATED_MODEL：import 时即加载 SD3.5（Pipelines.py 无 cuda/mps 抛错）；且为常驻 HTTP 服务
   - examples/server-async/serverasync.py
-  # OTHER_BACKEND：jax/optax/flax（diffusers v0.40 已移除 Flax）
-  - examples/text_to_image/train_text_to_image_flax.py
-  # OTHER_BACKEND：jax/optax/flax（diffusers v0.40 已移除 Flax）
-  - examples/textual_inversion/textual_inversion_flax.py
   # 以下 10 个：GATED_MODEL
   - examples/controlnet/train_controlnet_flux.py
   - examples/controlnet/train_controlnet_sd3.py
@@ -861,8 +902,6 @@ unsupported:
   - examples/dreambooth/train_dreambooth_sd3.py
   - examples/dreambooth/train_dreambooth_lora_hidream.py
   - examples/research_projects/sd3_lora_colab/train_dreambooth_lora_sd3_miniature.py
-  # API_CHANGE：diffusers 0.41.0.dev0 的 LoRA 构造 API 不再接受 hidden_size 参数
-  - examples/kandinsky2_2/text_to_image/train_text_to_image_lora_prior.py
   # 以下 6 个：尝试使用多卡运行时发现的错误，examples/text_to_image/train_text_to_image_sdxl.py在单卡
   # 上跑通过但是显存占用很极限，后来就跑不通了，差一点点显存
   # INCOMPAT：transformers 5.x 不兼容 CLIP text config
