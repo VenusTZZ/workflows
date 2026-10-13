@@ -218,7 +218,7 @@ print('sentence_info_keys:', sorted(r['sentence_info'][0].keys()))
 ```shell #test-result id="funasr-asr-pipeline" 
 ...
 device: npu:0
-text: ...
+text: 欢迎大家来体验达摩院推出的语音识别模型。
 sentence_info_keys: ['end', 'spk', 'start', 'text', 'timestamp']
 ```
 
@@ -257,7 +257,7 @@ print('clean_text:', rich_transcription_postprocess(r['text']))
 ...
 device: npu:0
 raw_text: ...
-clean_text: ...
+clean_text: 欢迎大家来体验达摩院推出的语音识别模型
 ```
 
 ```{admonition} Note
@@ -309,7 +309,7 @@ print('streamed_text:', ''.join(parts))
 ```shell #test-result id="funasr-streaming" 
 ...
 device: npu:0
-streamed_text: ...
+streamed_text: 欢迎大家来体验达摩院推出的语音识别模型
 ```
 
 `streamed_text` 是所有块增量返回文本拼接后的完整转写；生产里把每块非空 `text` 直接推给下游即可实现实时上屏。
@@ -339,13 +339,13 @@ print('n_labels:', len(labels))
 print('top_emotion:', top[0])
 ```
 
-输出结果类似如下（`top_emotion` 随输入音频变化，用 `...` 吸收）：
+输出结果类似如下：
 
 ```shell #test-result id="funasr-emotion" 
 ...
 device: npu:0
 n_labels: 9
-top_emotion: ...
+top_emotion: 中立/neutral
 ```
 
 `labels` 覆盖 8 种情感（生气/厌恶/恐惧/开心/中立/其他/难过/吃惊）+ 1 个 `other`/`<unk>` 兜底标签，`top_emotion` 是概率最高的那一个。
