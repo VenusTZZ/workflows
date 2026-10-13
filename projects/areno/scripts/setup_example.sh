@@ -186,21 +186,23 @@ ensure_media_deps() {
   # torchvision：缺它 AutoProcessor.from_pretrained 直接抛错，被
   # load_processor 吞成 None，随后报 "multimodal rows require a checkpoint
   # processor"。音视频还要 av / librosa / soundfile。dataset_generator 用 Pillow。
-  # 装时用 constraints 把 torch 钉在现装的 CANN 版，避免 pip 顺带把 torch 换成
-  # PyPI 的 CPU 版而破坏 torch_npu。
-  local constraints
-  constraints="$(mktemp)"
-  echo "torch==$(python -c 'import torch; print(torch.__version__)')" > "$constraints"
-  python -m pip install -q -c "$constraints" Pillow torchvision "$@"
-  rm -f "$constraints"
+  # 镜像里带的 torchvision 是残缺 stub：import 能过，但 torchvision.transforms
+  # 不是包、没有 transforms.v2，pip 又以为依赖已满足不会装真包。故强制重装与当前
+  # torch 配对的真 torchvision（--no-deps 只动它自己，避免连带换掉 torch/numpy）。
+  local torch_minor tv_ver
+  torch_minor="$(python -c 'import torch; print(torch.__version__.split("+")[0].split(".")[1])')"
+  tv_ver="0.$((torch_minor + 15)).0"  # torch 2.N <-> torchvision 0.(N+15)（2.6->0.21 ... 2.10->0.25）
+  echo "installing torchvision ${tv_ver} to match the local torch"
+  python -m pip install -q --force-reinstall --no-deps "torchvision==${tv_ver}"
+  python -m pip install -q Pillow "$@"
   # 功能校验：transformers 的 Fast 图像处理器用的是 torchvision.transforms.v2；
-  # 不要依赖 torchvision.__version__（部分昇腾环境里的 torchvision 是 shim，没这个属性）。
+  # 不要依赖 torchvision.__version__（残缺 stub 没这个属性）。
   python - <<'PY'
 import torch
 import torchvision
 import torchvision.transforms.v2  # noqa: F401 - transformers Fast 图像处理器依赖
 
-print("media deps ok: torch", torch.__version__, "torchvision", getattr(torchvision, "__version__", "n/a"))
+print("media deps ok: torch", torch.__version__, "torchvision", getattr(torchvision, "__version__", "n/a"), torchvision.__file__)
 PY
 }
 
