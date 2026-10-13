@@ -1,0 +1,2 @@
+# Preserve patch bytes; unified-diff context markers are not source whitespace.
+*.patch -text -whitespace
