@@ -7,24 +7,18 @@
 # run-example matrix / validate-results / save-monitor-state) lives in the
 # engine. See docs/examples-guard-engine.md for the design.
 #
-# Guard state: projects/areno/examples_manifest.yaml registers agentic/RLVR
-# examples as supported - bash_game, codebreaker, coding, duelgrid, shopping,
-# terminal_hacking, tictactoe (tool-call + XML no-tool variants) and math
-# (GSM8K RLVR) are already green and currently commented off to save NPU time
-# (their entry files are parked under unsupported); alpaca (SFT) is active.
-# ave_event_recognition / tictactoe_image are marked unsupported (NPU
-# multimodal). The run-example matrix schedules one 1-card NPU leg per active
-# supported entry (linux-aarch64-a2-1), each running
-# projects/areno/scripts/setup_example.sh (source build of
+# Guard state: projects/areno/examples_manifest.yaml registers the supported
+# entries - bash_game, codebreaker, coding, duelgrid, shopping,
+# terminal_hacking, tictactoe (tool-call + XML no-tool), math (GSM8K RLVR),
+# alpaca (SFT) and pi (pi coding agent). ave_event_recognition /
+# tictactoe_image (NPU multimodal) are unsupported. The run-example matrix
+# schedules one 1-card NPU leg per supported entry (linux-aarch64-a2-1), each
+# running projects/areno/scripts/setup_example.sh (source build of
 # areno.accel._areno_accel_npu) + run_example.sh.
-# Refs: the guard targets main, not the release. The engine's monitor is
-# release-triggered (it resolves the latest release, v0.0.8), but
-# setup_example.sh's use_npu_capable_source switches the workspace checkout to
-# upstream main whenever the checkout lacks areno/accel/csrc/npu - exactly the
-# case for v0.0.8. So schedule and manual dispatch (empty target_ref, or
-# explicit main) all build and run main. Once a release ships the NPU backend
-# the switch becomes a no-op and the release line is used as-is. (Same pattern
-# as slime: release triggers, main is built; cf. areno-quick-start.yml.)
+# Refs: the guard targets the latest upstream release (v0.9.0, which ships the
+# NPU backend), so schedule and manual dispatch (empty target_ref, or explicit
+# ref) all build and test that ref directly - no main switch. setup_example.sh
+# compiles areno.accel._areno_accel_npu from the release checkout.
 
 name: areno-examples
 
@@ -38,9 +32,8 @@ concurrency:
 
 on:
   # Poll the upstream release signal every 6h. The engine's monitor resolves
-  # the target as the latest release (v0.0.8); setup_example.sh then switches
-  # the workspace checkout to upstream main because that release lacks the NPU
-  # backend, so the scheduled run still tests main.
+  # the target as the latest release (v0.9.0, which ships the NPU backend);
+  # the run builds and tests that release.
   schedule:
     - cron: '10 */6 * * *'
   workflow_dispatch:

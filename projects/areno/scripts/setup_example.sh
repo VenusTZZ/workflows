@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 # Prepare the CI environment for one supported AReno example.
 # $1 is the manifest profile. Unknown profiles fail before any install.
-# AReno installs from the target checkout (TARGET_ROOT). The engine checks
-# out the monitored ref (latest release); because v0.0.8 predates the NPU
-# backend, the checkout is switched to upstream main when the NPU sources
-# are absent - temporary handling, same as areno-quick-start.yml. The
-# source build compiles areno.accel._areno_accel_npu (Ascend C + CMake, no
-# Python fallback).
+# AReno installs from the target checkout (TARGET_ROOT) - the engine's
+# monitored ref, i.e. the latest upstream release. v0.9.0 ships the NPU
+# backend, so no main switch is needed. The source build compiles
+# areno.accel._areno_accel_npu (Ascend C + CMake, no Python fallback).
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -91,18 +89,6 @@ ensure_torch_stack() {
   python -c "import torch, torch_npu; print('torch', torch.__version__, 'torch_npu', torch_npu.__version__)"
 }
 
-use_npu_capable_source() {
-  # v0.0.8 (the guarded release) has no NPU backend; switch the workspace
-  # copy to upstream main so the source build can produce the NPU
-  # extension. Manual dispatch with target_ref=main is a no-op here.
-  if [[ ! -d "$TARGET_ROOT/areno/accel/csrc/npu" ]]; then
-    echo "NPU sources absent at $(git -C "$TARGET_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown); switching to upstream main"
-    git -C "$TARGET_ROOT" fetch --depth 1 origin main
-    git -C "$TARGET_ROOT" checkout --detach FETCH_HEAD
-  fi
-  echo "building from $(git -C "$TARGET_ROOT" rev-parse --short HEAD)"
-}
-
 install_areno() {
   source_vendor_env /usr/local/Ascend/ascend-toolkit/set_env.sh
   # Build AReno + its Ascend C extension, but skip the two heavy optional deps
@@ -128,12 +114,69 @@ print('areno NPU extension ok')
 PY
 }
 
+install_pi_toolchain() {
+  # pi (pi.dev) is an external Node.js CLI that the pi example drives through
+  # its own environment knobs (ARENO_PI_EXECUTABLE / ARENO_PI_PYTHON /
+  # ARENO_PI_RESULT_DIR). Install everything from mainland-reachable mirrors:
+  #   - Node >= 22.19 from the npmmirror node binaries (runner is aarch64);
+  #   - pi from the npmmirror npm registry (package
+  #     @earendil-works/pi-coding-agent);
+  #   - fd / ripgrep via apt (pi's bash tools use them);
+  #   - the SWE-smith task set generated from ModelScope.
+  # Paths/executables are exported via GITHUB_ENV so run_example.sh sees them.
+  local node_ver="${ARENO_PI_NODE_VERSION:-22.19.0}"
+  if ! command -v node >/dev/null 2>&1; then
+    echo "installing Node ${node_ver} (aarch64) from npmmirror"
+    curl -fsSL "https://cdn.npmmirror.com/binaries/node/v${node_ver}/node-v${node_ver}-linux-arm64.tar.gz" \
+      | tar -xz -C /usr/local --strip-components=1
+  fi
+  node --version
+  npm --version
+
+  echo "installing pi from the npmmirror npm registry"
+  npm install -g --ignore-scripts --registry=https://registry.npmmirror.com \
+    @earendil-works/pi-coding-agent
+  local pi_bin
+  pi_bin="$(command -v pi)"
+  "$pi_bin" --version
+
+  # fd / ripgrep for pi's bash tools.
+  command -v rg >/dev/null 2>&1 || {
+    apt-get update -qq >/dev/null
+    apt-get install -y -qq fd-find ripgrep >/dev/null
+  }
+  command -v fd >/dev/null 2>&1 || ln -sf /usr/bin/fdfind /usr/local/bin/fd
+  command -v fd && command -v rg
+
+  # The example's task Python (pi's bash tools + the controller's grader) just
+  # needs pytest, already present in the main env; the upstream README's
+  # separate python3.12 venv is not required here.
+  local task_py
+  task_py="$(command -v python)"
+  # Dataset-prep deps (modelscope + pyarrow) for generate_dataset.py.
+  python -m pip install -q -r "$TARGET_ROOT/examples/agentic/pi/requirements.txt"
+
+  local data="$GITHUB_WORKSPACE/pi-swesmith.jsonl"
+  local results="$GITHUB_WORKSPACE/pi-results"
+  mkdir -p "$results"
+  echo "generating SWE-smith tasks from ModelScope -> $data"
+  python "$TARGET_ROOT/examples/agentic/pi/generate_dataset.py" \
+    --python "$task_py" --output "$data"
+
+  {
+    echo "ARENO_PI_EXECUTABLE=$pi_bin"
+    echo "ARENO_PI_PYTHON=$task_py"
+    echo "ARENO_PI_RESULT_DIR=$results"
+    echo "ARENO_PI_DATA=$data"
+  } >> "$GITHUB_ENV"
+}
+
 # Known profiles. Every current profile shares the same preparation (the AReno
 # NPU source build below); a profile that needs extra dependencies would branch
 # on PROFILE here, before the shared steps.
-SUPPORTED_PROFILES="bash_game_npu codebreaker_npu coding_npu duelgrid_npu shopping_npu terminal_hacking_npu tictactoe_npu tictactoe_no_tool_npu math_npu alpaca_npu"
+SUPPORTED_PROFILES="bash_game_npu codebreaker_npu coding_npu duelgrid_npu shopping_npu terminal_hacking_npu tictactoe_npu tictactoe_no_tool_npu math_npu alpaca_npu pi_npu"
 case "$PROFILE" in
-  bash_game_npu | codebreaker_npu | coding_npu | duelgrid_npu | shopping_npu | terminal_hacking_npu | tictactoe_npu | tictactoe_no_tool_npu | math_npu | alpaca_npu) ;;
+  bash_game_npu | codebreaker_npu | coding_npu | duelgrid_npu | shopping_npu | terminal_hacking_npu | tictactoe_npu | tictactoe_no_tool_npu | math_npu | alpaca_npu | pi_npu) ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -144,7 +187,6 @@ select_pip_index
 python -m pip install -U pip 'setuptools>=69' wheel
 ensure_build_tools
 ensure_torch_stack
-use_npu_capable_source
 install_areno
 # pytest backs the coding example's run_command test execution: its tasks run
 # `python -m pytest ...` inside the per-task workspace during rollout.
@@ -154,3 +196,8 @@ python -m pip install -q pytest
 # requirements list `openai`, but the base image can already satisfy `openai`
 # without pulling its `httpx` dependency, so install both explicitly.
 python -m pip install -q openai httpx
+
+# Per-profile extra toolchain (external deps an example needs on top of AReno).
+case "$PROFILE" in
+  pi_npu) install_pi_toolchain ;;
+esac

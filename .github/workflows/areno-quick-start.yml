@@ -8,12 +8,10 @@
 # GRPO/GSPO/PPO + OpenAI-compatible serving). NPU support follows the
 # upstream docs/concepts/npu.rst target stack — CANN 9.0.0 + torch
 # 2.10.0+cpu + torch_npu 2.10.0.post2 — hence the 9.0.0 image (not the
-# 9.1.0 line most other projects use). The doc installs from source at
-# upstream main (temporary: the latest release tag v0.0.8 predates the
-# NPU backend — same situation as wenet; revert to the engine-resolved
-# release tag once a release ships NPU): the installer detects torch_npu,
-# switches to requirements/npu.txt and compiles the
-# areno.accel._areno_accel_npu Ascend C extension in-place (no Python
+# 9.1.0 line most other projects use). The doc installs from source at the
+# engine-resolved latest release tag (v0.9.0 ships the NPU backend): the
+# installer detects torch_npu, switches to requirements/npu.txt and compiles
+# the areno.accel._areno_accel_npu Ascend C extension in-place (no Python
 # fallback), which is why timeout covers a full source build.
 # Doc body: 1-step GSPO-on-GSM8K RLVR smoke (Qwen3-0.6B via ModelScope,
 # single card) with checkpoint save, then `areno serve --backend npu` of
