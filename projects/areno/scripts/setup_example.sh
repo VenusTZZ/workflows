@@ -159,9 +159,9 @@ install_pi_toolchain() {
 # 已知 profile。当前各 profile 共用同一套准备（下面的 AReno NPU 源码构建）；
 # 需要额外依赖的 profile 在这里按 PROFILE 分支。pi 已不支持（QLoRA 为 CUDA-only），
 # 保留 pi_npu 与 install_pi_toolchain 以备将来试非 QLoRA 变体。
-SUPPORTED_PROFILES="bash_game_npu codebreaker_npu coding_npu duelgrid_npu shopping_npu terminal_hacking_npu tictactoe_npu tictactoe_no_tool_npu math_npu alpaca_npu pi_npu"
+SUPPORTED_PROFILES="bash_game_npu codebreaker_npu coding_npu duelgrid_npu shopping_npu terminal_hacking_npu tictactoe_npu tictactoe_no_tool_npu math_npu alpaca_npu tictactoe_image_npu ave_event_recognition_npu pi_npu"
 case "$PROFILE" in
-  bash_game_npu | codebreaker_npu | coding_npu | duelgrid_npu | shopping_npu | terminal_hacking_npu | tictactoe_npu | tictactoe_no_tool_npu | math_npu | alpaca_npu | pi_npu) ;;
+  bash_game_npu | codebreaker_npu | coding_npu | duelgrid_npu | shopping_npu | terminal_hacking_npu | tictactoe_npu | tictactoe_no_tool_npu | math_npu | alpaca_npu | tictactoe_image_npu | ave_event_recognition_npu | pi_npu) ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -179,7 +179,66 @@ python -m pip install -q pytest
 # NPU 依赖列了 openai，但镜像可能已满足 openai 而未带其 httpx 依赖，故两个都装。
 python -m pip install -q openai httpx
 
+install_vl_image_deps() {
+  # tictactoe_image：dataset_generator.py（被 dataset_loader import）用 Pillow
+  # 合成板图，缺 Pillow 时 loader 在 import 阶段即失败。transformers 的 VL
+  # processor 也走 Pillow，故一并满足。
+  python -m pip install -q Pillow
+}
+
+install_ave_media_deps() {
+  # ave_event_recognition 的源码直接依赖 Pillow（图像）与 soundfile（音频）；
+  # Gemma4 的音视频 processor 解容器用 PyAV、音频重采样用 librosa，抽音轨的
+  # dataset_generator 需要 ffmpeg。
+  python -m pip install -q Pillow soundfile librosa av
+  command -v ffmpeg >/dev/null 2>&1 || {
+    apt-get update -qq >/dev/null
+    apt-get install -y -qq ffmpeg >/dev/null
+  }
+  command -v ffmpeg
+}
+
+stage_ave_fixture() {
+  # 上游示例的数据是整包 AVE（数十 GB 视频），CI 用一段 10s 合成音视频 +
+  # 单行 manifest 代替，让 loader/agent/reward/train 全链路照常跑。judge 由
+  # run_example.sh 的存根服务提供（引擎不校验奖励数值、只认退出码）。
+  local dir="$GITHUB_WORKSPACE/ave-fixture"
+  local manifest="$dir/manifest.jsonl"
+  if [[ ! -f "$manifest" ]]; then
+    mkdir -p "$dir"
+    ffmpeg -nostdin -loglevel error -y \
+      -f lavfi -i "testsrc=size=224x224:rate=8:duration=10" \
+      -f lavfi -i "sine=frequency=440:sample_rate=16000:duration=10" \
+      -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest "$dir/clip.mp4"
+    ffmpeg -nostdin -loglevel error -y -i "$dir/clip.mp4" -vn -ac 1 -ar 16000 "$dir/clip.wav"
+    python - "$dir" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+row = {
+    "id": "ci-ave-00000",
+    "dataset_root": str(root),
+    "split": "train",
+    "video_id": "ci-ave",
+    "video_path": "clip.mp4",
+    "audio_path": "clip.wav",
+    "event_classes": ["Speech"],
+    "qualities": ["good"],
+    "start_seconds": 0.0,
+    "end_seconds": 10.0,
+}
+(root / "manifest.jsonl").write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+print(f"wrote ave fixture manifest {root / 'manifest.jsonl'}")
+PY
+  fi
+  echo "AVE_DATASET=$manifest" >> "$GITHUB_ENV"
+}
+
 # 逐 profile 的额外工具链（AReno 之外的外部依赖）。
 case "$PROFILE" in
+  tictactoe_image_npu) install_vl_image_deps ;;
+  ave_event_recognition_npu) install_ave_media_deps; stage_ave_fixture ;;
   pi_npu) install_pi_toolchain ;;
 esac
