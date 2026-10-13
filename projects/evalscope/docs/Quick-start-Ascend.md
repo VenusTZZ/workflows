@@ -56,10 +56,14 @@ python --version
 Python 3.12.xxx
 ```
 
-检查 torch / torch_npu 是否装好且 NPU 设备可用：
+检查 torch / torch_npu 是否装好且 NPU 设备可用（下面代码用 python 运行）：
 
-```shell #test id="check-torch"
-python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+```python #test id="check-torch"
+import torch, torch_npu
+print('torch=', torch.__version__)
+print('torch_npu=', torch_npu.__version__)
+print('is_available:', torch.npu.is_available())
+print('count:', torch.npu.device_count())
 ```
 
 输出结果如下：
@@ -80,22 +84,33 @@ count: 1
 
 ## 3. 安装 EvalScope
 
-EvalScope 的 Native 后端基于 transformers，因此评测机需已具备 §2 的 `torch` / `torch_npu` 栈。直接用 `pip` 安装 EvalScope 本体（安装时会顺带拉取 transformers / modelscope 等导入期依赖），装完打印版本并确认 NPU 栈可用。
+EvalScope 的 Native 后端基于 transformers，因此评测机需已具备 §2 的 `torch` / `torch_npu` 栈。直接用 `pip` 安装 EvalScope 本体（安装时会顺带拉取 transformers / modelscope 等导入期依赖）：
 
 安装时注意两点：
 
 - **显式安装 `accelerate`**：EvalScope 的本地模型封装在加载时一定会把 `device_map=get_device()`（NPU 上即 `'npu'`）传给 `from_pretrained`，而 transformers ≥5 只要收到 `device_map` 就要求 `accelerate`，但 `evalscope` 的依赖清单里并没有声明它——漏装会在加载模型时报 `requires accelerate`。
 - **不要给 `numpy` 加上限（尤其别钉 `<2`）**：EvalScope 经 `modelscope[datasets]` 拉入的新版 `datasets` / `pyarrow` 在导入时**要求 NumPy ≥ 2**。若把 `numpy` 钉在 1.x，`import datasets` 会直接抛 `ImportError: pyarrow requires NumPy 2.0 or newer`（该检查发生在运行期、不在包元数据里，pip 解析时不会报冲突）。这里显式钉 `numpy>=2,<3`，与上游一致地留在 NumPy 2。
 
-```shell #test id="install-evalscope"
+```shell #test-setup
 python -m pip install "evalscope==1.11.0" "numpy>=2.0,<3" accelerate
-python -c "import evalscope, transformers, modelscope, accelerate, numpy, torch, torch_npu; print('evalscope', evalscope.__version__); print('transformers', transformers.__version__); print('accelerate', accelerate.__version__); print('numpy', numpy.__version__); print('torch', torch.__version__); print('torch_npu', torch_npu.__version__); print('npu_available', torch.npu.is_available())"
+```
+
+装完打印版本并确认 NPU 栈可用（下面代码用 python 运行）：
+
+```python #test id="check-evalscope"
+import evalscope, transformers, accelerate, numpy, torch, torch_npu
+print('evalscope', evalscope.__version__)
+print('transformers', transformers.__version__)
+print('accelerate', accelerate.__version__)
+print('numpy', numpy.__version__)
+print('torch', torch.__version__)
+print('torch_npu', torch_npu.__version__)
+print('npu_available', torch.npu.is_available())
 ```
 
 输出结果如下：
 
-```shell #test-result id="install-evalscope" fuzzy='...' fuzzy='xxx'
-...
+```shell #test-result id="check-evalscope" fuzzy='xxx'
 evalscope 1.11.0
 transformers xxx
 accelerate xxx
@@ -111,10 +126,11 @@ npu_available True
 
 ## 4. 准备模型与数据
 
-权重从 ModelScope 拉取，第一次约 1 GB，之后走本地缓存（默认位于 `~/.cache/modelscope`）。
+下面用 python 从 ModelScope 拉取权重（第一次约 1 GB，之后走本地缓存，默认位于 `~/.cache/modelscope`）：
 
-```shell #test-setup store="model_path"
-python -c "from modelscope import snapshot_download; print(snapshot_download('Qwen/Qwen2.5-0.5B-Instruct'))"
+```python #test-setup store="model_path"
+from modelscope import snapshot_download
+print(snapshot_download('Qwen/Qwen2.5-0.5B-Instruct'))
 ```
 
 确认权重目录完整：
@@ -137,17 +153,16 @@ has_config True
 
 ### 5.1 先确认模型能够加载到 NPU
 
-先用 transformers 以 `device_map="npu"` 加载模型并打印第一个参数的设备，确认模型确实落在 NPU 上。EvalScope 的 Native 后端同样把 `device_map` 直接传给 transformers 的 `from_pretrained`（NPU 上取值为 `'npu'`），因此这一步与 EvalScope 的加载路径一致。
+先用 transformers 以 `device_map="npu"` 加载模型并打印第一个参数的设备，确认模型确实落在 NPU 上（下面代码用 python 运行）。EvalScope 的 Native 后端同样把 `device_map` 直接传给 transformers 的 `from_pretrained`（NPU 上取值为 `'npu'`），因此这一步与 EvalScope 的加载路径一致。
 
-```shell #test id="npu-device-check" load="model_path>>model_path"
-python -c "
+```python #test id="npu-device-check" load="model_path>>model_path"
 import torch, torch_npu
 from transformers import AutoModelForCausalLM
+
 m = AutoModelForCausalLM.from_pretrained('<model_path>', torch_dtype='auto', device_map='npu')
 dev = str(next(m.parameters()).device)
 print('evalscope_npu_device', dev)
 assert dev.startswith('npu'), dev
-"
 ```
 
 输出结果如下：
@@ -182,10 +197,9 @@ evalscope eval \
 
 ## 6. 查看评测结果
 
-EvalScope 会把每个数据集的评测报告写到 `--work-dir` 下的 `reports/<模型名>/` 目录（JSON）。下面的脚本把报告逐份打印出来：
+EvalScope 会把每个数据集的评测报告写到 `--work-dir` 下的 `reports/<模型名>/` 目录（JSON）。下面代码用 python 运行，把报告逐份打印出来：
 
-```shell #test id="check-result"
-python << 'PY'
+```python #test id="check-result"
 import glob
 import json
 
@@ -193,16 +207,15 @@ print('evalscope 评测报告：')
 for path in sorted(glob.glob('outputs/evalscope_npu_qs/reports/**/*.json', recursive=True)):
     print('report:', path)
     print(json.dumps(json.load(open(path, encoding='utf-8')), ensure_ascii=False, indent=2))
-PY
 ```
 
-输出结果如下（`...` 表示省略的报告正文）：
+输出结果如下（`...` 表示省略的部分）：
 
 ```shell #test-result id="check-result" fuzzy='...'
 ...
-report: .../arc.json
+report: ...arc.json
 ...
-report: .../gsm8k.json
+report: ...gsm8k.json
 ...
 ```
 
