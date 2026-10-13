@@ -8,7 +8,7 @@ scan:
   # 对齐收口：原 scan.exclude 的 33 条规则全部迁入
   # unsupported 段（上游自测 / helper / pipeline 模块 / community 整目录等，
   # 带分组注释与理由），scan 只保留 root + include_extensions 两个键。
-  # unsupported 覆盖全部 308 个扫描文件：supported(40) + unsupported(268)。
+  # unsupported 覆盖全部 308 个扫描文件：supported(45) + unsupported(263)。
 
 # 新版 diffusers 需求 huggingface-hub>=1.23，huggingface-hub>=1.23 需求
 # transformers>=5.x，任何 transformers<5.x 的用例都无法跑通
@@ -692,57 +692,159 @@ supported:
   #     - --checkpointing_steps 1
   #     - --mixed_precision no
   #   timeout_minutes: 90
-
-  # ControlNet webdataset 训练（SDXL）：原 unsupported 的三个原因全部在 profile
-  # diffusers-controlnet-wds 里解决——webdataset 钉 0.2.86（例子里 vendored 的
-  # 旧版 tar 迭代器在新版 webdataset 上直接 KeyError）；setup 现场合成 1024
-  # 样本的 shard（上游 laion URL 不可达；且例子把 shuffle 缓冲写死 1000，样本
-  # 不足 1000 时第一个 batch 永远不来，max_train_samples 需 ≥1000）；装
-  # opencv-headless 供 canny 控制图。fp16 + 梯度检查点 + 256 分辨率压显存
-  # （SDXL ControlNet 全量训练在 29.5GiB 单卡上贴边，OOM 则先试降分辨率）。
-  - path: examples/research_projects/controlnet/train_controlnet_webdataset.py
-    profile: diffusers-controlnet-wds
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --train_shards_path_or_url ${CONTROLNET_WDS_SHARDS}
-      - --eval_shards_path_or_url ${CONTROLNET_WDS_SHARDS}
-      - --max_train_samples 1024
-      - --max_train_steps 1
-      - --resolution 256
-      - --train_batch_size 1
-      - --gradient_checkpointing
-      - --mixed_precision fp16
-    timeout_minutes: 180
-
-  # Diffusion-ORPO SDXL LoRA（webdataset 流式版，兄弟条目 train_diffusion_orpo_sdxl_lora.py
-  # 已 supported）。原 unsupported 原因：上游偏好数据集（S3 上的
-  # diffusion-preference-opt）转私有不可达。解法在 profile diffusers-orpo-wds：
-  # setup 现场合成 1024 样本 shard（每样本 original_prompt.txt / jpg_0.jpg /
-  # jpg_1.jpg / label_0.txt / label_1.txt 五件套，键名与 get_dataset() 的 rename
-  # 一一对应；1024 是为了填满 dataloader 写死的 690 shuffle 缓冲），--dataset_path
-  # 指向本地 tar。走标准 wds 管线，webdataset 无需钉版本。dataloader_num_workers
-  # 默认 0 会除零，必须显式传 1。模型栈与兄弟条目同构（fp16 + 512 + 梯度检查点）。
-  - path: examples/research_projects/diffusion_orpo/train_diffusion_orpo_sdxl_lora_wds.py
-    profile: diffusers-orpo-wds
+  # # ControlNet webdataset 训练（SDXL）：原 unsupported 的三个原因全部在 profile
+  # # diffusers-controlnet-wds 里解决——webdataset 钉 0.2.86（例子里 vendored 的
+  # # 旧版 tar 迭代器在新版 webdataset 上直接 KeyError）；setup 现场合成 1024
+  # # 样本的 shard（上游 laion URL 不可达；且例子把 shuffle 缓冲写死 1000，样本
+  # # 不足 1000 时第一个 batch 永远不来，max_train_samples 需 ≥1000）；装
+  # # opencv-headless 供 canny 控制图。fp16 + 梯度检查点 + 256 分辨率压显存
+  # # （SDXL ControlNet 全量训练在 29.5GiB 单卡上贴边，OOM 则先试降分辨率）。
+  # - path: examples/research_projects/controlnet/train_controlnet_webdataset.py
+  #   profile: diffusers-controlnet-wds
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --train_shards_path_or_url ${CONTROLNET_WDS_SHARDS}
+  #     - --eval_shards_path_or_url ${CONTROLNET_WDS_SHARDS}
+  #     - --max_train_samples 1024
+  #     - --max_train_steps 1
+  #     - --resolution 256
+  #     - --train_batch_size 1
+  #     - --gradient_checkpointing
+  #     - --mixed_precision fp16
+  #   timeout_minutes: 180
+  # # Diffusion-ORPO SDXL LoRA（webdataset 流式版，兄弟条目 train_diffusion_orpo_sdxl_lora.py
+  # # 已 supported）。原 unsupported 原因：上游偏好数据集（S3 上的
+  # # diffusion-preference-opt）转私有不可达。解法在 profile diffusers-orpo-wds：
+  # # setup 现场合成 1024 样本 shard（每样本 original_prompt.txt / jpg_0.jpg /
+  # # jpg_1.jpg / label_0.txt / label_1.txt 五件套，键名与 get_dataset() 的 rename
+  # # 一一对应；1024 是为了填满 dataloader 写死的 690 shuffle 缓冲），--dataset_path
+  # # 指向本地 tar。走标准 wds 管线，webdataset 无需钉版本。dataloader_num_workers
+  # # 默认 0 会除零，必须显式传 1。模型栈与兄弟条目同构（fp16 + 512 + 梯度检查点）。
+  # - path: examples/research_projects/diffusion_orpo/train_diffusion_orpo_sdxl_lora_wds.py
+  #   profile: diffusers-orpo-wds
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
+  #     - --variant fp16
+  #     - --dataset_path ${ORPO_WDS_SHARDS}
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --num_train_examples 1024
+  #     - --max_train_steps 1
+  #     - --resolution 512
+  #     - --per_gpu_batch_size 1
+  #     - --global_batch_size 1
+  #     - --dataloader_num_workers 1
+  #     - --gradient_checkpointing
+  #     - --mixed_precision fp16
+  #   timeout_minutes: 180
+  # SDXL ControlNet（fusing/fill50k，trust_remote_code 由 profile 提供）。
+  # fp16 + 梯度检查点 + 256 分辨率压显存：只训 controlnet（~1.2B），SDXL
+  # 全套冻结，单卡 ~26GB 贴边，OOM 则先降分辨率。
+  - path: examples/controlnet/train_controlnet_sdxl.py
+    profile: diffusers-controlnet-sdxl
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
       - --variant fp16
-      - --dataset_path ${ORPO_WDS_SHARDS}
+      - --dataset_name fusing/fill50k
       - --output_dir ${CI_OUTPUT_DIR}
-      - --num_train_examples 1024
-      - --max_train_steps 1
-      - --resolution 512
-      - --per_gpu_batch_size 1
-      - --global_batch_size 1
-      - --dataloader_num_workers 1
+      - --resolution 256
+      - --train_batch_size 1
       - --gradient_checkpointing
       - --mixed_precision fp16
-    timeout_minutes: 180
+      - --max_train_steps 1
+      - --checkpointing_steps 9999
+    timeout_minutes: 60
+
+  # ===== SDXL 全量微调（多卡 ZeRO-3，launcher=accelerate-deepspeed）=====
+  # unet 26 亿参数可训练：权重+梯度跨卡分片，优化器状态 CPU offload
+  # （configs/ds_zero3.json），双卡每卡 ~13GB。
+  - path: examples/text_to_image/train_text_to_image_sdxl.py
+    profile: diffusers-sdxl-full
+    launcher: accelerate-deepspeed
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
+      - --variant fp16
+      - --dataset_name hf-internal-testing/dummy_image_text_data
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --resolution 256
+      - --train_batch_size 1
+      - --gradient_checkpointing
+      - --mixed_precision fp16
+      - --max_train_steps 1
+      - --checkpointing_steps 9999
+    timeout_minutes: 60
+
+  # scheduled_huber 全量版（同上，数据集 naruto）
+  - path: examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image_sdxl.py
+    profile: diffusers-sdxl-full
+    launcher: accelerate-deepspeed
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
+      - --variant fp16
+      - --dataset_name lambdalabs/naruto-blip-captions
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --resolution 256 --center_crop --random_flip
+      - --train_batch_size 1
+      - --gradient_checkpointing
+      - --mixed_precision fp16
+      - --max_train_steps 1
+      - --checkpointing_steps 9999
+    timeout_minutes: 60
+
+  # InstructPix2Pix SDXL 全量（同上，数据集 fusing/instructpix2pix-1000-samples）
+  - path: examples/instruct_pix2pix/train_instruct_pix2pix_sdxl.py
+    profile: diffusers-sdxl-full
+    launcher: accelerate-deepspeed
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
+      - --variant fp16
+      - --dataset_name fusing/instructpix2pix-1000-samples
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --resolution 256 --random_flip
+      - --train_batch_size 1
+      - --gradient_checkpointing
+      - --mixed_precision fp16
+      - --max_train_steps 1
+      - --checkpointing_steps 9999
+      - --conditioning_dropout_prob 0.05
+      - --seed 42
+    timeout_minutes: 60
+
+  # LCM 全量蒸馏（4 卡：teacher SDXL fp32 ~14GB 逐卡复制 + 学生分片，双卡太紧）。
+  # 配方同 LoRA 版（bf16：fp16 反向 aclnn 算子失败），去掉 --lora_rank。
+  - path: examples/consistency_distillation/train_lcm_distill_sdxl_wds.py
+    profile: diffusers-lcm-zero3
+    launcher: accelerate-deepspeed
+    runner: linux-aarch64-a2-4
+    npu_devices: '0,1,2,3'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_teacher_model stabilityai/stable-diffusion-xl-base-1.0
+      - --pretrained_vae_model_name_or_path madebyollin/sdxl-vae-fp16-fix
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --mixed_precision bf16
+      - --resolution 256
+      - --max_train_steps 1
+      - --max_train_samples 1
+      - --dataloader_num_workers 1
+      - --train_shards_path_or_url "pipe:curl -L -s https://www.modelscope.cn/datasets/laion/conceptual-captions-12m-webdataset/resolve/master/data/{00000..00000}.tar"
+      - --train_batch_size 1
+    timeout_minutes: 240
 
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
 unsupported:
@@ -845,8 +947,8 @@ unsupported:
   - examples/research_projects/intel_opts/textual_inversion_dfq/textual_inversion.py
   # DATA_UNREACHABLE：需自定义人脸数据集：用 insightface 提取人脸 normed_embedding
   - examples/research_projects/ip_adapter/tutorial_train_faceid.py
-  # ===== IP-Adapter 两条不支持（2026-10-13，第三方包跟新版 diffusers 不兼容）=====
-  # 1) 这两个教程要用第三方的 ip_adapter 包——这是 diffusers 官方 examples
+  # ===== IP-Adapter 三条不支持（2026-10-13，第三方包跟新版 diffusers 不兼容）=====
+  # 1) 这三个教程要用第三方的 ip_adapter 包——这是 diffusers 官方 examples
   #    的 requirements.txt 里指定要装的。
   # 2) 这个包从 2023 年 12 月起就没发过新版。它代码里写死了一句导入：
   #    from diffusers.pipelines.controlnet import MultiControlNetModel
@@ -856,17 +958,29 @@ unsupported:
   # 3) 换版本也救不了：PyPI 上只有 2023 年那一个版本；官方仓库的 main
   #    分支也是同样的老代码，2024 年 6 月之后就没提交了。反过来把
   #    diffusers 降回旧版倒是能跑，但 diffusers 本身就是我们看护的对象，
-  #    不能为了两个教程把它降级。
+  #    不能为了三个教程把它降级。
   # 4) 之前能跑绿，是因为 setup 在装完包后会 patch 把那行导入改掉。按
   #    no-patch 这个做法已删除。
   # 恢复条件：等 ip_adapter 出适配 diffusers 0.41+ 的新版本（或上游把它
-  # 修好）后，把这两条移回 supported。会给上游提 issue 跟进。
+  # 修好）后，把这三条移回 supported。会给上游提 issue 跟进。
   - examples/research_projects/ip_adapter/tutorial_train_ip-adapter.py
   - examples/research_projects/ip_adapter/tutorial_train_plus.py
+  - examples/research_projects/ip_adapter/tutorial_train_sdxl.py
   - examples/research_projects/lpl/train_sdxl_lpl.py
   - examples/research_projects/multi_subject_dreambooth/train_multi_subject_dreambooth.py
   - examples/research_projects/multi_subject_dreambooth_inpainting/train_multi_subject_dreambooth_inpainting.py
   - examples/research_projects/multi_token_textual_inversion/textual_inversion.py
+  # ===== wuerstchen prior / lora_prior：模块挪进 deprecated，例子没跟上 =====
+  # diffusers 把整条 wuerstchen 管线挪进了
+  # pipelines/deprecated/wuerstchen/——WuerstchenPrior、DEFAULT_STAGE_C_TIMESTEPS
+  # 都还在，顶层的 DDPMWuerstchenScheduler / WuerstchenPriorPipeline 也照常
+  # 导出。但这两条例子 import 的还是旧路径 diffusers.pipelines.wuerstchen，
+  # 直接 ModuleNotFoundError。修复只需把例子里一行 import 改成
+  # pipelines.deprecated.wuerstchen，但那属于改源码（patch）；diffusers 是被
+  # 看护对象也不能钉旧版。与 transformers 无关，纯 diffusers 内部挪动。
+  # 恢复条件：上游更新这两条例子的 import 路径
+  - examples/research_projects/wuerstchen/text_to_image/train_text_to_image_prior.py
+  - examples/research_projects/wuerstchen/text_to_image/train_text_to_image_lora_prior.py
   # OTHER_BACKEND：onnxruntime training（ORT）
   - examples/research_projects/onnxruntime/text_to_image/train_text_to_image.py
   - examples/research_projects/onnxruntime/textual_inversion/textual_inversion.py
@@ -883,10 +997,6 @@ unsupported:
   - examples/research_projects/realfill/train_realfill.py
   # GATED_MODEL + CUDA_DEP：SD3 需 gated；且用 bitsandbytes load_in_8bit + device_map（CUDA-only）
   - examples/research_projects/sd3_lora_colab/compute_embeddings.py
-  # wuerstchen prior / lora_prior：import diffusers.pipelines.wuerstchen，该模块在
-  # 当前 diffusers 已删除（WuerstchenPrior / DEFAULT_STAGE_C_TIMESTEPS 都没了）
-  - examples/research_projects/wuerstchen/text_to_image/train_text_to_image_prior.py
-  - examples/research_projects/wuerstchen/text_to_image/train_text_to_image_lora_prior.py
   # CUDA_DEP + GATED_MODEL：硬编码 cuda/mps（无 NPU 分支，L49-66）；模型为 SD3.5（gated）
   - examples/server/server.py
   # CUDA_DEP + GATED_MODEL：import 时即加载 SD3.5（Pipelines.py 无 cuda/mps 抛错）；且为常驻 HTTP 服务
@@ -902,19 +1012,10 @@ unsupported:
   - examples/dreambooth/train_dreambooth_sd3.py
   - examples/dreambooth/train_dreambooth_lora_hidream.py
   - examples/research_projects/sd3_lora_colab/train_dreambooth_lora_sd3_miniature.py
-  # 以下 6 个：尝试使用多卡运行时发现的错误，examples/text_to_image/train_text_to_image_sdxl.py在单卡
-  # 上跑通过但是显存占用很极限，后来就跑不通了，差一点点显存
-  # INCOMPAT：transformers 5.x 不兼容 CLIP text config
-  # （运行时 max_position_embeddings 读到 0，forward 报 "Sequence length must be
-  # less than max_position_embeddings"；diffusers 0.40+ 必须用 transformers 5.x，
-  # 因此无法降级 transformers ）
+  # kandinsky prior 全量训练：prior 模型本体 ~26.6GB（在线拉取），收尾还需
+  # decoder + image encoder 组装 pipeline，依赖面最重；多卡 ZeRO-3 理论
+  # 可分片但依赖多、未实测，暂不支持。
   - examples/kandinsky2_2/text_to_image/train_text_to_image_prior.py
-  - examples/instruct_pix2pix/train_instruct_pix2pix_sdxl.py
-  - examples/controlnet/train_controlnet_sdxl.py
-  - examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image_sdxl.py
-  - examples/consistency_distillation/train_lcm_distill_sdxl_wds.py
-  - examples/text_to_image/train_text_to_image_sdxl.py
-  - examples/research_projects/ip_adapter/tutorial_train_sdxl.py
   # OOM：LoRA SDXL LCM 蒸馏在 a2-1（29.5GiB）forward 即 OOM（已分配 24.4GiB）。
   # DDP 不省单卡显存；ZeRO-3 又撞上游 bug——训练循环 L1358
   # `solver.ddim_step(...).to(unet.dtype)`，模型被 DeepSpeedEngine 包裹后无 .dtype。

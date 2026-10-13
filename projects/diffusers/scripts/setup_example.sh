@@ -27,7 +27,7 @@ SUPPORTED_PROFILES=(
   diffusers-z-image diffusers-qwen-image diffusers-amused diffusers-cogvideo
   diffusers-cogvideo-i2v diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet
   diffusers-controlnet-sdxl diffusers-llada2 diffusers-gligen diffusers-controlnet-wds
-  diffusers-orpo-wds
+  diffusers-orpo-wds diffusers-sdxl-full diffusers-lcm-zero3
 )
 profile_known=0
 for _p in "${SUPPORTED_PROFILES[@]}"; do
@@ -397,6 +397,8 @@ declare -A PROFILE_PIP=(
   [diffusers-lumina2]="deepspeed>=0.18.2"
   [diffusers-z-image]="deepspeed>=0.18.2"
   [diffusers-qwen-image]="deepspeed>=0.18.2"
+  [diffusers-sdxl-full]="deepspeed>=0.18.2"
+  [diffusers-lcm-zero3]="deepspeed>=0.18.2 webdataset braceexpand"
 )
 
 # download_assets tokens (comma-separated) for the profile's models/datasets.
