@@ -28,9 +28,10 @@
 #
 # Datasets: the doc's run-eval block downloads both benchmark repos
 # via ModelScope on the first run; --limit 5 keeps the smoke tiny.
-# The Native backend uses device_map="auto" with torch_npu present, so
-# the model lands on npu:0 (ASCEND_RT_VISIBLE_DEVICES=0 is set by the
-# test's prepare_environment). No HF endpoint or Xet path is involved;
+# The Native backend passes device_map="npu" (its get_device() value on
+# NPU) with torch_npu + accelerate present, so the model lands on npu:0
+# (ASCEND_RT_VISIBLE_DEVICES=0 is set by the test's
+# prepare_environment). No HF endpoint or Xet path is involved;
 # the HF cache mount (mount 3) only persists the local datasets
 # builder/arrow artifacts across runs.
 
