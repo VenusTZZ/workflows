@@ -3,14 +3,17 @@ version: 1
 # 对账单位是「完整运行配置」（.yaml）：根目录 start_*_pipeline.py 与各目录 run_*.sh
 # 是公共 launcher / 别名，不重复登记；examples/config/ 是被其他配置继承的共享片段。
 #
-# supported 二十条链路：单卡 rollout、七条四卡 RLVR、以及十二条两卡 Agentic train
-# （Agentic 共十二条，含原有 Sokoban）：GRPO/TOPR/训推校正/GiGPO/LoRA/动态 batching/native/PPO/SAO/GEM。
+# supported 原有 19 条及新增 2 条 GEM 已通过 Run #111；其余 7 条修复日志/验证配置及 checkpoint 后待复验。
 # 国内 CANN 镜像 + setup 动态装栈；基于 release 上游 YAML，用 overlay_args 声明 CI 覆盖项。
 # ++ 添加或覆盖字段，~ 删除字段；项目 runner 使用 Hydra 组合配置，不修改上游源码。
+# 已删除 197 项重复/默认值覆盖；以 v0.4.0 解析后的配置和值类型完全相同为准。
 # unsupported 的语义是「本看护体系当前不跑它」：注释区分硬阻塞与待实测项。
+# 大模型、私有数据和 Megatron 配方不是永久否定依据；换小模型/数据/后端后重复已有能力的变体暂不重复计数。
 scan:
   root: examples
   include_extensions: ['.yaml']
+  exclude:
+    - examples/config/**
 supported:
   # Agentic-Rollout：仅推理的 Sokoban 多轮环境交互与轨迹组装。与上游 agentic_rollout_sokoban.yaml 同 pipeline，
   # CI 覆盖：单卡 vLLM-Ascend、单环境、序列 256。国内 CANN 基础镜像启动后
@@ -42,7 +45,6 @@ supported:
       - '++sequence_length=256'
       - '++pretrain="${oc.env:ROLL_MODEL_PATH}"'
       - '++actor_infer.generating_args.max_new_tokens=32'
-      - '~actor_infer.strategy_args.strategy_config'
       - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:256,enforce_eager:true}'
       - '++actor_infer.device_mapping="list(range(0,1))"'
       - '++max_tokens_per_step=32'
@@ -91,7 +93,6 @@ supported:
       - '++actor_train.device_mapping="list(range(0,1))"'
       - '++actor_train.infer_batch_size=1'
       - '++actor_infer.generating_args.max_new_tokens=32'
-      - '~actor_infer.strategy_args.strategy_config'
       - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:256,enforce_eager:true}'
       - '++actor_infer.device_mapping="list(range(1,2))"'
       - '++reference.device_mapping="list(range(0,1))"'
@@ -156,7 +157,6 @@ supported:
       - '++actor_infer.model_args.flash_attn="fa2"'
       - '++actor_infer.generating_args.max_new_tokens=64'
       - '++actor_infer.data_args.template="qwen2_5"'
-      - '~actor_infer.strategy_args.strategy_config'
       - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,max_model_len:256,enforce_eager:true,load_format:"auto"}'
       - '++actor_infer.device_mapping="list(range(2,3))"'
       - '++actor_infer.infer_batch_size=1'
@@ -188,7 +188,6 @@ supported:
       - '++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"'
       - '++output_dir="${oc.env:CI_OUTPUT_DIR}/output"'
       - '++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"'
-      - '++checkpoint_config.type="file_system"'
       - '++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"'
       - '++track_with="stdout"'
       - '~tracker_kwargs'
@@ -211,7 +210,6 @@ supported:
       - '++actor_train.device_mapping="list(range(0,1))"'
       - '++actor_train.infer_batch_size=1'
       - '++actor_infer.generating_args.max_new_tokens=32'
-      - '~actor_infer.strategy_args.strategy_config'
       - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:256,enforce_eager:true}'
       - '++actor_infer.device_mapping="list(range(1,2))"'
       - '++reference.strategy_args.strategy_name="hf_infer"'
@@ -229,7 +227,6 @@ supported:
       - '++render_save_dir=""'
       - '~custom_envs'
       - '++custom_envs={FrozenLake:"${custom_env.FrozenLake}"}'
-      - '++train_env_manager.tags=["FrozenLake"]'
       - '++val_env_manager.tags=["FrozenLake"]'
     timeout_minutes: 240
 
@@ -249,7 +246,6 @@ supported:
       - '++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"'
       - '++output_dir="${oc.env:CI_OUTPUT_DIR}/output"'
       - '++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"'
-      - '++checkpoint_config.type="file_system"'
       - '++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"'
       - '++track_with="stdout"'
       - '~tracker_kwargs'
@@ -272,7 +268,6 @@ supported:
       - '++actor_train.device_mapping="list(range(0,1))"'
       - '++actor_train.infer_batch_size=1'
       - '++actor_infer.generating_args.max_new_tokens=32'
-      - '~actor_infer.strategy_args.strategy_config'
       - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:256,enforce_eager:true}'
       - '++actor_infer.device_mapping="list(range(1,2))"'
       - '++reference.strategy_args.strategy_name="hf_infer"'
@@ -290,7 +285,6 @@ supported:
       - '++render_save_dir=""'
       - '~custom_envs'
       - '++custom_envs={FrozenLake:"${custom_env.FrozenLake}"}'
-      - '++train_env_manager.tags=["FrozenLake"]'
       - '++val_env_manager.tags=["FrozenLake"]'
     timeout_minutes: 240
 
@@ -310,7 +304,6 @@ supported:
       - '++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"'
       - '++output_dir="${oc.env:CI_OUTPUT_DIR}/output"'
       - '++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"'
-      - '++checkpoint_config.type="file_system"'
       - '++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"'
       - '++track_with="stdout"'
       - '~tracker_kwargs'
@@ -333,7 +326,6 @@ supported:
       - '++actor_train.device_mapping="list(range(0,1))"'
       - '++actor_train.infer_batch_size=1'
       - '++actor_infer.generating_args.max_new_tokens=32'
-      - '~actor_infer.strategy_args.strategy_config'
       - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:256,enforce_eager:true}'
       - '++actor_infer.device_mapping="list(range(1,2))"'
       - '++reference.strategy_args.strategy_name="hf_infer"'
@@ -351,7 +343,6 @@ supported:
       - '++render_save_dir=""'
       - '~custom_envs'
       - '++custom_envs={FrozenLake:"${custom_env.FrozenLake}"}'
-      - '++train_env_manager.tags=["FrozenLake"]'
       - '++val_env_manager.tags=["FrozenLake"]'
     timeout_minutes: 240
 
@@ -371,10 +362,7 @@ supported:
       - '++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"'
       - '++output_dir="${oc.env:CI_OUTPUT_DIR}/output"'
       - '++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"'
-      - '++checkpoint_config.type="file_system"'
       - '++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"'
-      - '++track_with="stdout"'
-      - '~tracker_kwargs'
       - '++num_gpus_per_node=2'
       - '++max_steps=1'
       - '++save_steps=10'
@@ -394,7 +382,6 @@ supported:
       - '++actor_train.device_mapping="list(range(0,1))"'
       - '++actor_train.infer_batch_size=1'
       - '++actor_infer.generating_args.max_new_tokens=32'
-      - '~actor_infer.strategy_args.strategy_config'
       - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:256,enforce_eager:true}'
       - '++actor_infer.device_mapping="list(range(1,2))"'
       - '++reference.strategy_args.strategy_name="hf_infer"'
@@ -412,8 +399,9 @@ supported:
       - '++render_save_dir=""'
       - '~custom_envs'
       - '++custom_envs={FrozenLake:"${custom_env.FrozenLake}"}'
-      - '++train_env_manager.tags=["FrozenLake"]'
       - '++val_env_manager.tags=["FrozenLake"]'
+      - '++logging_steps=0'
+      - '++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"'
     timeout_minutes: 240
 
   # Sokoban GiGPO 步进优势（StepEnvManager + step_envs）；两卡 FSDP2，1 步冒烟，待实跑。
@@ -432,17 +420,14 @@ supported:
       - '++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"'
       - '++output_dir="${oc.env:CI_OUTPUT_DIR}/output"'
       - '++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"'
-      - '++checkpoint_config.type="file_system"'
       - '++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"'
-      - '++track_with="stdout"'
-      - '~tracker_kwargs'
       - '++num_gpus_per_node=2'
       - '++max_steps=1'
       - '++save_steps=10'
       - '++eval_steps=1000'
       - '++rollout_batch_size=2'
       - '++val_batch_size=2'
-      - '++sequence_length=256'
+      - '++sequence_length=512'
       - '++pretrain="${oc.env:ROLL_MODEL_PATH}"'
       - '++reward_pretrain="${oc.env:ROLL_MODEL_PATH}"'
       - '++actor_train.training_args.per_device_train_batch_size=1'
@@ -455,8 +440,7 @@ supported:
       - '++actor_train.device_mapping="list(range(0,1))"'
       - '++actor_train.infer_batch_size=1'
       - '++actor_infer.generating_args.max_new_tokens=32'
-      - '~actor_infer.strategy_args.strategy_config'
-      - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:256,enforce_eager:true}'
+      - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:512,enforce_eager:true}'
       - '++actor_infer.device_mapping="list(range(1,2))"'
       - '++reference.strategy_args.strategy_name="hf_infer"'
       - '++reference.device_mapping="list(range(0,1))"'
@@ -473,11 +457,12 @@ supported:
       - '++render_save_dir=""'
       - '~custom_envs'
       - '++custom_envs={SimpleSokoban:"${custom_env.SimpleSokoban}"}'
-      - '++train_env_manager.tags=["SimpleSokoban"]'
       - '++val_env_manager.tags=["SimpleSokoban"]'
+      - '++logging_steps=0'
+      - '++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"'
     timeout_minutes: 240
 
-  # Sokoban LoRA 微调（all-linear, rank 32，fsdp2 is_lora 分支）；两卡 FSDP2，1 步冒烟，待实跑。
+  # Sokoban LoRA 微调（显式七类线性投影、rank 32）；两卡 FSDP2，避免上游 all-linear 未定义函数。
   - path: examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_lora.yaml
     profile: agentic_train_npu
     runner: linux-aarch64-a2-2
@@ -493,7 +478,6 @@ supported:
       - '++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"'
       - '++output_dir="${oc.env:CI_OUTPUT_DIR}/output"'
       - '++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"'
-      - '++checkpoint_config.type="file_system"'
       - '++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"'
       - '++track_with="stdout"'
       - '~tracker_kwargs'
@@ -516,7 +500,6 @@ supported:
       - '++actor_train.device_mapping="list(range(0,1))"'
       - '++actor_train.infer_batch_size=1'
       - '++actor_infer.generating_args.max_new_tokens=32'
-      - '~actor_infer.strategy_args.strategy_config'
       - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:256,enforce_eager:true}'
       - '++actor_infer.device_mapping="list(range(1,2))"'
       - '++reference.strategy_args.strategy_name="hf_infer"'
@@ -534,8 +517,9 @@ supported:
       - '++render_save_dir=""'
       - '~custom_envs'
       - '++custom_envs={SimpleSokoban:"${custom_env.SimpleSokoban}"}'
-      - '++train_env_manager.tags=["SimpleSokoban"]'
       - '++val_env_manager.tags=["SimpleSokoban"]'
+      - '++actor_train.model_args.lora_target="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"'
+      - '++actor_infer.model_args.lora_target="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"'
     timeout_minutes: 240
 
   # Sokoban 训练/推理动态 batching；reference 覆盖回 hf_infer，两卡 FSDP2，1 步冒烟，待实跑。
@@ -554,7 +538,6 @@ supported:
       - '++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"'
       - '++output_dir="${oc.env:CI_OUTPUT_DIR}/output"'
       - '++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"'
-      - '++checkpoint_config.type="file_system"'
       - '++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"'
       - '++track_with="stdout"'
       - '~tracker_kwargs'
@@ -577,7 +560,6 @@ supported:
       - '++actor_train.device_mapping="list(range(0,1))"'
       - '++actor_train.infer_batch_size=1'
       - '++actor_infer.generating_args.max_new_tokens=32'
-      - '~actor_infer.strategy_args.strategy_config'
       - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:256,enforce_eager:true}'
       - '++actor_infer.device_mapping="list(range(1,2))"'
       - '++reference.strategy_args.strategy_name="hf_infer"'
@@ -595,7 +577,6 @@ supported:
       - '++render_save_dir=""'
       - '~custom_envs'
       - '++custom_envs={SimpleSokoban:"${custom_env.SimpleSokoban}"}'
-      - '++train_env_manager.tags=["SimpleSokoban"]'
       - '++val_env_manager.tags=["SimpleSokoban"]'
     timeout_minutes: 240
 
@@ -615,7 +596,6 @@ supported:
       - '++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"'
       - '++output_dir="${oc.env:CI_OUTPUT_DIR}/output"'
       - '++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"'
-      - '++checkpoint_config.type="file_system"'
       - '++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"'
       - '++track_with="stdout"'
       - '++num_gpus_per_node=2'
@@ -624,10 +604,9 @@ supported:
       - '++eval_steps=1000'
       - '++rollout_batch_size=2'
       - '++val_batch_size=2'
-      - '++sequence_length=256'
+      - '++sequence_length=512'
       - '++pretrain="${oc.env:ROLL_MODEL_PATH}"'
       - '++reward_pretrain="${oc.env:ROLL_MODEL_PATH}"'
-      - '++actor_train.training_args.per_device_train_batch_size=1'
       - '++actor_train.training_args.gradient_accumulation_steps=1'
       - '++actor_train.training_args.warmup_steps=0'
       - '++actor_train.training_args.lr_scheduler_type="constant"'
@@ -635,10 +614,7 @@ supported:
       - '~actor_train.strategy_args.strategy_config'
       - '++actor_train.strategy_args.strategy_config={fsdp_size:1,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false}'
       - '++actor_train.device_mapping="list(range(0,1))"'
-      - '++actor_train.infer_batch_size=1'
-      - '++actor_infer.generating_args.max_new_tokens=32'
-      - '~actor_infer.strategy_args.strategy_config'
-      - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:256,enforce_eager:true}'
+      - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:512,enforce_eager:true}'
       - '++actor_infer.device_mapping="list(range(1,2))"'
       - '++reference.strategy_args.strategy_name="hf_infer"'
       - '++reference.device_mapping="list(range(0,1))"'
@@ -653,9 +629,7 @@ supported:
       - '++max_tokens_per_step=32'
       - '++max_actions_per_traj=2'
       - '++render_save_dir=""'
-      - '++train_env_manager.tags=["SokobanNativeEnv"]'
-      - '++val_env_manager.tags=["SokobanNativeEnv"]'
-      - '++async_generation_ratio=null'
+      - '++async_generation_ratio=0'
     timeout_minutes: 240
 
   # Sokoban PPO（gae + FSDP2 critic 同卡共置）；track/checkpoint 覆盖为 stdout/file_system，1 步冒烟，待实跑。
@@ -697,7 +671,6 @@ supported:
       - '++actor_train.device_mapping="list(range(0,1))"'
       - '++actor_train.infer_batch_size=1'
       - '++actor_infer.generating_args.max_new_tokens=32'
-      - '~actor_infer.strategy_args.strategy_config'
       - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:256,enforce_eager:true}'
       - '++actor_infer.device_mapping="list(range(1,2))"'
       - '++reference.strategy_args.strategy_name="hf_infer"'
@@ -715,7 +688,6 @@ supported:
       - '++render_save_dir=""'
       - '~custom_envs'
       - '++custom_envs={SimpleSokoban:"${custom_env.SimpleSokoban}"}'
-      - '++train_env_manager.tags=["SimpleSokoban"]'
       - '++val_env_manager.tags=["SimpleSokoban"]'
       - '++critic.device_mapping="list(range(0,1))"'
       - '++critic.strategy_args.strategy_config={enable_mix_precision:true,fsdp_size:1,reshard_after_forward:true,offload_policy:false,wrap_policy:{transformer_layer_cls_to_wrap:["Qwen2DecoderLayer"]}}'
@@ -766,7 +738,6 @@ supported:
       - '++actor_train.device_mapping="list(range(0,1))"'
       - '++actor_train.infer_batch_size=1'
       - '++actor_infer.generating_args.max_new_tokens=32'
-      - '~actor_infer.strategy_args.strategy_config'
       - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:256,enforce_eager:true}'
       - '++actor_infer.device_mapping="list(range(1,2))"'
       - '++reference.strategy_args.strategy_name="hf_infer"'
@@ -784,7 +755,6 @@ supported:
       - '++render_save_dir=""'
       - '~custom_envs'
       - '++custom_envs={SimpleSokoban:"${custom_env.SimpleSokoban}"}'
-      - '++train_env_manager.tags=["SimpleSokoban"]'
       - '++val_env_manager.tags=["SimpleSokoban"]'
       - '++critic.device_mapping="list(range(0,1))"'
       - '++critic.strategy_args.strategy_config={enable_mix_precision:true,fsdp_size:1,reshard_after_forward:true,offload_policy:false,wrap_policy:{transformer_layer_cls_to_wrap:["Qwen2DecoderLayer"]}}'
@@ -796,66 +766,6 @@ supported:
       - '++critic_epochs=1'
     timeout_minutes: 240
 
-  # Sokoban AgentRunner（ProxyEnvManager + GEMRunner，gem-llm 已由 setup 安装）；两卡 FSDP2，1 步冒烟，待实跑。
-  - path: examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_agent_runner.yaml
-    profile: agentic_train_npu
-    runner: linux-aarch64-a2-2
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    exec: examples/start_agentic_pipeline.py
-    overlay_args:
-      - '--config_path'
-      - 'qwen2.5-0.5B-agentic'
-      - '--config_name'
-      - 'agentic_val_sokoban_agent_runner'
-      - '++exp_name="roll-ci-agentic_val_sokoban_agent_runner"'
-      - '++transfer_backend.backend_name=null'
-      - '++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"'
-      - '++output_dir="${oc.env:CI_OUTPUT_DIR}/output"'
-      - '++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"'
-      - '++checkpoint_config.type="file_system"'
-      - '++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"'
-      - '++track_with="stdout"'
-      - '~tracker_kwargs'
-      - '++num_gpus_per_node=2'
-      - '++max_steps=1'
-      - '++save_steps=10'
-      - '++eval_steps=1000'
-      - '++rollout_batch_size=2'
-      - '++val_batch_size=2'
-      - '++sequence_length=256'
-      - '++pretrain="${oc.env:ROLL_MODEL_PATH}"'
-      - '++reward_pretrain="${oc.env:ROLL_MODEL_PATH}"'
-      - '++actor_train.training_args.per_device_train_batch_size=1'
-      - '++actor_train.training_args.gradient_accumulation_steps=1'
-      - '++actor_train.training_args.warmup_steps=0'
-      - '++actor_train.training_args.lr_scheduler_type="constant"'
-      - '++actor_train.strategy_args.strategy_name="fsdp2_train"'
-      - '~actor_train.strategy_args.strategy_config'
-      - '++actor_train.strategy_args.strategy_config={fsdp_size:1,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false}'
-      - '++actor_train.device_mapping="list(range(0,1))"'
-      - '++actor_train.infer_batch_size=1'
-      - '++actor_infer.generating_args.max_new_tokens=32'
-      - '~actor_infer.strategy_args.strategy_config'
-      - '++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:256,enforce_eager:true}'
-      - '++actor_infer.device_mapping="list(range(1,2))"'
-      - '++reference.strategy_args.strategy_name="hf_infer"'
-      - '++reference.device_mapping="list(range(0,1))"'
-      - '++reference.infer_batch_size=1'
-      - '++train_env_manager.max_env_num_per_worker=2'
-      - '++train_env_manager.num_env_groups=1'
-      - '++train_env_manager.group_size=2'
-      - '++train_env_manager.num_groups_partition=[1]'
-      - '++val_env_manager.max_env_num_per_worker=1'
-      - '++val_env_manager.num_env_groups=1'
-      - '++val_env_manager.num_groups_partition=[1]'
-      - '++max_tokens_per_step=32'
-      - '++max_actions_per_traj=2'
-      - '++render_save_dir=""'
-      - '~custom_envs'
-      - '++custom_envs={SimpleSokoban:"${custom_env.SimpleSokoban}"}'
-      - '++train_env_manager.tags=["SimpleSokoban"]'
-      - '++val_env_manager.tags=["SimpleSokoban"]'
-    timeout_minutes: 240
   # 文档 GRPO 数学 RLVR；原生 FSDP2/vLLM + 本地数学数据替换默认 Megatron/7B，保留 GRPO 算法，待实跑。
   - path: examples/docs_examples/example_grpo.yaml
     profile: rlvr_npu
@@ -867,7 +777,6 @@ supported:
     - docs_examples
     - --config_name
     - example_grpo
-    - ++exp_name="roll-ci-rlvr"
     - ++transfer_backend.backend_name=null
     - ++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"
     - ++output_dir="${oc.env:CI_OUTPUT_DIR}/output"
@@ -889,34 +798,25 @@ supported:
     - ++actor_train.training_args.gradient_accumulation_steps=1
     - ++actor_train.training_args.warmup_steps=0
     - ++actor_train.training_args.num_train_epochs=1
-    - ++actor_train.data_args.template="qwen2_5"
     - ++actor_train.data_args.file_name=["${oc.env:FIXTURE_DIR}/ci_math_8.jsonl"]
     - ++actor_train.data_args.preprocessing_num_workers=1
     - ~actor_train.strategy_args.strategy_config
     - ++actor_train.strategy_args.strategy_config={fsdp_size:2,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false,use_batched_model_update:false}
     - ++actor_train.device_mapping="list(range(0,2))"
     - ++actor_infer.model_args.flash_attn="fa2"
-    - ++actor_infer.generating_args.max_new_tokens=64
-    - ++actor_infer.data_args.template="qwen2_5"
-    - ~actor_infer.strategy_args.strategy_config
     - ++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,max_model_len:256,enforce_eager:true,load_format:"auto"}
     - ++actor_infer.device_mapping="list(range(2,3))"
-    - ++actor_infer.infer_batch_size=1
     - ++reference.model_args.flash_attn="fa2"
-    - ++reference.data_args.template="qwen2_5"
     - ++reference.device_mapping="list(range(3,4))"
-    - ++rewards.math_rule.data_args.template="qwen2_5"
     - ++rewards.math_rule.tag_included=["math_rule"]
     - ++rewards.math_rule.world_size=1
     - ~validation
     - ~actor_train.data_args.dataset_dir
     - ++exp_name="roll-ci-docs_examples-example_grpo"
     - ~tracker_kwargs
-    - ++checkpoint_config.type="file_system"
     - ++response_length=64
     - ++actor_train.strategy_args.strategy_name="fsdp2_train"
     - ++reference.strategy_args.strategy_name="hf_infer"
-    - ~reference.strategy_args.strategy_config
     - ++reference.strategy_args.strategy_config=null
     - ~actor_train.data_args.domain_interleave_probs
     - ++actor_train.data_args.domain_interleave_probs={math_rule:1.0}
@@ -937,7 +837,6 @@ supported:
     - docs_examples
     - --config_name
     - example_gspo
-    - ++exp_name="roll-ci-rlvr"
     - ++transfer_backend.backend_name=null
     - ++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"
     - ++output_dir="${oc.env:CI_OUTPUT_DIR}/output"
@@ -959,34 +858,25 @@ supported:
     - ++actor_train.training_args.gradient_accumulation_steps=1
     - ++actor_train.training_args.warmup_steps=0
     - ++actor_train.training_args.num_train_epochs=1
-    - ++actor_train.data_args.template="qwen2_5"
     - ++actor_train.data_args.file_name=["${oc.env:FIXTURE_DIR}/ci_math_8.jsonl"]
     - ++actor_train.data_args.preprocessing_num_workers=1
     - ~actor_train.strategy_args.strategy_config
     - ++actor_train.strategy_args.strategy_config={fsdp_size:2,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false,use_batched_model_update:false}
     - ++actor_train.device_mapping="list(range(0,2))"
     - ++actor_infer.model_args.flash_attn="fa2"
-    - ++actor_infer.generating_args.max_new_tokens=64
-    - ++actor_infer.data_args.template="qwen2_5"
-    - ~actor_infer.strategy_args.strategy_config
     - ++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,max_model_len:256,enforce_eager:true,load_format:"auto"}
     - ++actor_infer.device_mapping="list(range(2,3))"
-    - ++actor_infer.infer_batch_size=1
     - ++reference.model_args.flash_attn="fa2"
-    - ++reference.data_args.template="qwen2_5"
     - ++reference.device_mapping="list(range(3,4))"
-    - ++rewards.math_rule.data_args.template="qwen2_5"
     - ++rewards.math_rule.tag_included=["math_rule"]
     - ++rewards.math_rule.world_size=1
     - ~validation
     - ~actor_train.data_args.dataset_dir
     - ++exp_name="roll-ci-docs_examples-example_gspo"
     - ~tracker_kwargs
-    - ++checkpoint_config.type="file_system"
     - ++response_length=64
     - ++actor_train.strategy_args.strategy_name="fsdp2_train"
     - ++reference.strategy_args.strategy_name="hf_infer"
-    - ~reference.strategy_args.strategy_config
     - ++reference.strategy_args.strategy_config=null
     - ~actor_train.data_args.domain_interleave_probs
     - ++actor_train.data_args.domain_interleave_probs={math_rule:1.0}
@@ -1007,7 +897,6 @@ supported:
     - docs_examples
     - --config_name
     - example_ppo
-    - ++exp_name="roll-ci-rlvr"
     - ++transfer_backend.backend_name=null
     - ++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"
     - ++output_dir="${oc.env:CI_OUTPUT_DIR}/output"
@@ -1029,46 +918,34 @@ supported:
     - ++actor_train.training_args.gradient_accumulation_steps=1
     - ++actor_train.training_args.warmup_steps=0
     - ++actor_train.training_args.num_train_epochs=1
-    - ++actor_train.data_args.template="qwen2_5"
     - ++actor_train.data_args.file_name=["${oc.env:FIXTURE_DIR}/ci_math_8.jsonl"]
     - ++actor_train.data_args.preprocessing_num_workers=1
     - ~actor_train.strategy_args.strategy_config
-    - ++actor_train.strategy_args.strategy_config={fsdp_size:2,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false,use_batched_model_update:false}
-    - ++actor_train.device_mapping="list(range(0,2))"
+    - ++actor_train.strategy_args.strategy_config={fsdp_size:1,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false,use_batched_model_update:false}
+    - ++actor_train.device_mapping="list(range(0,1))"
     - ++actor_infer.model_args.flash_attn="fa2"
-    - ++actor_infer.generating_args.max_new_tokens=64
-    - ++actor_infer.data_args.template="qwen2_5"
-    - ~actor_infer.strategy_args.strategy_config
     - ++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,max_model_len:256,enforce_eager:true,load_format:"auto"}
     - ++actor_infer.device_mapping="list(range(2,3))"
-    - ++actor_infer.infer_batch_size=1
     - ++reference.model_args.flash_attn="fa2"
-    - ++reference.data_args.template="qwen2_5"
     - ++reference.device_mapping="list(range(3,4))"
-    - ++rewards.math_rule.data_args.template="qwen2_5"
     - ++rewards.math_rule.tag_included=["math_rule"]
     - ++rewards.math_rule.world_size=1
     - ~validation
     - ~actor_train.data_args.dataset_dir
     - ++exp_name="roll-ci-docs_examples-example_ppo"
     - ~tracker_kwargs
-    - ++checkpoint_config.type="file_system"
     - ++response_length=64
     - ++actor_train.strategy_args.strategy_name="fsdp2_train"
     - ++reference.strategy_args.strategy_name="hf_infer"
-    - ~reference.strategy_args.strategy_config
     - ++reference.strategy_args.strategy_config=null
-    - ~actor_train.data_args.domain_interleave_probs
-    - ++actor_train.data_args.domain_interleave_probs={math_rule:1.0}
     - ++critic_warmup=0
     - ++critic_epochs=1
-    - ++critic.device_mapping="list(range(0,2))"
+    - ++critic.device_mapping="list(range(1,2))"
     - ++critic.model_args.flash_attn="fa2"
     - ++critic.training_args.per_device_train_batch_size=1
     - ++critic.training_args.gradient_accumulation_steps=1
     - ++critic.training_args.warmup_steps=0
-    - ~critic.strategy_args.strategy_config
-    - ++critic.strategy_args.strategy_config={enable_mix_precision:true,fsdp_size:2,reshard_after_forward:true,offload_policy:false,wrap_policy:{transformer_layer_cls_to_wrap:["Qwen2DecoderLayer"]}}
+    - ++critic.strategy_args.strategy_config={enable_mix_precision:true,fsdp_size:1,reshard_after_forward:true,offload_policy:false,wrap_policy:{transformer_layer_cls_to_wrap:["Qwen2DecoderLayer"]}}
     - ++critic.infer_batch_size=1
     timeout_minutes: 240
 
@@ -1083,7 +960,6 @@ supported:
     - qwen2.5-7B-rlvr_megatron
     - --config_name
     - rlvr_config_dynamic_batching
-    - ++exp_name="roll-ci-rlvr"
     - ++transfer_backend.backend_name=null
     - ++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"
     - ++output_dir="${oc.env:CI_OUTPUT_DIR}/output"
@@ -1105,34 +981,25 @@ supported:
     - ++actor_train.training_args.gradient_accumulation_steps=1
     - ++actor_train.training_args.warmup_steps=0
     - ++actor_train.training_args.num_train_epochs=1
-    - ++actor_train.data_args.template="qwen2_5"
     - ++actor_train.data_args.file_name=["${oc.env:FIXTURE_DIR}/ci_math_8.jsonl"]
     - ++actor_train.data_args.preprocessing_num_workers=1
     - ~actor_train.strategy_args.strategy_config
     - ++actor_train.strategy_args.strategy_config={fsdp_size:2,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false,use_batched_model_update:false}
     - ++actor_train.device_mapping="list(range(0,2))"
     - ++actor_infer.model_args.flash_attn="fa2"
-    - ++actor_infer.generating_args.max_new_tokens=64
-    - ++actor_infer.data_args.template="qwen2_5"
-    - ~actor_infer.strategy_args.strategy_config
     - ++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,max_model_len:256,enforce_eager:true,load_format:"auto"}
     - ++actor_infer.device_mapping="list(range(2,3))"
-    - ++actor_infer.infer_batch_size=1
     - ++reference.model_args.flash_attn="fa2"
-    - ++reference.data_args.template="qwen2_5"
     - ++reference.device_mapping="list(range(3,4))"
-    - ++rewards.math_rule.data_args.template="qwen2_5"
     - ++rewards.math_rule.tag_included=["math_rule"]
     - ++rewards.math_rule.world_size=1
     - ~validation
     - ~actor_train.data_args.dataset_dir
     - ++exp_name="roll-ci-qwen2.5-7B-rlvr_megatron-rlvr_config_dynamic_batching"
     - ~tracker_kwargs
-    - ++checkpoint_config.type="file_system"
     - ++response_length=64
     - ++actor_train.strategy_args.strategy_name="fsdp2_train"
     - ++reference.strategy_args.strategy_name="hf_infer"
-    - ~reference.strategy_args.strategy_config
     - ++reference.strategy_args.strategy_config=null
     - ~actor_train.data_args.domain_interleave_probs
     - ++actor_train.data_args.domain_interleave_probs={math_rule:1.0}
@@ -1154,7 +1021,6 @@ supported:
     - qwen2.5-7B-rlvr_megatron
     - --config_name
     - rlvr_lora_fsdp2
-    - ++exp_name="roll-ci-rlvr"
     - ++transfer_backend.backend_name=null
     - ++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"
     - ++output_dir="${oc.env:CI_OUTPUT_DIR}/output"
@@ -1176,30 +1042,22 @@ supported:
     - ++actor_train.training_args.gradient_accumulation_steps=1
     - ++actor_train.training_args.warmup_steps=0
     - ++actor_train.training_args.num_train_epochs=1
-    - ++actor_train.data_args.template="qwen2_5"
     - ++actor_train.data_args.file_name=["${oc.env:FIXTURE_DIR}/ci_math_8.jsonl"]
     - ++actor_train.data_args.preprocessing_num_workers=1
     - ~actor_train.strategy_args.strategy_config
     - ++actor_train.strategy_args.strategy_config={fsdp_size:2,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false,use_batched_model_update:false}
     - ++actor_train.device_mapping="list(range(0,2))"
     - ++actor_infer.model_args.flash_attn="fa2"
-    - ++actor_infer.generating_args.max_new_tokens=64
-    - ++actor_infer.data_args.template="qwen2_5"
-    - ~actor_infer.strategy_args.strategy_config
     - ++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,max_model_len:256,enforce_eager:true,load_format:"auto"}
     - ++actor_infer.device_mapping="list(range(2,3))"
-    - ++actor_infer.infer_batch_size=1
     - ++reference.model_args.flash_attn="fa2"
-    - ++reference.data_args.template="qwen2_5"
     - ++reference.device_mapping="list(range(3,4))"
-    - ++rewards.math_rule.data_args.template="qwen2_5"
     - ++rewards.math_rule.tag_included=["math_rule"]
     - ++rewards.math_rule.world_size=1
     - ~validation
     - ~actor_train.data_args.dataset_dir
     - ++exp_name="roll-ci-qwen2.5-7B-rlvr_megatron-rlvr_lora_fsdp2"
     - ~tracker_kwargs
-    - ++checkpoint_config.type="file_system"
     - ++response_length=64
     - ++actor_train.strategy_args.strategy_name="fsdp2_train"
     - ++reference.strategy_args.strategy_name="hf_infer"
@@ -1210,6 +1068,7 @@ supported:
     - ~rewards.ifeval
     - ~rewards.code_sandbox
     - ~rewards.llm_judge
+    - ++lora_target="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
     timeout_minutes: 240
   # 文档 TOPR；用公开配置补全 GAE critic、数值权重并显式选择原生 ActorPGWorker/topr，四卡单步，待实跑。
   - path: examples/docs_examples/example_topr.yaml
@@ -1222,7 +1081,6 @@ supported:
     - docs_examples
     - --config_name
     - example_topr
-    - ++exp_name="roll-ci-rlvr"
     - ++transfer_backend.backend_name=null
     - ++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"
     - ++output_dir="${oc.env:CI_OUTPUT_DIR}/output"
@@ -1244,45 +1102,35 @@ supported:
     - ++actor_train.training_args.gradient_accumulation_steps=1
     - ++actor_train.training_args.warmup_steps=0
     - ++actor_train.training_args.num_train_epochs=1
-    - ++actor_train.data_args.template="qwen2_5"
     - ++actor_train.data_args.file_name=["${oc.env:FIXTURE_DIR}/ci_math_8.jsonl"]
     - ++actor_train.data_args.preprocessing_num_workers=1
     - ~actor_train.strategy_args.strategy_config
-    - ++actor_train.strategy_args.strategy_config={fsdp_size:2,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false,use_batched_model_update:false}
-    - ++actor_train.device_mapping="list(range(0,2))"
+    - ++actor_train.strategy_args.strategy_config={fsdp_size:1,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false,use_batched_model_update:false}
+    - ++actor_train.device_mapping="list(range(0,1))"
     - ++actor_infer.model_args.flash_attn="fa2"
-    - ++actor_infer.generating_args.max_new_tokens=64
-    - ++actor_infer.data_args.template="qwen2_5"
-    - ~actor_infer.strategy_args.strategy_config
     - ++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,max_model_len:256,enforce_eager:true,load_format:"auto"}
     - ++actor_infer.device_mapping="list(range(2,3))"
-    - ++actor_infer.infer_batch_size=1
     - ++reference.model_args.flash_attn="fa2"
-    - ++reference.data_args.template="qwen2_5"
     - ++reference.device_mapping="list(range(3,4))"
-    - ++rewards.math_rule.data_args.template="qwen2_5"
     - ++rewards.math_rule.tag_included=["math_rule"]
     - ++rewards.math_rule.world_size=1
     - ~validation
     - ~actor_train.data_args.dataset_dir
-    - ++exp_name="roll-ci-docs_examples-example_ppo"
     - ~tracker_kwargs
-    - ++checkpoint_config.type="file_system"
     - ++response_length=64
     - ++actor_train.strategy_args.strategy_name="fsdp2_train"
     - ++reference.strategy_args.strategy_name="hf_infer"
-    - ~reference.strategy_args.strategy_config
     - ++reference.strategy_args.strategy_config=null
     - ~actor_train.data_args.domain_interleave_probs
     - ++actor_train.data_args.domain_interleave_probs={math_rule:1.0}
     - ++critic_warmup=0
     - ++critic_epochs=1
-    - ++critic.device_mapping="list(range(0,2))"
+    - ++critic.device_mapping="list(range(1,2))"
     - ++critic.model_args.flash_attn="fa2"
     - ++critic.training_args.per_device_train_batch_size=1
     - ++critic.training_args.gradient_accumulation_steps=1
     - ++critic.training_args.warmup_steps=0
-    - ++critic.strategy_args.strategy_config={enable_mix_precision:true,fsdp_size:2,reshard_after_forward:true,offload_policy:false,wrap_policy:{transformer_layer_cls_to_wrap:["Qwen2DecoderLayer"]}}
+    - ++critic.strategy_args.strategy_config={enable_mix_precision:true,fsdp_size:1,reshard_after_forward:true,offload_policy:false,wrap_policy:{transformer_layer_cls_to_wrap:["Qwen2DecoderLayer"]}}
     - ++critic.infer_batch_size=1
     - ++exp_name="roll-ci-docs-example_topr"
     - ~rewards.crossthinkqa
@@ -1307,7 +1155,533 @@ supported:
     - ++value_clip=0.5
     - ++reward_clip=10.0
     timeout_minutes: 240
+  # 监督微调；ModelScope 0.5B + 本地 8 行指令数据，单卡保留原 SFT 前后向，待 NPU 验证。
+  - path: examples/qwen3-30BA3B-sft_fsdp2/sft_config.yaml
+    profile: sft_npu
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: examples/start_sft_pipeline.py
+    overlay_args:
+    - --config_path
+    - qwen3-30BA3B-sft_fsdp2
+    - --config_name
+    - sft_config
+    - ++exp_name="roll-ci-expanded"
+    - ++transfer_backend.backend_name=null
+    - ++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"
+    - ++output_dir="${oc.env:CI_OUTPUT_DIR}/output"
+    - ++checkpoint_config.type="file_system"
+    - ++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"
+    - ++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"
+    - ++num_nodes=1
+    - ++max_steps=3
+    - ++save_steps=0
+    - ++eval_steps=1000
+    - ++track_with="tensorboard"
+    - ++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"
+    - ++sequence_length=256
+    - ++num_gpus_per_node=1
+    - ++pretrain="${oc.env:ROLL_MODEL_PATH}"
+    - ~validation
+    - ++sft_train.model_args.model_name_or_path="${oc.env:ROLL_MODEL_PATH}"
+    - ++sft_train.model_args.attn_implementation="sdpa"
+    - ++sft_train.model_args.ulysses_size=1
+    - ++sft_train.model_args.dtype="bf16"
+    - ++sft_train.use_sequence_packing=false
+    - ++sft_train.strategy_args.strategy_name="fsdp2_train"
+    - ~sft_train.strategy_args.strategy_config
+    - ++sft_train.strategy_args.strategy_config={fsdp_size:1,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false}
+    - ++sft_train.device_mapping="list(range(0,1))"
+    - ++sft_train.infer_batch_size=1
+    - ++sft_train.training_args.per_device_train_batch_size=2
+    - ++sft_train.training_args.warmup_steps=0
+    - ++sft_train.training_args.lr_scheduler_type="constant"
+    - ++sft_train.training_args.dataloader_num_workers=0
+    - ++sft_train.data_args.preprocessing_num_workers=1
+    - ++sft_train.data_args.file_name=["${oc.env:FIXTURE_DIR}/ci_supervised_8.jsonl"]
+    timeout_minutes: 240
+  # DPO 偏好训练；0.5B + 本地 chosen/rejected，FSDP2 与独立 reference 各一张卡，待 NPU 验证。
+  - path: examples/dpo_examples/qwen2.5-3B_dpo_megatron.yaml
+    profile: dpo_npu
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: examples/start_dpo_pipeline.py
+    overlay_args:
+    - --config_path
+    - dpo_examples
+    - --config_name
+    - qwen2.5-3B_dpo_megatron
+    - ++exp_name="roll-ci-expanded"
+    - ++transfer_backend.backend_name=null
+    - ++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"
+    - ++output_dir="${oc.env:CI_OUTPUT_DIR}/output"
+    - ++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"
+    - ++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"
+    - ++max_steps=3
+    - ++save_steps=0
+    - ++eval_steps=1000
+    - ++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"
+    - ++sequence_length=256
+    - ++num_gpus_per_node=2
+    - ++pretrain="${oc.env:ROLL_MODEL_PATH}"
+    - ~validation
+    - ++actor_train.model_args.model_name_or_path="${oc.env:ROLL_MODEL_PATH}"
+    - ++actor_train.model_args.attn_implementation="sdpa"
+    - ++actor_train.model_args.ulysses_size=1
+    - ++actor_train.model_args.dtype="bf16"
+    - ++actor_train.data_args.template="qwen2_5"
+    - ++actor_train.use_sequence_packing=false
+    - ++actor_train.strategy_args.strategy_name="fsdp2_train"
+    - ~actor_train.strategy_args.strategy_config
+    - ++actor_train.strategy_args.strategy_config={fsdp_size:1,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false}
+    - ++actor_train.device_mapping="list(range(0,1))"
+    - ++actor_train.infer_batch_size=1
+    - ++actor_train.training_args.num_train_epochs=1
+    - ++actor_train.training_args.per_device_train_batch_size=2
+    - ++actor_train.training_args.warmup_steps=0
+    - ++actor_train.training_args.dataloader_num_workers=0
+    - ++actor_train.data_args.file_name=["${oc.env:FIXTURE_DIR}/ci_supervised_8.jsonl"]
+    - ++reference.model_args.model_name_or_path="${oc.env:ROLL_MODEL_PATH}"
+    - ++reference.model_args.attn_implementation="sdpa"
+    - ++reference.model_args.ulysses_size=1
+    - ++reference.model_args.dtype="bf16"
+    - ++reference.data_args.template="qwen2_5"
+    - ++reference.use_sequence_packing=false
+    - ++reference.strategy_args.strategy_name="hf_infer"
+    - ++reference.strategy_args.strategy_config=null
+    - ++reference.device_mapping="list(range(1,2))"
+    - ++reference.infer_batch_size=1
+    timeout_minutes: 240
+  # 离线 KL 蒸馏；0.5B 学生/1.5B 教师 + 本地数据，Ray 传 logits 不走 CUDA IPC，待 NPU 验证。
+  - path: examples/distill/off_policy/llm/distill_megatron.yaml
+    profile: distill_npu
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: examples/start_distill_pipeline.py
+    overlay_args:
+    - --config_path
+    - distill/off_policy/llm
+    - --config_name
+    - distill_megatron
+    - ++exp_name="roll-ci-expanded"
+    - ++transfer_backend.backend_name=null
+    - ++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"
+    - ++output_dir="${oc.env:CI_OUTPUT_DIR}/output"
+    - ++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"
+    - ++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"
+    - ++num_nodes=1
+    - ++max_steps=3
+    - ++save_steps=0
+    - ++eval_steps=1000
+    - ++track_with="tensorboard"
+    - ++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"
+    - ++sequence_length=256
+    - ++num_gpus_per_node=2
+    - ++student_pretrain="${oc.env:ROLL_MODEL_PATH}"
+    - ++teacher_pretrain="${oc.env:ROLL_TEACHER_PATH}"
+    - ++logits_transfer_backend="ray"
+    - ++logits_topk=8
+    - ~validation
+    - ++student.model_args.model_name_or_path="${oc.env:ROLL_MODEL_PATH}"
+    - ++student.model_args.attn_implementation="sdpa"
+    - ++student.model_args.ulysses_size=1
+    - ++student.model_args.dtype="bf16"
+    - ++student.use_sequence_packing=false
+    - ++student.strategy_args.strategy_name="fsdp2_train"
+    - ~student.strategy_args.strategy_config
+    - ++student.strategy_args.strategy_config={fsdp_size:1,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false}
+    - ++student.device_mapping="list(range(0,1))"
+    - ++student.infer_batch_size=1
+    - ++student.training_args.per_device_train_batch_size=2
+    - ++student.training_args.gradient_accumulation_steps=1
+    - ++student.training_args.dataloader_num_workers=0
+    - ++student.data_args.preprocessing_num_workers=1
+    - ++student.data_args.file_name=["${oc.env:FIXTURE_DIR}/ci_supervised_8.jsonl"]
+    - ++teacher.model_args.attn_implementation="sdpa"
+    - ++teacher.model_args.ulysses_size=1
+    - ++teacher.model_args.dtype="bf16"
+    - ++teacher.use_sequence_packing=false
+    - ++teacher.strategy_args.strategy_name="hf_infer"
+    - ++teacher.strategy_args.strategy_config=null
+    - ++teacher.device_mapping="list(range(1,2))"
+    - ++teacher.infer_batch_size=1
+    - ++teacher.model_args.model_name_or_path="${oc.env:ROLL_TEACHER_PATH}"
+    - ++teacher.training_args.per_device_train_batch_size=2
+    timeout_minutes: 240
+  # RAFT++ 奖励/优势配置；0.5B + 本地数学数据，保留原算法开关，待 NPU 验证。
+  - path: examples/docs_examples/example_raft_pp.yaml
+    profile: rlvr_npu
+    runner: linux-aarch64-a2-4
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: examples/start_rlvr_pipeline.py
+    overlay_args:
+    - --config_path
+    - docs_examples
+    - --config_name
+    - example_raft_pp
+    - ++transfer_backend.backend_name=null
+    - ++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"
+    - ++output_dir="${oc.env:CI_OUTPUT_DIR}/output"
+    - ++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"
+    - ++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"
+    - ++num_gpus_per_node=4
+    - ++max_steps=1
+    - ++save_steps=10
+    - ++eval_steps=1000
+    - ++rollout_batch_size=2
+    - ++prompt_length=128
+    - ++sequence_length=192
+    - ++num_return_sequences_in_group=2
+    - ++difficulty_mask=false
+    - ++pretrain="${oc.env:ROLL_MODEL_PATH}"
+    - ++reward_pretrain="${oc.env:ROLL_MODEL_PATH}"
+    - ++actor_train.model_args.flash_attn="fa2"
+    - ++actor_train.training_args.gradient_accumulation_steps=1
+    - ++actor_train.training_args.warmup_steps=0
+    - ++actor_train.training_args.num_train_epochs=1
+    - ++actor_train.data_args.file_name=["${oc.env:FIXTURE_DIR}/ci_math_8.jsonl"]
+    - ++actor_train.data_args.preprocessing_num_workers=1
+    - ~actor_train.strategy_args.strategy_config
+    - ++actor_train.strategy_args.strategy_config={fsdp_size:2,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false,use_batched_model_update:false}
+    - ++actor_train.device_mapping="list(range(0,2))"
+    - ++actor_infer.model_args.flash_attn="fa2"
+    - ++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,max_model_len:256,enforce_eager:true,load_format:"auto"}
+    - ++actor_infer.device_mapping="list(range(2,3))"
+    - ++reference.model_args.flash_attn="fa2"
+    - ++reference.device_mapping="list(range(3,4))"
+    - ++rewards.math_rule.tag_included=["math_rule"]
+    - ++rewards.math_rule.world_size=1
+    - ~validation
+    - ~actor_train.data_args.dataset_dir
+    - ++response_length=64
+    - ++actor_train.strategy_args.strategy_name="fsdp2_train"
+    - ++reference.strategy_args.strategy_name="hf_infer"
+    - ++reference.strategy_args.strategy_config=null
+    - ~actor_train.data_args.domain_interleave_probs
+    - ++actor_train.data_args.domain_interleave_probs={math_rule:1.0}
+    - ~rewards.crossthinkqa
+    - ~rewards.ifeval
+    - ~rewards.code_sandbox
+    - ~rewards.llm_judge
+    - ++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"
+    - ++actor_train.training_args.lr_scheduler_type="constant"
+    - ++exp_name="roll-ci-example_raft_pp"
+    timeout_minutes: 240
+  # REINFORCE++；0.5B + 本地数学数据，保留 reinforce 优势估计，待 NPU 验证。
+  - path: examples/docs_examples/example_reinforce_pp.yaml
+    profile: rlvr_npu
+    runner: linux-aarch64-a2-4
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: examples/start_rlvr_pipeline.py
+    overlay_args:
+    - --config_path
+    - docs_examples
+    - --config_name
+    - example_reinforce_pp
+    - ++transfer_backend.backend_name=null
+    - ++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"
+    - ++output_dir="${oc.env:CI_OUTPUT_DIR}/output"
+    - ++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"
+    - ++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"
+    - ++num_gpus_per_node=4
+    - ++max_steps=1
+    - ++save_steps=10
+    - ++eval_steps=1000
+    - ++rollout_batch_size=2
+    - ++prompt_length=128
+    - ++sequence_length=192
+    - ++num_return_sequences_in_group=2
+    - ++difficulty_mask=false
+    - ++pretrain="${oc.env:ROLL_MODEL_PATH}"
+    - ++reward_pretrain="${oc.env:ROLL_MODEL_PATH}"
+    - ++actor_train.model_args.flash_attn="fa2"
+    - ++actor_train.training_args.gradient_accumulation_steps=1
+    - ++actor_train.training_args.warmup_steps=0
+    - ++actor_train.training_args.num_train_epochs=1
+    - ++actor_train.data_args.file_name=["${oc.env:FIXTURE_DIR}/ci_math_8.jsonl"]
+    - ++actor_train.data_args.preprocessing_num_workers=1
+    - ~actor_train.strategy_args.strategy_config
+    - ++actor_train.strategy_args.strategy_config={fsdp_size:2,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false,use_batched_model_update:false}
+    - ++actor_train.device_mapping="list(range(0,2))"
+    - ++actor_infer.model_args.flash_attn="fa2"
+    - ++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,max_model_len:256,enforce_eager:true,load_format:"auto"}
+    - ++actor_infer.device_mapping="list(range(2,3))"
+    - ++reference.model_args.flash_attn="fa2"
+    - ++reference.device_mapping="list(range(3,4))"
+    - ++rewards.math_rule.tag_included=["math_rule"]
+    - ++rewards.math_rule.world_size=1
+    - ~validation
+    - ~actor_train.data_args.dataset_dir
+    - ++response_length=64
+    - ++actor_train.strategy_args.strategy_name="fsdp2_train"
+    - ++reference.strategy_args.strategy_name="hf_infer"
+    - ++reference.strategy_args.strategy_config=null
+    - ~actor_train.data_args.domain_interleave_probs
+    - ++actor_train.data_args.domain_interleave_probs={math_rule:1.0}
+    - ~rewards.crossthinkqa
+    - ~rewards.ifeval
+    - ~rewards.code_sandbox
+    - ~rewards.llm_judge
+    - ++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"
+    - ++actor_train.training_args.lr_scheduler_type="constant"
+    - ++exp_name="roll-ci-example_reinforce_pp"
+    timeout_minutes: 240
+  # 在线教师蒸馏；0.5B 学生/1.5B 教师 + 本地数学数据，保留原生 OPD，待 NPU 验证。
+  - path: examples/distill/on_policy/llm/onpolicy_distill_config.yaml
+    profile: opd_npu
+    runner: linux-aarch64-a2-4
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: examples/start_onpolicy_distill_pipeline.py
+    overlay_args:
+    - --config_path
+    - distill/on_policy/llm
+    - --config_name
+    - onpolicy_distill_config
+    - ++exp_name="roll-ci-expanded"
+    - ++transfer_backend.backend_name=null
+    - ++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"
+    - ++output_dir="${oc.env:CI_OUTPUT_DIR}/output"
+    - ++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"
+    - ++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"
+    - ++save_steps=1000
+    - ++eval_steps=1000
+    - ++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"
+    - ++num_gpus_per_node=4
+    - ++max_steps=1
+    - ++pretrain="${oc.env:ROLL_MODEL_PATH}"
+    - ++reward_pretrain="${oc.env:ROLL_MODEL_PATH}"
+    - ++global_template="qwen2_5"
+    - ~validation
+    - ++rollout_batch_size=2
+    - ++num_return_sequences_in_group=1
+    - ++prompt_length=224
+    - ++response_length=32
+    - ++sequence_length=256
+    - ++difficulty_mask=false
+    - ++is_pure_opd=true
+    - ++student_train.model_args.model_name_or_path="${oc.env:ROLL_MODEL_PATH}"
+    - ++student_train.model_args.attn_implementation="sdpa"
+    - ++student_train.model_args.ulysses_size=1
+    - ++student_train.model_args.dtype="bf16"
+    - ++student_train.data_args.template="qwen2_5"
+    - ++student_train.use_sequence_packing=false
+    - ++student_train.strategy_args.strategy_name="fsdp2_train"
+    - ~student_train.strategy_args.strategy_config
+    - ++student_train.strategy_args.strategy_config={fsdp_size:1,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false}
+    - ++student_train.device_mapping="list(range(0,1))"
+    - ++student_train.infer_batch_size=1
+    - ++student_train.training_args.num_train_epochs=1
+    - ++student_train.training_args.warmup_steps=0
+    - ++student_train.training_args.lr_scheduler_type="constant"
+    - ++student_train.training_args.dataloader_num_workers=0
+    - ++student_train.data_args.preprocessing_num_workers=1
+    - ++student_train.training_args.per_device_train_batch_size=1
+    - ++student_train.data_args.file_name=["${oc.env:FIXTURE_DIR}/ci_opsd_8.jsonl"]
+    - ~student_train.data_args.dataset_dir
+    - ++student_train.data_args.enable_thinking=false
+    - ++student_infer.model_args.model_name_or_path="${oc.env:ROLL_MODEL_PATH}"
+    - ++student_infer.strategy_args.strategy_name="vllm"
+    - ++student_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:512,enforce_eager:true}
+    - ++student_infer.device_mapping="list(range(1,2))"
+    - ++student_infer.data_args.template="qwen2_5"
+    - ++teacher.model_args.attn_implementation="sdpa"
+    - ++teacher.model_args.ulysses_size=1
+    - ++teacher.model_args.dtype="bf16"
+    - ++teacher.data_args.template="qwen2_5"
+    - ++teacher.use_sequence_packing=false
+    - ++teacher.strategy_args.strategy_name="hf_infer"
+    - ++teacher.strategy_args.strategy_config=null
+    - ++teacher.device_mapping="list(range(2,3))"
+    - ++teacher.data_args.enable_thinking=false
+    - ++rewards.math_rule.tag_included=["math_rule"]
+    - ++rewards.math_rule.world_size=1
+    - ++rewards.math_rule.data_args.template="qwen2_5"
+    - ++teacher.model_args.model_name_or_path="${oc.env:ROLL_TEACHER_PATH}"
+    timeout_minutes: 240
+  # OPSD 特权答案自蒸馏；保留 reference_solution 注入与逐 token KL，0.5B/本地数据，待 NPU 验证。
+  - path: examples/distill/on_policy/llm/opsd_distill_config.yaml
+    profile: rlvr_npu
+    runner: linux-aarch64-a2-4
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: examples/start_onpolicy_distill_pipeline.py
+    overlay_args:
+    - --config_path
+    - distill/on_policy/llm
+    - --config_name
+    - opsd_distill_config
+    - ++exp_name="roll-ci-expanded"
+    - ++transfer_backend.backend_name=null
+    - ++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"
+    - ++output_dir="${oc.env:CI_OUTPUT_DIR}/output"
+    - ++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"
+    - ++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"
+    - ++save_steps=1000
+    - ++eval_steps=1000
+    - ++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"
+    - ++num_gpus_per_node=4
+    - ++max_steps=1
+    - ++pretrain="${oc.env:ROLL_MODEL_PATH}"
+    - ++reward_pretrain="${oc.env:ROLL_MODEL_PATH}"
+    - ++global_template="qwen2_5"
+    - ~validation
+    - ++rollout_batch_size=2
+    - ++prompt_length=224
+    - ++response_length=32
+    - ++sequence_length=256
+    - ++difficulty_mask=false
+    - ++is_pure_opd=true
+    - ++student_train.model_args.model_name_or_path="${oc.env:ROLL_MODEL_PATH}"
+    - ++student_train.model_args.attn_implementation="sdpa"
+    - ++student_train.model_args.ulysses_size=1
+    - ++student_train.model_args.dtype="bf16"
+    - ++student_train.data_args.template="qwen2_5"
+    - ++student_train.use_sequence_packing=false
+    - ++student_train.strategy_args.strategy_name="fsdp2_train"
+    - ~student_train.strategy_args.strategy_config
+    - ++student_train.strategy_args.strategy_config={fsdp_size:1,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false}
+    - ++student_train.device_mapping="list(range(0,1))"
+    - ++student_train.infer_batch_size=1
+    - ++student_train.training_args.num_train_epochs=1
+    - ++student_train.training_args.gradient_accumulation_steps=1
+    - ++student_train.training_args.warmup_steps=0
+    - ++student_train.training_args.lr_scheduler_type="constant"
+    - ++student_train.training_args.dataloader_num_workers=0
+    - ++student_train.data_args.preprocessing_num_workers=1
+    - ++student_train.data_args.file_name=["${oc.env:FIXTURE_DIR}/ci_opsd_8.jsonl"]
+    - ~student_train.data_args.dataset_dir
+    - ++student_train.data_args.enable_thinking=false
+    - ++student_infer.model_args.model_name_or_path="${oc.env:ROLL_MODEL_PATH}"
+    - ++student_infer.strategy_args.strategy_name="vllm"
+    - ~student_infer.strategy_args.strategy_config
+    - ++student_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:512,enforce_eager:true}
+    - ++student_infer.device_mapping="list(range(1,2))"
+    - ++student_infer.data_args.template="qwen2_5"
+    - ++teacher.model_args.model_name_or_path="${oc.env:ROLL_MODEL_PATH}"
+    - ++teacher.model_args.attn_implementation="sdpa"
+    - ++teacher.model_args.ulysses_size=1
+    - ++teacher.model_args.dtype="bf16"
+    - ++teacher.data_args.template="qwen2_5"
+    - ++teacher.use_sequence_packing=false
+    - ++teacher.strategy_args.strategy_name="hf_infer"
+    - ++teacher.strategy_args.strategy_config=null
+    - ++teacher.device_mapping="list(range(2,3))"
+    - ++teacher.data_args.enable_thinking=false
+    - ++rewards.math_rule.tag_included=["math_rule"]
+    - ++rewards.math_rule.world_size=1
+    - ++rewards.math_rule.data_args.template="qwen2_5"
+    - ++opsd_max_solution_length=32
+    - '++opsd_teacher_template="{problem} Reference solution: {solution} Give your own answer."'
+    timeout_minutes: 240
+  # GEM 猜数字游戏；原 StepConcatEnvManager，压缩数字范围/轮次，双卡训练，非 GEMRunner，待 NPU 验证。
+  - path: examples/qwen3_agentic_gem/gem_game_guess_the_number.yaml
+    profile: agentic_gem_env_npu
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: examples/start_agentic_pipeline.py
+    overlay_args:
+    - --config_path
+    - qwen3_agentic_gem
+    - --config_name
+    - gem_game_guess_the_number
+    - ++transfer_backend.backend_name=null
+    - ++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"
+    - ++output_dir="${oc.env:CI_OUTPUT_DIR}/output"
+    - ++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"
+    - ++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"
+    - ++num_gpus_per_node=2
+    - ++max_steps=1
+    - ++save_steps=10
+    - ++eval_steps=1000
+    - ++rollout_batch_size=2
+    - ++val_batch_size=2
+    - ++pretrain="${oc.env:ROLL_MODEL_PATH}"
+    - ++reward_pretrain="${oc.env:ROLL_MODEL_PATH}"
+    - ++actor_train.training_args.per_device_train_batch_size=1
+    - ++actor_train.training_args.gradient_accumulation_steps=1
+    - ++actor_train.training_args.warmup_steps=0
+    - ++actor_train.strategy_args.strategy_name="fsdp2_train"
+    - ~actor_train.strategy_args.strategy_config
+    - ++actor_train.strategy_args.strategy_config={fsdp_size:1,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false}
+    - ++actor_train.device_mapping="list(range(0,1))"
+    - ++actor_train.infer_batch_size=1
+    - ++actor_infer.generating_args.max_new_tokens=32
+    - ++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:256,enforce_eager:true}
+    - ++actor_infer.device_mapping="list(range(1,2))"
+    - ++reference.device_mapping="list(range(0,1))"
+    - ++reference.infer_batch_size=1
+    - ++sequence_length=1024
+    - ++actor_infer.strategy_args.strategy_config.max_model_len=1024
+    - ++ppo_epochs=1
+    - ++max_tokens_per_step=64
+    - ++max_actions_per_traj=2
+    - ++train_env_manager.max_env_num_per_worker=1
+    - ++train_env_manager.num_env_groups=1
+    - ++train_env_manager.group_size=2
+    - ++train_env_manager.num_groups_partition=[1]
+    - ++val_env_manager.max_env_num_per_worker=1
+    - ++val_env_manager.num_env_groups=1
+    - ++val_env_manager.num_groups_partition=[1]
+    - ++logging_steps=0
+    - ++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"
+    - ++exp_name="roll-ci-gem_game_guess_the_number"
+    - ++custom_envs.GuessTheNumber.env_config.max_number=3
+    timeout_minutes: 240
+  # GEM 字母计数；保留原 reasoning-gym 环境，压缩样本数，双卡训练，待 NPU 验证。
+  - path: examples/qwen3_agentic_gem/gem_rg_letter_counting.yaml
+    profile: agentic_gem_env_npu
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: examples/start_agentic_pipeline.py
+    overlay_args:
+    - --config_path
+    - qwen3_agentic_gem
+    - --config_name
+    - gem_rg_letter_counting
+    - ++transfer_backend.backend_name=null
+    - ++logging_dir="${oc.env:CI_OUTPUT_DIR}/logs"
+    - ++output_dir="${oc.env:CI_OUTPUT_DIR}/output"
+    - ++system_envs.MODEL_DOWNLOAD_TYPE="MODELSCOPE"
+    - ++checkpoint_config.output_dir="${oc.env:CI_OUTPUT_DIR}/ckpt"
+    - ++num_gpus_per_node=2
+    - ++max_steps=1
+    - ++save_steps=10
+    - ++eval_steps=1000
+    - ++rollout_batch_size=2
+    - ++val_batch_size=2
+    - ++pretrain="${oc.env:ROLL_MODEL_PATH}"
+    - ++reward_pretrain="${oc.env:ROLL_MODEL_PATH}"
+    - ++actor_train.training_args.per_device_train_batch_size=1
+    - ++actor_train.training_args.gradient_accumulation_steps=1
+    - ++actor_train.training_args.warmup_steps=0
+    - ++actor_train.strategy_args.strategy_name="fsdp2_train"
+    - ~actor_train.strategy_args.strategy_config
+    - ++actor_train.strategy_args.strategy_config={fsdp_size:1,param_dtype:"bf16",reduce_dtype:"bf16",reshard_after_forward:true,offload_policy:false}
+    - ++actor_train.device_mapping="list(range(0,1))"
+    - ++actor_train.infer_batch_size=1
+    - ++actor_infer.generating_args.max_new_tokens=32
+    - ++actor_infer.strategy_args.strategy_config={gpu_memory_utilization:0.8,block_size:16,load_format:"auto",max_model_len:256,enforce_eager:true}
+    - ++actor_infer.device_mapping="list(range(1,2))"
+    - ++reference.device_mapping="list(range(0,1))"
+    - ++reference.infer_batch_size=1
+    - ++sequence_length=1024
+    - ++actor_infer.strategy_args.strategy_config.max_model_len=1024
+    - ++ppo_epochs=1
+    - ++max_tokens_per_step=64
+    - ++train_env_manager.max_env_num_per_worker=1
+    - ++train_env_manager.num_env_groups=1
+    - ++train_env_manager.group_size=2
+    - ++train_env_manager.num_groups_partition=[1]
+    - ++val_env_manager.max_env_num_per_worker=1
+    - ++val_env_manager.num_env_groups=1
+    - ++val_env_manager.num_groups_partition=[1]
+    - ++logging_steps=0
+    - ++tracker_kwargs.log_dir="${oc.env:CI_OUTPUT_DIR}/tensorboard"
+    - ++exp_name="roll-ci-gem_rg_letter_counting"
+    - ++custom_envs.LetterCounting.env_config.size=8
+    timeout_minutes: 240
 unsupported:
+  # Sokoban GEM AgentRunner：ProxyEnvManager 调用 set_episode_context，但 v0.4.0 的 GEMRunner 未实现；无补丁无法运行。
+  - examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_agent_runner.yaml
   # RLVR 序列 packing；worker_config.py 仅允许 Megatron，改用 FSDP2/HF 会强制关闭 packing，不能保留核心功能。
   - examples/qwen2.5-7B-rlvr_megatron/rlvr_config_sequence_packing.yaml
   # DeepEyes 图文缺陷检测 Agentic 训练（Qwen2.5-VL-7B）；不支持：Megatron 训练后端在昇腾当前不支持，且 7B VLM 规模超单卡 CI。
@@ -1330,21 +1704,15 @@ unsupported:
   - examples/agentic_demo/openreward_endless_terminals_reinforce_qwen35_2b.yaml
   # 官方 ascend_examples 的 30B-A3B RLVR 配置（16 卡 MoE + offload + tiled MLP）；当前不纳入：A3 MoE 规模与 16 卡拓扑超出单节点 CI，8B 官方配置已选为 RLVR 代表。
   - examples/ascend_examples/qwen3_30b_rlvr_fsdp2.yaml
-  # 文档 RAFT（Qwen2.5-7B，Megatron）；不支持：Megatron 后端 + 7B 规模。
-  - examples/docs_examples/example_raft_pp.yaml
-  # 文档 REINFORCE（Qwen2.5-7B，Megatron）；不支持：Megatron 后端 + 7B 规模。
-  - examples/docs_examples/example_reinforce_pp.yaml
   # 文档 all-options（Qwen2.5-7B，Megatron）；不支持：Megatron 后端 + 7B 规模。
   - examples/docs_examples/example_total_rl_options.yaml
-  # DPO Qwen2.5-3B（Megatron，仓库内中文偏好数据）；不支持：Megatron 后端，DPO 在昇腾无实测。
-  - examples/dpo_examples/qwen2.5-3B_dpo_megatron.yaml
   # DPO Qwen3-30B-A3B（Megatron 80GB，仓库内中文偏好数据）；不支持：Megatron + MoE 30B 规模。
   - examples/dpo_examples/qwen3-30BA3B-dpo_megatron_80GB.yaml
   # Qwen2.5-VL-3B FSDP2 offload RLVR；当前不纳入：VLM pipeline 在昇腾无实测，数据为私有 CPFS Orsta parquet 绝对路径。
   - examples/qwen2_5-vl-3B-rlvr_fsdp2/rlvr_fsdp2_offload.yaml
   # FrozenLake AMD 变体（0.5B，Megatron）；不支持：AMD 平台配置（rocm）+ Megatron。
   - examples/qwen2.5-0.5B-agentic/agent_val_frozen_lake_amd.yaml
-  # FrozenLake 的异步变体；CI 需 ++async_generation_ratio=null 关闭异步才可单节点稳定运行，关闭后与已接入的 frozen_lake 主配置等价，不单独登记。
+  # FrozenLake 的异步变体；CI 需 ++async_generation_ratio=0 关闭异步才可单节点稳定运行，关闭后与已接入的 frozen_lake 主配置等价，不单独登记。
   - examples/qwen2.5-0.5B-agentic/agent_val_frozen_lake_async.yaml
   # FrozenLake 异步 AMD 变体；不支持：AMD + Megatron。
   - examples/qwen2.5-0.5B-agentic/agent_val_frozen_lake_async_amd.yaml
@@ -1376,7 +1744,7 @@ unsupported:
   - examples/qwen2.5-7B-rlvr_megatron/rlvr_config_async.yaml
   # RLVR LoRA（7B，Megatron）；不支持：Megatron + 7B 规模。
   - examples/qwen2.5-7B-rlvr_megatron/rlvr_config_lora.yaml
-  # RLVR FSDP2 + SP2 变体（7B，8 卡）；当前不纳入：7B 规模、多域数据 + 额外序列并行，与已选 RLVR 代表重复。
+  # RLVR SP2 序列并行；v0.4.0 NpuPlatform.apply_ulysses_patch 返回 None，FSDP2 会退回 CP=1，无法保留 SP2 语义。
   - examples/qwen2.5-7B-rlvr_megatron/rlvr_fsdp2_sp2.yaml
   # RLVR 分离式 8 卡（7B，Megatron）；不支持：Megatron + 7B 规模。
   - examples/qwen2.5-7B-rlvr_megatron/rlvr_qwen2.5_7B_seperate.yaml
@@ -1390,8 +1758,6 @@ unsupported:
   - examples/qwen2.5-vl-7B-rlvr/rlvr_async.yaml
   # Qwen2.5-VL-7B RLVR Megatron（私有 Orsta parquet）；不支持：Megatron + 私有路径。
   - examples/qwen2.5-vl-7B-rlvr/rlvr_megatron.yaml
-  # GEM 猜数字游戏（Qwen3-1.7B，Megatron，GEM 环境）；不支持：Megatron + GEM 多轮工具环境链路无昇腾实测。
-  - examples/qwen3_agentic_gem/gem_game_guess_the_number.yaml
   # GEM 数学 DAPO（Qwen3-4B，Megatron）；不支持：Megatron + 4B 规模。
   - examples/qwen3_agentic_gem/gem_math_dapo.yaml
   # GEM 数学 DAPO PythonCode（Qwen3-4B，Megatron）；不支持：Megatron + 代码沙箱奖励。
@@ -1400,8 +1766,6 @@ unsupported:
   - examples/qwen3_agentic_gem/gem_math_hotpotqa.yaml
   # GEM HotpotQA + 检索（Qwen3-4B，Megatron）；不支持：外部检索服务 + Megatron。
   - examples/qwen3_agentic_gem/gem_math_hotpotqa_search.yaml
-  # GEM 字母计数（Qwen3-1.7B，Megatron）；不支持：Megatron + GEM 工具链路。
-  - examples/qwen3_agentic_gem/gem_rg_letter_counting.yaml
   # Qwen3-235B-A22B RLVR（Megatron，8 卡 140GB 级）；不支持：Megatron + 235B MoE 规模。
   - examples/qwen3-235BA22B-rlvr_megatron/rlvr_config.yaml
   # Qwen3-235B 140GB 显存版；不支持：同上。
@@ -1426,8 +1790,6 @@ unsupported:
   - examples/qwen3-30BA3B-rlvr_megatron/rlvr_config_ppu_sglang.yaml
   # 30B SGLang（Megatron 训练）；不支持：Megatron + SGLang。
   - examples/qwen3-30BA3B-rlvr_megatron/rlvr_config_sglang.yaml
-  # 30B SFT FSDP2（私有 code_alpaca 20k）；当前不纳入：30B 规模 + 仓库外数据 + SFT 无昇腾实测。
-  - examples/qwen3-30BA3B-sft_fsdp2/sft_config.yaml
   # 30B SFT FSDP2 + EP；当前不纳入：同上 + EP 拓扑。
   - examples/qwen3-30BA3B-sft_fsdp2/sft_config_ep.yaml
   # 30B SFT Megatron；不支持：Megatron + 私有数据。
@@ -1476,15 +1838,6 @@ unsupported:
   - examples/qwen3.5-397A17-rlvr_megatron/rlvr_megatron_80GB.yaml
   # Video-R1 Qwen2.5-VL-7B（Megatron，私有数据）；不支持：Megatron + 私有路径 + 视频多模态。
   - examples/video-rlvr/video_r1.yaml
-  # ===== 原 scan.exclude 项迁移（2026-09-20）：
-  # examples/config 是被各 example 配置继承的 9 个共享环境 / 模板片段
-  # 目录，不是可独立执行的 example；其下子 .yaml 文件由清单
-  # supported / unsupported 段以实际文件名为准统一登记（具体文件名
-  # 清单以 alibaba/ROLL HEAD 为准）。
-  - examples/config
-  # 仅有 Hydra defaults 的空壳配置，没有模型 / worker / 资源配置；
-  # 单条文件原 exclude 就直接列了，迁移到此处保持原意。
-  - examples/qwen2.5-0.5B-agentic/agentic_val_webshop.yaml
   # ROCK 平台编码智能体（Qwen3-Coder-30B-A3B，Megatron，32 卡）；依赖 ROCK SWE sandbox 外部服务，CI 无法自包含。
   - examples/agentic_rock/rock_agent_runner_30a3.yaml
   # ROCK 平台编码智能体（Qwen3-4B，Megatron）；依赖 ROCK SWE sandbox 外部服务与远程 runtime 下载。
@@ -1499,18 +1852,12 @@ unsupported:
   - examples/cicd_pipelines/flow_grpo_qwen_image.yaml
   # 上游 CI 的 Qwen3-8B MOPD；Megatron + code_sandbox 外部奖励 + ml_tracker。
   - examples/cicd_pipelines/mopd_qwen3_8B_megatron_vllm.yaml
-  # 离线 LLM 蒸馏（教师 Qwen2.5-14B，Megatron）；14B 教师规模 + 私有 GSM8K_zh 数据路径。
-  - examples/distill/off_policy/llm/distill_megatron.yaml
   # 离线 VLM 蒸馏（教师 Qwen2.5-VL-32B，FSDP2）；32B VLM 教师 + 私有 geoqa 数据，VLM 无昇腾实测。
   - examples/distill/off_policy/vlm/distill_vl_fsdp2.yaml
   # 离线 VLM 蒸馏（教师 Qwen2.5-VL-32B，Megatron）；同上，且 Megatron 后端。
   - examples/distill/off_policy/vlm/distill_vl_megatron.yaml
   # 在线多教师蒸馏（学生 Qwen3-8B，Megatron）；8B 学生 + 双教师卡资源 + 私有数据。
   - examples/distill/on_policy/llm/multi_teacher_onpolicy_distill_config.yaml
-  # 在线单教师蒸馏（Qwen3-8B，Megatron）；8B 规模 + 私有 dapo_math_17k 数据。
-  - examples/distill/on_policy/llm/onpolicy_distill_config.yaml
-  # OPSD 在线蒸馏（Qwen3-8B，Megatron）；8B 规模 + 私有 openthoughts 数据。
-  - examples/distill/on_policy/llm/opsd_distill_config.yaml
   # OPSD 在线蒸馏 LoRA 变体（Qwen3-8B，Megatron）；同上。
   - examples/distill/on_policy/llm/opsd_distill_lora_config.yaml
   # VLM 多教师在线蒸馏（Qwen3-VL-4B，Megatron）；私有 Orsta parquet + VLM 无昇腾实测。
@@ -1531,7 +1878,7 @@ unsupported:
   - examples/qwen-image-diffusion/flow_grpo_geneval_fsdp2_80GB.yaml
   # Qwen-Image 仅 rollout；vllm_omni 推理后端无昇腾适配 + 私有 ocr 数据。
   - examples/qwen-image-diffusion/qwen_image_rollout.yaml
-  # Sokoban PPO 的异步变体；CI 需 ++async_generation_ratio=null 关闭异步，关闭后与已接入的 ppo 主配置等价，不单独登记。
+  # Sokoban PPO 的异步变体；CI 需 ++async_generation_ratio=0 关闭异步，关闭后与已接入的 ppo 主配置等价，不单独登记。
   - examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_ppo_as1.yaml
   # Sokoban SAO 的异步变体；CI 关闭异步后与已接入的 sao 主配置等价，不单独登记。
   - examples/qwen2.5-0.5B-agentic/agentic_val_sokoban_sao_as1.yaml
