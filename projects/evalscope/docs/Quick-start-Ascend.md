@@ -80,19 +80,27 @@ count: 1
 
 ## 3. 安装 EvalScope
 
-EvalScope 的 Native 后端基于 transformers，因此评测机需已具备 §2 的 `torch` / `torch_npu` 栈。直接用 `pip` 安装 EvalScope 本体（安装时会顺带拉取 transformers / modelscope 等导入期依赖），装完打印版本并再次确认 NPU 栈未被污染：
+EvalScope 的 Native 后端基于 transformers，因此评测机需已具备 §2 的 `torch` / `torch_npu` 栈。直接用 `pip` 安装 EvalScope 本体（安装时会顺带拉取 transformers / modelscope 等导入期依赖），装完打印版本并再次确认 NPU 栈未被污染。
+
+安装时注意两点：
+
+- **显式安装 `accelerate`**：EvalScope 的本地模型封装在加载时一定会把 `device_map=get_device()`（NPU 上即 `'npu'`）传给 `from_pretrained`，而 transformers ≥5 只要收到 `device_map` 就要求 `accelerate`，但 `evalscope` 的依赖清单里并没有声明它——漏装会在加载模型时报 `requires accelerate`。
+- **不要给 `numpy` 加上限（尤其别钉 `<2`）**：EvalScope 经 `modelscope[datasets]` 拉入的新版 `datasets` / `pyarrow` 在导入时**要求 NumPy ≥ 2**。若把 `numpy` 钉在 1.x，`import datasets` 会直接抛 `ImportError: pyarrow requires NumPy 2.0 or newer`（该检查发生在运行期、不在包元数据里，pip 解析时不会报冲突）。这里显式钉 `numpy>=2,<3`，与上游一致地留在 NumPy 2。
 
 ```shell #test id="install-evalscope"
-python -m pip install "evalscope==1.11.0" "numpy>=1.23.4,<2"
-python -c "import evalscope, transformers, modelscope, torch, torch_npu; print('evalscope', evalscope.__version__); print('transformers', transformers.__version__); print('torch', torch.__version__); print('torch_npu', torch_npu.__version__); print('npu_available', torch.npu.is_available())"
+python -m pip install "evalscope==1.11.0" "numpy>=2.0,<3" accelerate
+python -c "import evalscope, transformers, modelscope, accelerate, numpy, torch, torch_npu; print('evalscope', evalscope.__version__); print('transformers', transformers.__version__); print('accelerate', accelerate.__version__); print('numpy', numpy.__version__); print('torch', torch.__version__); print('torch_npu', torch_npu.__version__); print('npu_available', torch.npu.is_available())"
 ```
 
 输出结果如下：
 
-```shell #test-result id="install-evalscope" fuzzy='xxx'
+```shell #test-result id="install-evalscope" fuzzy='...' fuzzy='xxx'
+...
 evalscope 1.11.0
 transformers xxx
-torch 2.9.0...
+accelerate xxx
+numpy 2.xxx
+torch 2.9.0xxx
 torch_npu 2.9.0.post2
 npu_available True
 ```
@@ -129,13 +137,14 @@ has_config True
 
 ### 5.1 先确认模型能够加载到 NPU
 
-下面这段用 transformers 直接把模型以 `device_map="auto"` 加载，并打印第一个参数的设备，断言其为 `npu` 开头。EvalScope 的 Native 后端走的是同一套 transformers + accelerate 加载机制，因此这一步等价于验证 EvalScope 在 NPU 上的加载路径。
+下面这段用 transformers 直接把模型以 `device_map="npu"` 加载，并打印第一个参数的设备，断言其为 `npu` 开头。这里刻意与 EvalScope 的 Native 后端对齐：EvalScope 会把 `get_device()` 的返回值（NPU 上为 `'npu'`）原样作为 `device_map` 传给 `from_pretrained`，因此这一步等价于验证 EvalScope 在 NPU 上的加载路径。
 
 ```shell #test id="npu-device-check" load="model_path>>model_path"
 python -c "
+print('EVALSCOPE_NPU_DEVICE_CHECK_BEGIN')
+import torch, torch_npu
 from transformers import AutoModelForCausalLM
-import torch
-m = AutoModelForCausalLM.from_pretrained('<model_path>', torch_dtype='auto', device_map='auto')
+m = AutoModelForCausalLM.from_pretrained('<model_path>', torch_dtype='auto', device_map='npu')
 dev = str(next(m.parameters()).device)
 print('evalscope_npu_device', dev)
 assert dev.startswith('npu'), dev
@@ -145,8 +154,8 @@ print('EVALSCOPE_NPU_DEVICE_OK')
 
 输出结果如下：
 
-```shell #test-result id="npu-device-check" fuzzy='xxx'
-...
+```shell #test-result id="npu-device-check" fuzzy='...'
+EVALSCOPE_NPU_DEVICE_CHECK_BEGIN...
 evalscope_npu_device npu:0
 EVALSCOPE_NPU_DEVICE_OK
 ```
@@ -155,24 +164,26 @@ EVALSCOPE_NPU_DEVICE_OK
 
 ### 5.2 运行 EvalScope 评测
 
-`evalscope eval` 命令在指定数据集上用默认配置评测模型。`--model` 指向本地权重，`--model-args` 传入 `device_map="auto"` 让 accelerate 自动把模型放到 NPU，`--work-dir` 指定固定输出目录便于结果校验，`--limit 5` 是跑通口径（不代表真实榜单值）。评测机已通过环境变量 `ASCEND_RT_VISIBLE_DEVICES=0` 限定单卡。
+`evalscope eval` 命令在指定数据集上用默认配置评测模型。`--model` 指向本地权重，`--model-args` 传入 `device_map="npu"`（正是 EvalScope 在 NPU 上的默认取值，显式写出更直观）把模型放到 NPU，`--work-dir` 指定固定输出目录、`--no-timestamp` 让报告直接落在该目录（默认会在 `--work-dir` 下再追加时间戳子目录），`--limit 5` 是跑通口径（不代表真实榜单值）。评测机已通过环境变量 `ASCEND_RT_VISIBLE_DEVICES=0` 限定单卡。
 
 ```shell #test id="run-eval" load="model_path>>model_path"
+set -eo pipefail
+mkdir -p outputs
 evalscope eval \
   --model <model_path> \
   --datasets gsm8k arc \
   --limit 5 \
-  --model-args '{"device_map": "auto"}' \
+  --no-timestamp \
+  --model-args '{"device_map": "npu"}' \
   --work-dir outputs/evalscope_npu_qs \
   2>&1 | tee outputs/evalscope_npu_qs_run.log
 echo "EVALSCOPE_NPU_DONE"
 ```
 
-输出结果如下（评测日志较长，此处仅校验末尾标记与模型名）：
+输出结果如下（评测日志较长，此处仅校验模型名与末尾完成标记）：
 
-```shell #test-result id="run-eval" fuzzy='xxx'
-...
-Qwen2.5-0.5B-Instruct ...
+```shell #test-result id="run-eval" fuzzy='...'
+...Qwen2.5-0.5B-Instruct...
 ...
 EVALSCOPE_NPU_DONE
 ```
@@ -181,7 +192,7 @@ EVALSCOPE_NPU_DONE
 
 ## 6. 检查评测结果
 
-EvalScope 会把评测报告写入 `--work-dir` 下的 `reports/` 目录（JSON）。下面读取报告，断言所有出现的 `score` 字段都落在 [0,1] 区间并打印，作为冒烟通过的数值依据：
+EvalScope 会把评测报告写入 `--work-dir` 下的 `reports/<模型名>/<数据集>.json`。下面递归读取报告，断言所有出现的 `score` 字段都落在 [0,1] 区间并打印，作为冒烟通过的数值依据：
 
 ```shell #test id="check-acc"
 python << 'PY'
@@ -189,7 +200,7 @@ import glob
 import json
 
 found = []
-for path in glob.glob('outputs/evalscope_npu_qs/reports/*.json'):
+for path in glob.glob('outputs/evalscope_npu_qs/reports/**/*.json', recursive=True):
     try:
         data = json.load(open(path, encoding='utf-8'))
     except Exception:
@@ -218,8 +229,7 @@ PY
 输出结果如下：
 
 ```shell #test-result id="check-acc" fuzzy='xxx'
-...
-evalscope scores in [0,1]: ...
+evalscope scores in [0,1]: xxx
 ```
 
 更多数据集、批量评测与可视化看板用法见 [EvalScope 官方文档](https://evalscope.readthedocs.io/zh-cn/latest/)。
@@ -231,6 +241,8 @@ evalscope scores in [0,1]: ...
 | 现象 | 可能原因 | 建议 |
 | --- | --- | --- |
 | `torch.npu.is_available()` 为 `False` | 未 `source set_env.sh`，或设备未挂进容器 | 重做 §1–§2 |
+| 加载模型报 `Using a device_map ... requires accelerate` | EvalScope 未在依赖里声明 `accelerate`，漏装 | 按 §3 显式 `pip install accelerate`（或 `pip install "evalscope[...]"` 后再补装） |
+| `import datasets` 报 `pyarrow requires NumPy 2.0 or newer` | 手工把 `numpy` 钉在 1.x，而 EvalScope 经 `modelscope[datasets]` 拉入的新版 `pyarrow` 要求 NumPy ≥2 | 按 §3 安装（`numpy>=2,<3`），或 `python -m pip install "numpy>=2"` 后重跑 |
 | `pip` 把 `torch` 换成 CPU / CUDA 轮子 | 安装 EvalScope 时未锁定 NPU 栈 | 卸掉后按 §2–§3 重装 `torch` / `torch_npu` 再装 EvalScope |
 | `evalscope_npu_device` 为 `cpu` | `torch_npu` 没装上，或可见设备为空 | 检查 `npu_available` 和 `ASCEND_RT_VISIBLE_DEVICES` |
 | 评测极慢或显存/OOM | 模型被加载到 CPU，或 `limit` 过大 | 确认 §5.1 通过；CI 已用 `--limit 5` 压规模 |
