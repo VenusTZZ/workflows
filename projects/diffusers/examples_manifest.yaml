@@ -742,11 +742,15 @@ supported:
   #     - --mixed_precision fp16
   #   timeout_minutes: 180
   # SDXL ControlNet（fusing/fill50k，trust_remote_code 由 profile 提供）。
-  # fp16 + 梯度检查点 + 256 分辨率压显存：只训 controlnet（~1.2B），SDXL
-  # 全套冻结，单卡 ~26GB 贴边，OOM 则先降分辨率。
+  # 纯 fp32 + 双卡 ZeRO-3：脚本预计算的文本嵌入经 datasets 序列化后是 fp32，
+  # 混精度权重会在 SDPA 处 dtype 冲突（query=half / key=value=float），
+  # 统一 fp32 根治；显存 = 冻结 unet fp32 复制 ~10.4GB + controlnet 分片
+  # + 优化器 offload，双卡每卡 ~18GB。
   - path: examples/controlnet/train_controlnet_sdxl.py
     profile: diffusers-controlnet-sdxl
-    runner: linux-aarch64-a2-1
+    launcher: accelerate-deepspeed
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
@@ -756,14 +760,14 @@ supported:
       - --resolution 256
       - --train_batch_size 1
       - --gradient_checkpointing
-      - --mixed_precision fp16
       - --max_train_steps 1
       - --checkpointing_steps 9999
     timeout_minutes: 60
 
   # ===== SDXL 全量微调（多卡 ZeRO-3，launcher=accelerate-deepspeed）=====
-  # unet 26 亿参数可训练：权重+梯度跨卡分片，优化器状态 CPU offload
-  # （configs/ds_zero3.json），双卡每卡 ~13GB。
+  # 统一纯 fp32：脚本文本嵌入的 dtype 流转与混精度冲突（SDPA 处 query=half /
+  # key=value=float）；显存 = 权重+梯度跨卡分片 + 优化器 CPU offload
+  # （configs/ds_zero3.json），双卡每卡 ~14GB。
   - path: examples/text_to_image/train_text_to_image_sdxl.py
     profile: diffusers-sdxl-full
     launcher: accelerate-deepspeed
@@ -778,7 +782,6 @@ supported:
       - --resolution 256
       - --train_batch_size 1
       - --gradient_checkpointing
-      - --mixed_precision fp16
       - --max_train_steps 1
       - --checkpointing_steps 9999
     timeout_minutes: 60
@@ -798,7 +801,6 @@ supported:
       - --resolution 256 --center_crop --random_flip
       - --train_batch_size 1
       - --gradient_checkpointing
-      - --mixed_precision fp16
       - --max_train_steps 1
       - --checkpointing_steps 9999
     timeout_minutes: 60
@@ -818,7 +820,6 @@ supported:
       - --resolution 256 --random_flip
       - --train_batch_size 1
       - --gradient_checkpointing
-      - --mixed_precision fp16
       - --max_train_steps 1
       - --checkpointing_steps 9999
       - --conditioning_dropout_prob 0.05
@@ -826,7 +827,7 @@ supported:
     timeout_minutes: 60
 
   # LCM 全量蒸馏（4 卡：teacher SDXL fp32 ~14GB 逐卡复制 + 学生分片，双卡太紧）。
-  # 配方同 LoRA 版（bf16：fp16 反向 aclnn 算子失败），去掉 --lora_rank。
+  # 纯 fp32（同其余全量条目：文本嵌入 dtype 流转与混精度冲突）。
   - path: examples/consistency_distillation/train_lcm_distill_sdxl_wds.py
     profile: diffusers-lcm-zero3
     launcher: accelerate-deepspeed
@@ -837,7 +838,6 @@ supported:
       - --pretrained_teacher_model stabilityai/stable-diffusion-xl-base-1.0
       - --pretrained_vae_model_name_or_path madebyollin/sdxl-vae-fp16-fix
       - --output_dir ${CI_OUTPUT_DIR}
-      - --mixed_precision bf16
       - --resolution 256
       - --max_train_steps 1
       - --max_train_samples 1

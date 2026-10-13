@@ -143,7 +143,12 @@ prepare_deepspeed_configs() {
 compute_environment: LOCAL_MACHINE
 deepspeed_config:
   deepspeed_config_file: $ds_json
-  zero3_init_flag: true
+  # zero3_init_flag off: with it on, accelerate patches from_pretrained with
+  # deepspeed.zero.Init and transformers 5.x CLIP configs load broken under
+  # that path (max_position_embeddings reads 0 -> "Sequence length must be
+  # less than max_position_embeddings"). Without it, models load normally
+  # and DeepSpeedEngine partitions them at init instead.
+  zero3_init_flag: false
 distributed_type: DEEPSPEED
 machine_rank: 0
 main_training_function: main

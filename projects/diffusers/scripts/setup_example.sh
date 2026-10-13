@@ -399,6 +399,7 @@ declare -A PROFILE_PIP=(
   [diffusers-qwen-image]="deepspeed>=0.18.2"
   [diffusers-sdxl-full]="deepspeed>=0.18.2"
   [diffusers-lcm-zero3]="deepspeed>=0.18.2 webdataset braceexpand"
+  [diffusers-controlnet-sdxl]="deepspeed>=0.18.2"
 )
 
 # download_assets tokens (comma-separated) for the profile's models/datasets.
