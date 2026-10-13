@@ -130,30 +130,35 @@ echo "${UPSTREAM_REF}"
 
 克隆上游仓库并 checkout 到最新 release tag，安装并且验证。
 
-```shell #test id="funasr-install-source" load="upstream_ref>>ref"
+```shell #test-setup load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/modelscope/FunASR.git
 cd FunASR
 uv pip install -e .
+```
+
+```{admonition} Note
+:class: note
+`<ref>` 为安装的最新的 release tag。
+```
+
+### 使用 pip 进行安装
+
+```shell
+uv pip install funasr
 python -c "import funasr; print('funasr', funasr.__version__)"
 ```
 
-输出结果类似如下（开头是 FunASR 在 import 时打印的提示行：无 ffmpeg 时回落 `torchaudio` 的 Notice、以及版本号，均无害，被 `...` 吸收）：
+输出结果类似如下（开头是 FunASR 对音频后端的提示，`funasr ...` 为版本号）：
 
-```shell #test-result id="funasr-install-source" 
+```text
+Notice: ffmpeg is not installed. torchaudio is used to load audio
 ...
 funasr ...
 ```
 
 ```{admonition} Note
 :class: note
-`<ref>` 为安装的最新的 release tag，`...` 表示最新的版本号。
-```
-
-### 使用 pip 进行安装（二进制，用户自选）
-
-```shell
-uv pip install funasr
-python -c "import funasr; print('funasr', funasr.__version__)"
+`...` 表示最新的版本号。
 ```
 
 ### CLI 自检：`funasr --version`
@@ -167,13 +172,14 @@ funasr --version
 输出结果类似如下：
 
 ```shell #test-result id="funasr-version" 
+Notice: ffmpeg is not installed. torchaudio is used to load audio
 ...
 funasr ...
 ```
 
 ```{admonition} Note
 :class: note
-其中开头是 FunASR 对音频后端的提示（无 ffmpeg 时自动回落 `torchaudio`），`funasr ...` 是版本号。
+`funasr ...` 是最新的release的版本号。
 ```
 
 ## 语音识别生产级 pipeline（ASR + VAD + 标点 + 说话人）
@@ -201,7 +207,7 @@ print('text:', r['text'])
 print('sentence_info_keys:', sorted(r['sentence_info'][0].keys()))
 ```
 
-输出结果类似如下（转写文本随模型版本可能微调，用 `...` 吸收）：
+输出结果类似如下：
 
 ```shell #test-result id="funasr-asr-pipeline" 
 ...
@@ -210,8 +216,11 @@ text: ...
 sentence_info_keys: ['end', 'spk', 'start', 'text', 'timestamp']
 ```
 
+```{admonition} Note
+:class: note
 - `device: npu:0` 说明 ASR 模型权重确实落在昇腾设备上，不是 CPU 兜底；
 - `sentence_info` 由 VAD 分段 + 标点恢复 + 说话人聚类共同产出，每个分段含 `text` / `start` / `end`（时间戳）与 `spk`（录音内匿名说话人编号）。
+```
 
 ## 多语识别 + 情感 + 事件（SenseVoiceSmall）
 
@@ -245,8 +254,11 @@ raw_text: ...
 clean_text: ...
 ```
 
+```{admonition} Note
+:class: note
 - `raw_text` 一栏能看到 `|zh|`（语种）、`|NEUTRAL|`（情感）、`|Speech|`（事件）三类标签拼接在转写文本两侧——这是 SenseVoice 的多任务输出合同；
 - `clean_text` 是剥离标签后的纯文本（`rich_transcription_postprocess` 也把空格拼回中文）。
+```
 
 ## 流式识别（paraformer-zh-streaming）
 
