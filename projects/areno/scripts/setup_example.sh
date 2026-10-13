@@ -211,6 +211,16 @@ install_vl_image_deps() {
   ensure_media_deps
 }
 
+install_fla_attention() {
+  # Qwen3.5 是 GatedDeltaNet 混合线性注意力模型：qwen3_5/model.py 的推理路径
+  # 无条件 _require_fla_gdn()，没有 fla 直接 ImportError。NPU 的自研 accel.npu.seg_la
+  # 只服务 lightning-attn（accel/ops.py:151），不覆盖 GDN。故按 npu.txt 的 pin 装
+  # flash-linear-attention（仓库里 install_areno 为 dense 底座把它跳过了）。
+  python -m pip install -q \
+    "flash-linear-attention @ git+https://github.com/fla-org/flash-linear-attention.git@e52dbc0ea19d3a40d7ab7f9eed855d2b473994d2"
+  python -c "import fla; print('flash-linear-attention ok')"
+}
+
 install_ave_media_deps() {
   # ave_event_recognition：音视频路径需 av（解容器）/ librosa（重采样）/
   # soundfile（areno 直接 import）以及抽音轨用的 ffmpeg。
@@ -262,7 +272,7 @@ PY
 
 # 逐 profile 的额外工具链（AReno 之外的外部依赖）。
 case "$PROFILE" in
-  tictactoe_image_npu) install_vl_image_deps ;;
+  tictactoe_image_npu) install_vl_image_deps; install_fla_attention ;;
   ave_event_recognition_npu) install_ave_media_deps; stage_ave_fixture ;;
   pi_npu) install_pi_toolchain ;;
 esac
