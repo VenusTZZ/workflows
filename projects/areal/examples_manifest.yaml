@@ -6,7 +6,7 @@ scan:
   # root + include_extensions 两个键；实现模块、上游自测等一律进
   # unsupported 段（带分组注释与理由）。
   # 对账口径：release 树（当前 v2.1.0）114 个 .py/.sh =
-  # supported(11) + unsupported(103)。
+  # supported(10) + unsupported(104)。
 
 # 看护 release 线（workflow target_ref 留空，由引擎按 latest release
 # 解析）。supported 配方用专用镜像 ghcr.io/hwvanici/areal_npu:v1.0.5-a2
@@ -55,61 +55,6 @@ supported:
       - +total_train_steps=1
       - vllm.max_model_len=8576
     timeout_minutes: 60
-  # Hermes 在线 RL（唯一覆盖 online 模式 + agent service + per-session key
-  # 链路的例子）。config.yaml 默认 CUDA 栈，NPU 全部 overlay：rollout sglang
-  # （NPU 无 SGLang，换 config 自带的 vllm 段）、actor megatron（换 fsdp 与
-  # 其余条目同构）、weight_update_mode xccl（NPU 共卡建不起 HCCL 组，换
-  # disk）。**另需 _version=v1 回退**：config 的 _version:v2 会强制非 LoRA
-  # 走 awex 权重同步（rl_trainer.py:380-399，v2 忽略 weight_update_mode），
-  # 而 awex 的推理侧 /awex/report_parallelism 端点上游只有 SGLang 实现
-  # （inference_service/vllm/ 无此路由），vLLM 后端必 404；回 v1 后
-  # weight_update_mode=disk 生效（与 ascend 时代配方同路径）。
-  # train.py 在线模式阻塞等外部会话，run_example.sh 的 hermes 分支编排完整
-  # 生命周期：start_session → 管道驱动 hermes_loop → set_reward → refresh
-  # 结束导出轨迹 → 1 步训练退出；agent 运行时 hermes-agent 由 setup §1c 安装。
-  - path: examples/hermes/train.py
-    profile: areal-hermes-grpo
-    runner: linux-aarch64-a2-1
-    npu_devices: '0'
-    image: ghcr.nju.edu.cn/hwvanici/areal_npu:v1.0.5-a2
-    overlay_args:
-      - --config examples/hermes/config.yaml
-      # Single card / DP=1: online RL feeds ONE session trajectory per step
-      # ("online mode consumes one independently rewarded trajectory per
-      # group"), but a 2-card actor (fsdp:d2p1t1, dp=2) makes
-      # train_controller.balanced_greedy_partition(items=1, K=2) raise
-      # "Number of items (1) must be >= K (2)". One card avoids the split;
-      # rollout colocated on the same card keeps colocate valid.
-      - rollout.backend=vllm:d1p1t1
-      - rollout._version=v1
-      - actor.backend=fsdp:d1p1t1
-      - actor._version=v1
-      - +actor.fsdp.offload_params=true
-      - ++actor.weight_update_mode=disk
-      - actor.path=${AREAL_MODEL_PATH}
-      - rollout.admin_api_key=sk-areal-ci
-      # The proxy gateway's /rl/start_session (and the session lifecycle)
-      # authenticates with AgentConfig.admin_api_key, NOT
-      # rollout.admin_api_key (see rollout_controller.start_proxy_gateway:
-      # create_proxy_gateway_app(admin_api_key=agent_cfg.admin_api_key));
-      # left unset it defaults to "areal-admin-key" and the run_example.sh
-      # start_session/set_reward calls get HTTP 401. Align both to the same
-      # value (+ = add the missing key under rollout.agent).
-      - +rollout.agent.admin_api_key=sk-areal-ci
-      # 超时调参（no-patch）：hermes_loop.py 把 /v1/responses 客户端超时硬编码
-      # 120s（:47），而 agent system prompt ~11.5K token，整个回合压在边界。
-      # 用 engine_max_tokens 封 prompt+completion 总长（client.py:1257）；值必须
-      # > 实际 prompt（~11.5K），留余量取 11800（completion≤~300），
-      # gconfig.max_new_tokens 降到 64 兜底。若报 "exceeds max_total_tokens"
-      # 往上调；若仍 "Read timed out (read timeout=120)" 说明 prefill 成本过高。
-      - +rollout.agent.engine_max_tokens=11800
-      - vllm.gpu_memory_utilization=0.25
-      - vllm.max_model_len=16384
-      - gconfig.max_new_tokens=64
-      - +rollout.setup_timeout=1800
-      - total_train_steps=1
-      - total_train_epochs=1
-    timeout_minutes: 90
   # GSM8K GRPO（上游 NPU 专用配置 gsm8k_grpo_npu.yaml，实测跑通）
   - path: examples/math/gsm8k_rl.py
     profile: areal-math-grpo
@@ -514,11 +459,19 @@ unsupported:
   - examples/swe/prefix_matchers.py
   # SWE 的消息预处理器（剥离 Anthropic 计费头等易变元数据）
   - examples/swe/preprocessors.py
+  # Hermes 在线 RL（2026-10-12 降级，UPSTREAM_TIMEOUT）：train.py 在线模式阻塞
+  # 等外部会话驱动，而驱动脚本 examples/hermes/hermes_loop.py 把
+  # httpx.AsyncClient(timeout=120.0)（:47）写死、无 CLI/env 出口；agent system
+  # prompt ~11.5K token 的整回合压在 120s 边界，慢机上必 "Read timed out
+  # (read timeout=120)"，online RL 等不到轨迹。no-patch 下已试
+  # +rollout.agent.engine_max_tokens=11800 + gconfig.max_new_tokens=64 压生成
+  # 长度仍不稳。回归条件：上游把该超时做成可配置（env/CLI）后应转绿。
+  - examples/hermes/train.py
   # hermes 在线 RL 链路的会话工具：start_session 铸 sk-sess 钥匙（refresh
   # 即结束会话并导出轨迹）、hermes_loop 会话驱动（EOF 可管道化）、
   # set_reward 打分。纯 HTTP 客户端与交互 CLI，无模型、无 NPU 依赖、无独立
-  # pass/fail 语义；由 supported 的 examples/hermes/train.py 看护编排
-  # （run_example.sh hermes 分支）作为工具间接执行。
+  # pass/fail 语义；由 examples/hermes/train.py 编排（run_example.sh hermes
+  # 分支）作为工具间接执行。
   - examples/hermes/hermes_loop.py
   - examples/hermes/set_reward.py
   - examples/hermes/start_session.py
