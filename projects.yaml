@@ -768,19 +768,11 @@ projects:
       quick_start: .github/workflows/areno-quick-start.yml
       examples: .github/workflows/areno-examples.yml
   - name: evalscope
-
     category: 推理加速
-
     support_level: 新兴适配
-
     upstream_repo: modelscope/evalscope
-
     phase: A
-
     runner: linux-aarch64-a2-1
-
     dir: projects/evalscope
-
     workflows:
-
       quick_start: .github/workflows/evalscope-quick-start.yml
