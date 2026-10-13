@@ -272,7 +272,9 @@ if "sd15" in WANT:
 
 # SD 1.5 inpainting (9-channel unet: 4 latent + 4 masked-latent + 1 mask).
 # Only entries that train an inpainting unet need it. Same component-only
-# filter as SD1.5.
+# filter as SD1.5, plus safety_checker: realfill's final
+# StableDiffusionInpaintPipeline.from_pretrained only overrides unet/text_encoder
+# (no safety_checker=None), so that component must be on disk too.
 if "sd15-inpaint" in WANT:
     snapshot(
         "SD15_INPAINT_PATH",
@@ -281,7 +283,7 @@ if "sd15-inpaint" in WANT:
             "*.json", "*.txt", "*.model",
             "unet/*", "vae/*",
             "text_encoder/*", "tokenizer/*",
-            "scheduler/*", "feature_extractor/*",
+            "scheduler/*", "feature_extractor/*", "safety_checker/*",
         ],
         # This repo ships only .bin + *.fp16.safetensors (no full-precision
         # safetensors), so keep .bin and drop only the fp16 duplicates.
