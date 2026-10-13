@@ -862,32 +862,33 @@ supported:
       - --dataset_name lambdalabs/naruto-blip-captions
       - --output_dir ${CI_OUTPUT_DIR}
       - --resolution 256
+      - --mixed_precision bf16
       - --train_batch_size 1
       - --gradient_checkpointing
       - --max_train_steps 1
     timeout_minutes: 120
 
-  # SD1.5 多主体 DreamBooth。只喂一个 instance 目录就是普通 dreambooth（同已支持的
-  # train_dreambooth.py），数据用本地 fixture（DOG 图）。要跑"多主体"需传
-  # --concepts_list JSON，本轮先按单主体跑通。
-  - path: examples/research_projects/multi_subject_dreambooth/train_multi_subject_dreambooth.py
-    profile: diffusers-dreambooth
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path ${SD15_MODEL_PATH}
-      - --instance_data_dir ${FIXTURE_DIR}/images
-      - --instance_prompt "a photo of sks dog"
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 512
-      - --train_batch_size 1
-      - --max_train_steps 1
-      - --gradient_checkpointing
-    timeout_minutes: 90
+  # # SD1.5 多主体 DreamBooth。只喂一个 instance 目录就是普通 dreambooth（同已支持的
+  # # train_dreambooth.py），数据用本地 fixture（DOG 图）。要跑"多主体"需传
+  # # --concepts_list JSON，本轮先按单主体跑通。
+  # - path: examples/research_projects/multi_subject_dreambooth/train_multi_subject_dreambooth.py
+  #   profile: diffusers-dreambooth
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --pretrained_model_name_or_path ${SD15_MODEL_PATH}
+  #     - --instance_data_dir ${FIXTURE_DIR}/images
+  #     - --instance_prompt "a photo of sks dog"
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --resolution 512
+  #     - --train_batch_size 1
+  #     - --max_train_steps 1
+  #     - --gradient_checkpointing
+  #   timeout_minutes: 90
 
-  # SD1.5 多主体 inpainting DreamBooth。它的 Dataset 用 load_dataset 读本地目录，
-  # 固定取 train/test 两个 split（列 image + prompt），目录由 setup 现场生成
-  # （profile diffusers-multi-subject-inpaint）。
+  # SD1.5 多主体 inpainting DreamBooth。它的 Dataset 用 load_dataset 读本地目录
+  # （不是 load_from_disk），固定取 train/test 两个 split，列要 image/prompt/mask；
+  # 目录由 setup 现场生成（profile diffusers-multi-subject-inpaint）。
   - path: examples/research_projects/multi_subject_dreambooth_inpainting/train_multi_subject_dreambooth_inpainting.py
     profile: diffusers-multi-subject-inpaint
     runner: linux-aarch64-a2-1

@@ -635,16 +635,18 @@ PY
 }
 
 setup_diffusers_multi_subject_inpaint() {
-  # multi_subject_dreambooth_inpainting 的 Dataset 用 load_dataset(path)
-  # 读本地目录，且固定取 ["train"] 与 ["test"] 两个 split（列 image + prompt），
-  # 所以这里落一个带双 split 的 DatasetDict（load_dataset 会按 saved 目录读回）。
+  # multi_subject_dreambooth_inpainting 的 Dataset 用 load_dataset(path) 读本地
+  # 目录（不是 load_from_disk），固定取 train/test 两个 split，且列里要有一个
+  # 名字含 "mask" 的列。所以仿 Hub 数据集的落盘布局：平铺的
+  # train-*.parquet / test-*.parquet，load_dataset 按扩展名推断 parquet builder、
+  # 按文件名推断 split，features（Image）存在 schema metadata 里，读回即 PIL。
   install_example_stack
   download_assets sd15
   python3 - <<'PY'
 import os
 from pathlib import Path
 
-from datasets import Dataset, DatasetDict, Features, Image, Value
+from datasets import Dataset, Features, Image, Value
 from PIL import Image as PILImage
 from PIL import ImageDraw
 
@@ -652,19 +654,25 @@ size = 512
 num_samples = 4
 prompts = [f"a photo of sks dog in scene {i}" for i in range(num_samples)]
 images = []
+masks = []
 for i in range(num_samples):
     image = PILImage.new("RGB", (size, size), (60 + i % 180, 120, 160))
     ImageDraw.Draw(image).rectangle([64, 64, size - 64, size - 64], outline=(240, 240, 240), width=6)
     images.append(image)
+    mask = PILImage.new("L", (size, size), 0)
+    ImageDraw.Draw(mask).rectangle([64, 64, size - 64, size - 64], fill=255)
+    masks.append(mask)
 
-features = Features({"image": Image(), "prompt": Value("string")})
-split = Dataset.from_dict({"image": images, "prompt": prompts}, features=features)
+features = Features({"image": Image(), "prompt": Value("string"), "mask": Image()})
+split = Dataset.from_dict({"image": images, "prompt": prompts, "mask": masks}, features=features)
 
 root = Path(os.environ["GITHUB_WORKSPACE"]) / "multi_subject_inpaint_fixture"
-DatasetDict({"train": split, "test": split}).save_to_disk(str(root))
+root.mkdir(parents=True, exist_ok=True)
+split.to_parquet(str(root / "train-00000-of-00001.parquet"))
+split.to_parquet(str(root / "test-00000-of-00001.parquet"))
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"MULTI_SUBJECT_INPAINT_DATASET={root}\n")
-print(f"prepared multi-subject inpainting fixture (train+test) at {root}", flush=True)
+print(f"prepared multi-subject inpainting fixture (train+test parquet) at {root}", flush=True)
 PY
 }
 
