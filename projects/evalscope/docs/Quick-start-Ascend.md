@@ -85,7 +85,7 @@ EvalScope 的 Native 后端基于 transformers，因此评测机需已具备 §2
 安装时注意两点：
 
 - **显式安装 `accelerate`**：EvalScope 的本地模型封装在加载时一定会把 `device_map=get_device()`（NPU 上即 `'npu'`）传给 `from_pretrained`，而 transformers ≥5 只要收到 `device_map` 就要求 `accelerate`，但 `evalscope` 的依赖清单里并没有声明它——漏装会在加载模型时报 `requires accelerate`。
-- **不要给 `numpy` 加上限（尤其别钉 `<2`）**：EvalScope 经 `modelscope[datasets]` 拉入的 `datasets` / `pyarrow` 新版（`pyarrow>=21` 起）在导入时**要求 NumPy ≥ 2**。若把 `numpy` 钉在 1.x，`import datasets` 会直接抛 `ImportError: pyarrow requires NumPy 2.0 or newer`。这里显式钉 `numpy>=2,<3`，与上游一致地留在 NumPy 2。
+- **不要给 `numpy` 加上限（尤其别钉 `<2`）**：EvalScope 经 `modelscope[datasets]` 拉入的新版 `datasets` / `pyarrow` 在导入时**要求 NumPy ≥ 2**。若把 `numpy` 钉在 1.x，`import datasets` 会直接抛 `ImportError: pyarrow requires NumPy 2.0 or newer`（该检查发生在运行期、不在包元数据里，pip 解析时不会报冲突）。这里显式钉 `numpy>=2,<3`，与上游一致地留在 NumPy 2。
 
 ```shell #test id="install-evalscope"
 python -m pip install "evalscope==1.11.0" "numpy>=2.0,<3" accelerate
