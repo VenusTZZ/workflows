@@ -1,0 +1,158 @@
+diff --git a/cmake/local.cmake b/cmake/local.cmake
+index b2dad3a..ec94711 100644
+--- a/cmake/local.cmake
++++ b/cmake/local.cmake
+@@ -775,6 +775,24 @@ if(OLLAMA_HAVE_LLAMA_SERVER)
+                 TARGETS ggml-hip
+                 CMAKE_ARGS ${_rocm_args})
+             list(APPEND _backend_targets ollama-llama-server-${_backend})
++        elseif(_backend STREQUAL "cann")
++            if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
++                message(FATAL_ERROR "The CANN backend requires Linux")
++            endif()
++            set(_cann_args)
++            foreach(_arg IN ITEMS CANN_INSTALL_DIR SOC_TYPE)
++                ollama_append_cache_arg_if_set(_cann_args ${_arg})
++            endforeach()
++            ollama_add_llama_server_build(cann
++                RUNNER_DIR cann
++                TARGETS ggml-cann
++                CMAKE_ARGS
++                    -DBUILD_SHARED_LIBS=ON
++                    -DGGML_BACKEND_DL=ON
++                    -DGGML_CANN=ON
++                    -DOLLAMA_GPU_BACKEND=cann
++                    ${_cann_args})
++            list(APPEND _backend_targets ollama-llama-server-cann)
+         elseif(_backend STREQUAL "vulkan")
+             ollama_add_llama_server_build(vulkan
+                 RUNNER_DIR vulkan
+diff --git a/discover/cann_test.go b/discover/cann_test.go
+new file mode 100644
+index 0000000..41c80ef
+--- /dev/null
++++ b/discover/cann_test.go
+@@ -0,0 +1,42 @@
++package discover
++
++import (
++	"path/filepath"
++	"runtime"
++	"testing"
++
++	"github.com/ollama/ollama/ml"
++)
++
++func TestCANNDeviceClassification(t *testing.T) {
++	for _, name := range []string{"CANN0", "CANN1"} {
++		if got := inferLibrary(name, "Ascend910B4"); got != "CANN" {
++			t.Fatalf("%s classified as %s", name, got)
++		}
++	}
++	if got := inferLibrary("CUDA0", "NVIDIA"); got != "CUDA" {
++		t.Fatalf("CUDA classification changed: %s", got)
++	}
++}
++
++func TestCANNNativeProbePattern(t *testing.T) {
++	if runtime.GOOS != "linux" {
++		t.Skip("CANN requires Linux")
++	}
++	wanted := filepath.Join("cann", "libggml-cann.so")
++	for _, pattern := range nativeProbeBackendPatterns("cann") {
++		if pattern == wanted {
++			return
++		}
++	}
++	t.Fatal("CANN backend is absent from native probe patterns")
++}
++
++func TestCANNVisibleDeviceRemap(t *testing.T) {
++	t.Setenv("ASCEND_RT_VISIBLE_DEVICES", "2,5")
++	device := ml.DeviceInfo{DeviceID: ml.DeviceID{ID: "1", Library: "CANN"}}
++	remapFilterIDForUserVisibleDevices(&device)
++	if device.FilterID != "5" {
++		t.Fatalf("mapped to %q, want 5", device.FilterID)
++	}
++}
+diff --git a/discover/llama_server.go b/discover/llama_server.go
+index ba8ace5..6fb01c9 100644
+--- a/discover/llama_server.go
++++ b/discover/llama_server.go
+@@ -464,6 +464,8 @@ func computeVersion(library string, deviceIndex int, gfxByIndex map[int]string,
+ func inferLibrary(name, description string) string {
+ 	combined := strings.ToLower(name + " " + description)
+ 	switch {
++	case strings.HasPrefix(strings.ToUpper(name), "CANN"):
++		return "CANN"
+ 	case strings.Contains(combined, "cuda"):
+ 		return "CUDA"
+ 	case strings.Contains(combined, "rocm") || strings.Contains(combined, "hip"):
+diff --git a/discover/native_probe_platform.go b/discover/native_probe_platform.go
+index d7a4083..e544dcc 100644
+--- a/discover/native_probe_platform.go
++++ b/discover/native_probe_platform.go
+@@ -85,6 +85,7 @@ func nativeProbeBackendPatterns(dir string) []string {
+ 		filepath.Join(dir, "libggml-cuda.so"),
+ 		filepath.Join(dir, "libggml-hip.so"),
+ 		filepath.Join(dir, "libggml-vulkan.so"),
++		filepath.Join(dir, "libggml-cann.so"),
+ 	}
+ }
+ 
+diff --git a/discover/runner.go b/discover/runner.go
+index 2c533c3..58a5a8c 100644
+--- a/discover/runner.go
++++ b/discover/runner.go
+@@ -5,6 +5,7 @@ package discover
+ import (
+ 	"context"
+ 	"log/slog"
++	"os"
+ 	"os/exec"
+ 	"path/filepath"
+ 	"runtime"
+@@ -606,6 +607,8 @@ func remapFilterIDForUserVisibleDevices(device *ml.DeviceInfo) {
+ 
+ func visibleDeviceFilterTokens(goos, library string) []string {
+ 	switch library {
++	case "CANN":
++		return splitVisibleDeviceList(os.Getenv("ASCEND_RT_VISIBLE_DEVICES"))
+ 	case "CUDA":
+ 		return splitVisibleDeviceList(envconfig.CudaVisibleDevices())
+ 	case "ROCm":
+diff --git a/ml/cann_test.go b/ml/cann_test.go
+new file mode 100644
+index 0000000..bd4e81c
+--- /dev/null
++++ b/ml/cann_test.go
+@@ -0,0 +1,16 @@
++package ml
++
++import "testing"
++
++func TestCANNSelectedDeviceEnvironment(t *testing.T) {
++	env := map[string]string{}
++	for _, device := range []DeviceInfo{
++		{DeviceID: DeviceID{ID: "0", Library: "CANN"}, FilterID: "2"},
++		{DeviceID: DeviceID{ID: "1", Library: "CANN"}, FilterID: "5"},
++	} {
++		device.updateVisibleDevicesEnv(env, false)
++	}
++	if got := env["ASCEND_RT_VISIBLE_DEVICES"]; got != "2,5" {
++		t.Fatalf("selected devices %q, want 2,5", got)
++	}
++}
+diff --git a/ml/device.go b/ml/device.go
+index 9a5792f..8f21fc5 100644
+--- a/ml/device.go
++++ b/ml/device.go
+@@ -393,6 +393,8 @@ func (d DeviceInfo) updateVisibleDevicesEnv(env map[string]string, mustFilter bo
+ 	var envVar string
+ 	var rocmOrdinalEnv string
+ 	switch d.Library {
++	case "CANN":
++		envVar = "ASCEND_RT_VISIBLE_DEVICES"
+ 	case "ROCm":
+ 		// ROCm must be filtered as it can crash the runner on unsupported devices
+ 		envVar = "ROCR_VISIBLE_DEVICES"
