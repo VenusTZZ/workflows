@@ -46,7 +46,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 | torch | 2.9.0+cpu |
 | torch_npu | 2.9.0.post2 |
 | torchaudio | 2.9.0 |
-| funasr | 本仓库源码（`uv pip install -e .`，对应 release tag 见下） |
+| funasr | 最新 release 版本 |
 | 模型 | [paraformer-zh](https://github.com/modelscope/FunASR) / [SenseVoiceSmall](https://github.com/FunAudioLLM/SenseVoice) / [emotion2vec_plus_large](https://github.com/modelscope/FunASR) 等，默认从 ModelScope 下载 |
 
 ### 检查前置是否满足
@@ -57,7 +57,7 @@ swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
 npu-smi info
 ```
 
-输出如下类似结果（单卡）：
+输出如下类似结果：
 
 ```
 +------------------------------------------------------------------------------------------------+
@@ -83,7 +83,15 @@ python --version
 Python 3.12...
 ```
 
-检查 torch / torch_npu / torchaudio 是否装好且 NPU 设备可用，下面用 **python** 跑：
+安装 `torch` / `torch_npu` / `torchaudio`：
+
+```shell #test-setup
+uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torch==2.9.0
+uv pip install -f https://mirrors.aliyun.com/pytorch-wheels/cpu torchaudio==2.9.0
+uv pip install --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi torch_npu==2.9.0.post2
+```
+
+检查 torch / torch_npu / torchaudio 是否装好且 NPU 设备可用（下面代码用 python 运行）：
 
 ```python #test id="check-torch"
 import torch, torch_npu, torchaudio
@@ -97,23 +105,19 @@ print('count:', torch.npu.device_count())
 输出结果如下：
 
 ```shell #test-result id="check-torch" 
-torch= ...
-torch_npu= ...
-torchaudio= ...
+torch= 2.9.0+cpu
+torch_npu= 2.9.0.post2
+torchaudio= 2.9.0
 is_available: True
 count: 1
 ```
 
-> 如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
+```{admonition} Note
+:class: note
+如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵。
+```
 
 ## 安装 FunASR
-
-### 使用 pip 进行安装（二进制，用户自选）
-
-```shell
-uv pip install funasr
-python -c "import funasr; print('funasr', funasr.__version__)"
-```
 
 ### 从源码安装
 
@@ -124,27 +128,38 @@ echo "${UPSTREAM_REF}"
 ```
 -->
 
-克隆上游仓库并 checkout 到最新 release tag，安装并且验证。FunASR 的 `setup.py` 不声明 `torch` / `torchaudio`，所以这里不会动前面装好的 torch 栈，只补 `modelscope` / `transformers` 等运行时依赖。
+克隆上游仓库并 checkout 到最新 release tag，安装并且验证。
 
-```shell #test id="funasr-install-source" load="upstream_ref>>ref"
+```shell #test-setup load="upstream_ref>>ref"
 git clone --depth 1 --branch <ref> https://github.com/modelscope/FunASR.git
 cd FunASR
 uv pip install -e .
+```
+
+```{admonition} Note
+:class: note
+`<ref>` 为安装的最新的 release tag。
+```
+
+### 使用 pip 进行安装
+
+```shell
+uv pip install funasr
 python -c "import funasr; print('funasr', funasr.__version__)"
 ```
 
-\<ref> 为安装的最新的 release tag
+输出结果类似如下（开头是 FunASR 对音频后端的提示，`funasr ...` 为版本号）：
 
-输出结果类似如下（开头是 FunASR 在 import 时打印的提示行：无 ffmpeg 时回落 `torchaudio` 的 Notice、以及版本号，均无害，被 `...` 吸收）：
-
-```shell #test-result id="funasr-install-source" 
+```text
+Notice: ffmpeg is not installed. torchaudio is used to load audio
 ...
 funasr ...
 ```
 
-- ... 表示最新的版本号
-
-> 如果机器在国内、无稳定外网，模型下载默认走 ModelScope（`hub="ms"`），比 Hugging Face 更稳；python 包走 [huawei pypi 镜像](https://repo.huaweicloud.com/ascend/repos/pypi) 配 `pip install -i ...`。
+```{admonition} Note
+:class: note
+`...` 表示最新的版本号。
+```
 
 ### CLI 自检：`funasr --version`
 
@@ -157,17 +172,19 @@ funasr --version
 输出结果类似如下：
 
 ```shell #test-result id="funasr-version" 
+Notice: ffmpeg is not installed. torchaudio is used to load audio
 ...
 funasr ...
 ```
 
-其中开头是 FunASR 对音频后端的提示（无 ffmpeg 时自动回落 `torchaudio`），`funasr ...` 是版本号。
+```{admonition} Note
+:class: note
+`funasr ...` 是最新的release的版本号。
+```
 
 ## 语音识别生产级 pipeline（ASR + VAD + 标点 + 说话人）
 
-这是 FunASR 最典型的生产装配：一个 `AutoModel` 同时挂上 `vad_model`（语音活性检测）/ `punc_model`（标点恢复）/ `spk_model`（说话人嵌入），一次 `generate` 产出转写文本、字级时间戳和匿名说话人编号。模型默认从 ModelScope 拉取，`device="npu:0"` 让 ASR / VAD / 标点 / 说话人四个子模型都放到 NPU 上跑。
-
-下面用 **python** 跑（首次运行会下载约 4 个模型，之后命中缓存）：
+这是 FunASR 最典型的生产装配：一个 `AutoModel` 同时挂上 `vad_model`（语音活性检测）/ `punc_model`（标点恢复）/ `spk_model`（说话人嵌入），一次 `generate` 产出转写文本、字级时间戳和匿名说话人编号。模型默认从 ModelScope 拉取，`device="npu:0"` 让 ASR / VAD / 标点 / 说话人四个子模型都放到 NPU 上跑（下面代码用 python 运行）：
 
 ```python #test id="funasr-asr-pipeline"
 import torch, torch_npu
@@ -190,7 +207,7 @@ print('text:', r['text'])
 print('sentence_info_keys:', sorted(r['sentence_info'][0].keys()))
 ```
 
-输出结果类似如下（转写文本随模型版本可能微调，用 `...` 吸收）：
+输出结果类似如下：
 
 ```shell #test-result id="funasr-asr-pipeline" 
 ...
@@ -199,12 +216,15 @@ text: ...
 sentence_info_keys: ['end', 'spk', 'start', 'text', 'timestamp']
 ```
 
+```{admonition} Note
+:class: note
 - `device: npu:0` 说明 ASR 模型权重确实落在昇腾设备上，不是 CPU 兜底；
 - `sentence_info` 由 VAD 分段 + 标点恢复 + 说话人聚类共同产出，每个分段含 `text` / `start` / `end`（时间戳）与 `spk`（录音内匿名说话人编号）。
+```
 
 ## 多语识别 + 情感 + 事件（SenseVoiceSmall）
 
-`SenseVoiceSmall` 一个模型同时输出**语种标签**（`<|zh|>` 等）、**情感标签**（`<|NEUTRAL|>` / `<|HAPPY|>` 等）与**事件标签**（`<|Speech|>` / `<|Applause|>` 等），原始 `text` 带上这些标签，用 `rich_transcription_postprocess` 可剥离得到干净文本。下面用 **python** 跑：
+`SenseVoiceSmall` 一个模型同时输出**语种标签**（`<|zh|>` 等）、**情感标签**（`<|NEUTRAL|>` / `<|HAPPY|>` 等）与**事件标签**（`<|Speech|>` / `<|Applause|>` 等），原始 `text` 带上这些标签，用 `rich_transcription_postprocess` 可剥离得到干净文本（下面代码用 python 运行）：
 
 ```python #test id="funasr-sensevoice"
 import torch, torch_npu
@@ -234,8 +254,11 @@ raw_text: ...
 clean_text: ...
 ```
 
+```{admonition} Note
+:class: note
 - `raw_text` 一栏能看到 `|zh|`（语种）、`|NEUTRAL|`（情感）、`|Speech|`（事件）三类标签拼接在转写文本两侧——这是 SenseVoice 的多任务输出合同；
 - `clean_text` 是剥离标签后的纯文本（`rich_transcription_postprocess` 也把空格拼回中文）。
+```
 
 ## 流式识别（paraformer-zh-streaming）
 
@@ -245,7 +268,7 @@ clean_text: ...
 curl -sL -o /tmp/funasr_sample.wav https://isv-data.oss-cn-hangzhou.aliyuncs.com/ics/MaaS/ASR/test_audio/asr_example_zh.wav
 ```
 
-下面用 **python** 跑，把整段音频切成 600ms 一块依次喂给流式模型：
+把整段音频切成 600ms 一块依次喂给流式模型（下面代码用 python 运行）：
 
 ```python #test id="funasr-streaming"
 import torch, torch_npu
@@ -287,7 +310,7 @@ streamed_text: ...
 
 ## 情感识别（emotion2vec_plus_large）
 
-独立的情感识别模型，`granularity="utterance"` 返回整句的情感标签分布。下面用 **python** 跑：
+独立的情感识别模型，`granularity="utterance"` 返回整句的情感标签分布（下面代码用 python 运行）：
 
 ```python #test id="funasr-emotion"
 import torch, torch_npu
@@ -337,13 +360,3 @@ has_text: True
 ```
 
 其他常用 CLI 形态：`funasr audio.wav -f srt -o ./subs` 生成字幕、`funasr audio.wav --spk --timestamps` 带说话人与时间戳、`funasr audio.wav --model paraformer --language zh` 指定模型与语言。
-
-## 故障排查
-
-| 现象 | 可能原因 | 建议 |
-| --- | --- | --- |
-| `Notice: ffmpeg is not installed` | 容器未装 ffmpeg，FunASR 自动回落 `torchaudio` | 无害；如需 ffmpeg 后端再 `apt install ffmpeg` |
-| 模型权重落在 `cpu` 而非 `npu:0` | `torch_npu` 未 import，或 `device` 写错 | 确保 block 里先 `import torch_npu`，`device="npu:0"` |
-| 模型下载慢 / 失败 | ModelScope 网络波动 | 重跑；模型缓存在 `~/.cache/modelscope`，二次运行命中 |
-| `count: 0` / `torch.npu.is_available() == False` | NPU 未挂载或驱动问题 | 检查 `/dev/davinci0`；回到 `npu-smi info` 一节 |
-| 流式文本为空 | 音频采样率非 16k 或块配置不对 | 用 16k 单声道音频，核对 `chunk_size` / `chunk_stride` |
