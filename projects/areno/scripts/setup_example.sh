@@ -213,12 +213,61 @@ print("triton-ascend + fla ok: triton", triton.__version__)
 PY
 }
 
+install_ave_media_deps() {
+  # ave_event_recognition：音视频路径需 av（解容器）/ librosa（重采样）/
+  # soundfile（areno 直接 import）以及抽音轨用的 ffmpeg；图像走 ensure_media_deps。
+  ensure_media_deps "av>=12" "librosa>=0.11" "soundfile>=0.13"
+  command -v ffmpeg >/dev/null 2>&1 || {
+    apt-get update -qq >/dev/null
+    apt-get install -y -qq ffmpeg >/dev/null
+  }
+  command -v ffmpeg
+}
+
+stage_ave_fixture() {
+  # 上游示例的数据是整包 AVE（数十 GB 视频），CI 用一段 10s 合成音视频 +
+  # 单行 manifest 代替，让 loader/agent/reward/train 全链路照常跑。judge 由
+  # run_example.sh 的存根服务提供（引擎不校验奖励数值、只认退出码）。
+  local dir="$GITHUB_WORKSPACE/ave-fixture"
+  local manifest="$dir/manifest.jsonl"
+  if [[ ! -f "$manifest" ]]; then
+    mkdir -p "$dir"
+    ffmpeg -nostdin -loglevel error -y \
+      -f lavfi -i "testsrc=size=224x224:rate=8:duration=10" \
+      -f lavfi -i "sine=frequency=440:sample_rate=16000:duration=10" \
+      -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest "$dir/clip.mp4"
+    ffmpeg -nostdin -loglevel error -y -i "$dir/clip.mp4" -vn -ac 1 -ar 16000 "$dir/clip.wav"
+    python - "$dir" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+row = {
+    "id": "ci-ave-00000",
+    "dataset_root": str(root),
+    "split": "train",
+    "video_id": "ci-ave",
+    "video_path": "clip.mp4",
+    "audio_path": "clip.wav",
+    "event_classes": ["Speech"],
+    "qualities": ["good"],
+    "start_seconds": 0.0,
+    "end_seconds": 10.0,
+}
+(root / "manifest.jsonl").write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+print(f"wrote ave fixture manifest {root / 'manifest.jsonl'}")
+PY
+  fi
+  echo "AVE_DATASET=$manifest" >> "$GITHUB_ENV"
+}
+
 # 已知 profile。当前各 profile 共用同一套准备（下面的 AReno NPU 源码构建）；
 # 需要额外依赖的 profile 在这里按 PROFILE 分支。pi 已不支持（QLoRA 为 CUDA-only），
 # 保留 pi_npu 与 install_pi_toolchain 以备将来试非 QLoRA 变体。
-SUPPORTED_PROFILES="bash_game_npu codebreaker_npu coding_npu duelgrid_npu shopping_npu terminal_hacking_npu tictactoe_npu tictactoe_no_tool_npu math_npu alpaca_npu tictactoe_image_npu pi_npu"
+SUPPORTED_PROFILES="bash_game_npu codebreaker_npu coding_npu duelgrid_npu shopping_npu terminal_hacking_npu tictactoe_npu tictactoe_no_tool_npu math_npu alpaca_npu tictactoe_image_npu ave_event_recognition_npu pi_npu"
 case "$PROFILE" in
-  bash_game_npu | codebreaker_npu | coding_npu | duelgrid_npu | shopping_npu | terminal_hacking_npu | tictactoe_npu | tictactoe_no_tool_npu | math_npu | alpaca_npu | tictactoe_image_npu | pi_npu) ;;
+  bash_game_npu | codebreaker_npu | coding_npu | duelgrid_npu | shopping_npu | terminal_hacking_npu | tictactoe_npu | tictactoe_no_tool_npu | math_npu | alpaca_npu | tictactoe_image_npu | ave_event_recognition_npu | pi_npu) ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -230,6 +279,13 @@ python -m pip install -U pip 'setuptools>=69' wheel
 ensure_build_tools
 ensure_torch_stack
 install_areno
+# areno 看护统一钉 transformers==5.15.*：requirements/npu.txt 只写 >=5.15,<6，
+# pip 会取区间内最新（曾装到 5.19.0），而 Gemma4 视觉塔在 5.19 的
+# create_bidirectional_mask 抛 IndexError（mask 维数不符）。5.15 是 areno 声明
+# 的 gemma4 多模态基线（gemma4/model.py:707,827 "requires transformers>=5.15"）；
+# 统一钉住也让各 leg 环境确定、不随上游漂移（tokenizers 由 pip 配套降级）。
+python -m pip install -q "transformers==5.15.*"
+python -c "import transformers; print('transformers pinned:', transformers.__version__)"
 # 供 coding 用例的 run_command 跑测试（其任务在 rollout 时执行 `python -m pytest`）。
 python -m pip install -q pytest
 # agentic 用例的 run_agent.py 经 OpenAI 兼容客户端打本地 rollout 代理；AReno 的
@@ -240,5 +296,6 @@ python -m pip install -q openai httpx
 case "$PROFILE" in
   bash_game_npu | terminal_hacking_npu) install_triton_fla_stack ;;
   tictactoe_image_npu) ensure_media_deps; install_triton_fla_stack ;;
+  ave_event_recognition_npu) install_ave_media_deps; stage_ave_fixture ;;
   pi_npu) install_pi_toolchain ;;
 esac

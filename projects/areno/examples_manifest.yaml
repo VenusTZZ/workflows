@@ -246,171 +246,125 @@ supported:
   #     - --max-steps 1
   #     - --max-prompt-tokens 128
   #     - --max-new-tokens 64
-  # tictactoe_image：Qwen3.5-VL 图像井字棋 RLVR（GSPO）。run_agent.py 把板图以
-  # OpenAI image_url data URL 发进本地 rollout 代理，做一次 choose_square 工具
-  # 调用；reward.py 用同一 minimax 最优步校验打分。底座 Qwen3.5-0.8B 即 VL 预设
-  # （areno/dashboard/flow/model_presets.py:11），其 GatedDeltaNet 训练/推理都走
-  # fla（qwen3_5/model.py:420 无条件 _require_fla_gdn）——依赖由 setup 的
-  # install_triton_fla_stack 提供（triton 昇腾版 triton-ascend + fla，此前"环境
-  # 无 triton"的阻塞已解）；图像路径另需 torchvision（ensure_media_deps 强制
-  # 重装与 torch 配对的真包，镜像自带残缺 stub）。数据走仓内 fixture
-  # （fixtures/ci_tictactoe_image_8.jsonl，上游 dataset_generator.py seed 2026
-  # 生成的图文行）；组件、数据生成器与 web_ui 见 unsupported。
-  - path: examples/vl/tictactoe_image/run_agent.py
-    profile: tictactoe_image_npu
+  # # tictactoe_image：Qwen3.5-VL 图像井字棋 RLVR（GSPO）。run_agent.py 把板图以
+  # # OpenAI image_url data URL 发进本地 rollout 代理，做一次 choose_square 工具
+  # # 调用；reward.py 用同一 minimax 最优步校验打分。底座 Qwen3.5-0.8B 即 VL 预设
+  # # （areno/dashboard/flow/model_presets.py:11），其 GatedDeltaNet 训练/推理都走
+  # # fla（qwen3_5/model.py:420 无条件 _require_fla_gdn）——依赖由 setup 的
+  # # install_triton_fla_stack 提供（triton 昇腾版 triton-ascend + fla，此前"环境
+  # # 无 triton"的阻塞已解）；图像路径另需 torchvision（ensure_media_deps 强制
+  # # 重装与 torch 配对的真包，镜像自带残缺 stub）。数据走仓内 fixture
+  # # （fixtures/ci_tictactoe_image_8.jsonl，上游 dataset_generator.py seed 2026
+  # # 生成的图文行）；组件、数据生成器与 web_ui 见 unsupported。
+  # - path: examples/vl/tictactoe_image/run_agent.py
+  #   profile: tictactoe_image_npu
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+  #   timeout_minutes: 120
+  #   overlay_args:
+  #     - --ckpt Qwen/Qwen3.5-0.8B
+  #     - --dataset-path ${FIXTURE_DIR}/ci_tictactoe_image_8.jsonl
+  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/vl/tictactoe_image/dataset_loader.py
+  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/vl/tictactoe_image/reward.py
+  #     - --agent-fn ${EXAMPLES_ROOT}/examples/vl/tictactoe_image/run_agent.py
+  #     - --algo gspo
+  #     - --batch-size 2
+  #     - --n-samples 4
+  #     - --mini-bs 1
+  #     - --max-steps 1
+  #     - --max-prompt-tokens 8192
+  #     - --max-new-tokens 64
+  #     - --drop-rollout-state
+  # ave_event_recognition：Gemma4 音视频事件识别 agentic GRPO（RLVR）。
+  # run_agent.py 把 10s 视频 + 同步音频以 OpenAI video_url / audio_url 发进本地
+  # rollout 代理，做一次 report_events 工具调用；reward.py 调外部 OpenAI 兼容
+  # judge 语义比对事件集合（CI 由 run_example.sh 的标准库存根 judge 提供，引擎
+  # 只认退出码、不校验奖励数值）。底座 google/gemma-4-E2B-it（权重 10.25GB，
+  # 单卡可放）。上游数据是整包 AVE，CI 用 setup 生成的 10s 合成音视频 + 单行
+  # manifest（${AVE_DATASET}）代替。此前 Gemma4 视觉塔在 transformers 5.19 的
+  # create_bidirectional_mask 抛 IndexError（mask 维数不符），看护已统一钉
+  # transformers==5.15.*（areno 声明的 gemma4 多模态基线）。组件、数据生成器与
+  # common 见 unsupported。
+  - path: examples/multimodal/ave_event_recognition/run_agent.py
+    profile: ave_event_recognition_npu
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
-    timeout_minutes: 120
+    timeout_minutes: 240
     overlay_args:
-      - --ckpt Qwen/Qwen3.5-0.8B
-      - --dataset-path ${FIXTURE_DIR}/ci_tictactoe_image_8.jsonl
-      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/vl/tictactoe_image/dataset_loader.py
-      - --reward-fn-path ${EXAMPLES_ROOT}/examples/vl/tictactoe_image/reward.py
-      - --agent-fn ${EXAMPLES_ROOT}/examples/vl/tictactoe_image/run_agent.py
-      - --algo gspo
-      - --batch-size 2
-      - --n-samples 4
+      - --ckpt google/gemma-4-E2B-it
+      - --dataset-path ${AVE_DATASET}
+      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/multimodal/ave_event_recognition/dataset_loader.py
+      - --reward-fn-path ${EXAMPLES_ROOT}/examples/multimodal/ave_event_recognition/reward.py
+      - --agent-fn ${EXAMPLES_ROOT}/examples/multimodal/ave_event_recognition/run_agent.py
+      - --algo grpo
+      - --batch-size 1
+      - --n-samples 2
       - --mini-bs 1
       - --max-steps 1
-      - --max-prompt-tokens 8192
+      - --max-running-prompts 1
       - --max-new-tokens 64
+      - --max-prompt-tokens 8192
+      - --max-context-len 8192
       - --drop-rollout-state
 unsupported:
-  # ===== pi：不支持——用 pi coding agent（pi.dev）做 SWE-smith 仓库修复的
-  # agentic RLVR（GRPO）。示例默认配方用 --qlora（AReno 自研 NF4），而 QLoRA 在
+  # ===== pi：不支持——示例默认配方用 --qlora（AReno 自研 NF4），而 QLoRA 在
   # areno 源码里硬编码 CUDA-only（`QLoRA requires CUDA`：engine/config.py:91,308 /
-  # engine/worker.py:79），昇腾不支持；另依赖外部 pi CLI + Node.js + fd/ripgrep +
-  # SWE-smith 数据集。 =====
+  # engine/worker.py:79），昇腾不支持
   - examples/agentic/pi/run_agent.py
-  # ===== ave_event_recognition：不支持——Gemma4 视觉塔在 transformers 的
-  # create_bidirectional_mask 抛 IndexError: too many indices for tensor of
-  # dimension 1（mask 维数不符，上游 bug，transformers 5.19）；另依赖外部 OpenAI
-  # 兼容 judge（JUDGE_*）+ HF AVE 数据集 + ffmpeg 抽音频，CI 无法自包含。 =====
-  # 数据生成：AVE 下载 + 16 kHz 单声道 WAV 抽取 + 事件区间 manifest。
-  - examples/multimodal/ave_event_recognition/dataset_generator.py
   # =====================================================================
   # ===== 工具类套件
   # =====================================================================
-  # ===== bash_game 组件与非训练入口 =====
-  # 数据生成器：(n,m) 指纹去重 + 自校验的确定性 JSONL。
   - examples/agentic/bash_game/dataset_generator.py
-  # 训练加载器：附 prompt，oracle 藏于 record。
   - examples/agentic/bash_game/dataset_loader.py
-  # 确定性奖励（exact / 合法近似 / 非法）。
   - examples/agentic/bash_game/reward.py
-  # held-out 评测：需先 areno serve。
   - examples/agentic/bash_game/eval.py
-  # 浏览器对玩 WebUI。
   - examples/agentic/bash_game/web_ui.py
-  # ===== codebreaker 组件与非训练入口 =====
-  # 数据生成器：隐藏四位数谜题 JSONL。
   - examples/agentic/codebreaker/dataset_generator.py
-  # 训练加载器（附 prompt，隐藏 secret）。
   - examples/agentic/codebreaker/dataset_loader.py
-  # 解题效率奖励（valid/solved/部分分与非法路径惩罚）。
   - examples/agentic/codebreaker/reward.py
-  # 终端对玩 TUI（可指向 OpenAI 兼容端点）。
   - examples/agentic/codebreaker/tui.py
-  # ===== coding 组件与非训练入口 =====
-  # 多轮 agent 循环兼容 shim（re-export areno.agent.agent_loop）。
   - examples/agentic/coding/agent_loop.py
-  # 交互式编码 CLI。
   - examples/agentic/coding/code_cli.py
-  # 九工具兼容 shim（re-export areno.agent.tools）。
   - examples/agentic/coding/coding_tools.py
-  # dataset.jsonl（100 条本地任务）加载器。
   - examples/agentic/coding/dataset_loader.py
-  # 奖励：patch + 必要测试全过 + submit solved 才满分，含部分分/负分。
   - examples/agentic/coding/reward.py
-  # ===== duelgrid 组件 =====
-  # 训练加载器（把生成的状态转成 prompt record）。
   - examples/agentic/duelgrid/dataset_loader.py
-  # 规则引擎奖励（含未耗能量惩罚）。
   - examples/agentic/duelgrid/reward.py
-  # 浏览器对玩 UI。
   - examples/agentic/duelgrid/web_ui.py
-  # ===== shopping 组件 =====
-  # 数据生成器：购物 kit 任务 JSONL。
   - examples/agentic/shopping/dataset_generator.py
-  # 训练加载器（补齐默认约束 + 附 prompt）。
   - examples/agentic/shopping/dataset_loader.py
-  # 奖励：最终 bundle 约束 + 工具序列正确性。
   - examples/agentic/shopping/reward.py
-  # ===== terminal_hacking 组件 =====
-  # 可观测 prompt 构造（隐藏密码不出现在 prompt）。
   - examples/agentic/terminal_hacking/dataset_loader.py
-  # 非对称稠密候选集奖励（多猜重罚、漏猜轻罚）。
   - examples/agentic/terminal_hacking/reward.py
-  # CRT 风格对玩 WebUI。
   - examples/agentic/terminal_hacking/web_ui.py
-  # ===== tictactoe 组件 =====
-  # XML no-tool 变体加载器（复用 tool 变体 loader 的格式化）。
   - examples/agentic/tictactoe/dataset_loader_no_tool.py
-  # tool-call 变体奖励。
   - examples/agentic/tictactoe/reward.py
-  # no-tool 变体奖励（<move> 标签解析）。
   - examples/agentic/tictactoe/reward_no_tool.py
-  # 浏览器对玩 UI（LLM / minimax 双模式）。
   - examples/agentic/tictactoe/web_ui.py
-  # ===== math 组件 =====
-  # math_verify 符号验证奖励（\\boxed{} 答案比对）。
   - examples/math/math_verify_reward.py
-  # 视频 + 同步音频的多模态 prompt 构造。
+  - examples/multimodal/ave_event_recognition/dataset_generator.py
   - examples/multimodal/ave_event_recognition/dataset_loader.py
-  # 外部 judge 模型语义比对奖励（score/10 归一化，失败即报错）。
   - examples/multimodal/ave_event_recognition/reward.py
-  # report_events 工具调用 rollout。
-  - examples/multimodal/ave_event_recognition/run_agent.py
-  # ===== tictactoe_image 组件
   - examples/vl/tictactoe_image/dataset_loader.py
-  # RL 完成评分（与 agentic 井字棋同一最优步逻辑）。
   - examples/vl/tictactoe_image/reward.py
-  # 浏览器对玩 UI。
   - examples/vl/tictactoe_image/web_ui.py
-  # 数据集生成：ModelScope SWE-smith -> JSONL。
   - examples/agentic/pi/generate_dataset.py
-  # 数据加载：SWE-smith 行 -> 训练 record。
   - examples/agentic/pi/dataset_loader.py
-  # 二级代理：适配 pi 的流式请求到 AReno 端点（含 token/logprob/routing 回放）。
   - examples/agentic/pi/pi_proxy.py
-  # 验证器奖励（调用 swesmith_verify）。
   - examples/agentic/pi/reward.py
-  # SWE-smith 测试校验助手。
   - examples/agentic/pi/swesmith_verify.py
-  # CPU 单测（pytest）。
   - examples/agentic/pi/test_generate_dataset_cpu.py
   - examples/agentic/pi/test_pi_cpu.py
-  # ===== 工具依赖段：被其他 example 文件 import 的共享模块（不属于独立
-  # 入口），每条注明 import 方。 =====
-  # 巴什博弈规则 oracle + prompt 渲染 + submit_move 解析；被 dataset_generator /
-  # dataset_loader / reward / run_agent import。
   - examples/agentic/bash_game/game.py
-  # Bulls and Cows 规则与 prompt 渲染；被 dataset_generator / dataset_loader /
-  # reward / run_agent / tui import。
   - examples/agentic/codebreaker/game.py
-  # 棋盘状态生成 + normalize/schema 共享；被 dataset_loader / reward / web_ui import。
   - examples/agentic/duelgrid/dataset_generator.py
-  # 回合制规则引擎（能量/拾取/陷阱）；被 dataset_generator / dataset_loader /
-  # reward / web_ui import。
   - examples/agentic/duelgrid/game.py
-  # 目录/特征/预算约束规则；被 dataset_loader / reward / run_agent import。
   - examples/agentic/shopping/game.py
-  # 谜题生成 + 共享 prompt/规则助手；被 web_ui import。
   - examples/agentic/terminal_hacking/dataset_generator.py
-  # 候选词过滤 prompt + 规则/replay；被 dataset_loader / reward / run_agent /
-  # web_ui import。
   - examples/agentic/terminal_hacking/game.py
-  # 棋局 JSONL 生成 + 共享 board/schema；被 dataset_loader import。
   - examples/agentic/tictactoe/dataset_generator.py
-  # tool-call 变体加载器；被 dataset_loader_no_tool import 复用其格式化。
   - examples/agentic/tictactoe/dataset_loader.py
-  # 棋面校验 + minimax 最优步；被 dataset_generator / dataset_loader / reward /
-  # reward_no_tool / web_ui import。
   - examples/agentic/tictactoe/game.py
-  # AVE 标注解析与 manifest 共享助手；被 dataset_generator / dataset_loader import。
   - examples/multimodal/ave_event_recognition/common.py
-  # Pillow 合成板图 + 共享 schema；被 dataset_loader / web_ui import。
   - examples/vl/tictactoe_image/dataset_generator.py
-  # 棋面校验 + BFS 最优步；被 dataset_generator / dataset_loader / reward /
-  # web_ui import。
   - examples/vl/tictactoe_image/game.py
