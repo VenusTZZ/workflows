@@ -145,8 +145,10 @@ install_pi_toolchain() {
   local results="$GITHUB_WORKSPACE/pi-results"
   mkdir -p "$results"
   echo "generating SWE-smith tasks from ModelScope -> $data"
+  # --limit 1：冒烟只取 1 个 sqlparse 修复任务（默认 4 任务，README 配方是
+  # 4 x 4 = 16 个 attempt、每个 32 次调用 / 1800s 预算，CI 压不动）。
   python "$TARGET_ROOT/examples/agentic/pi/generate_dataset.py" \
-    --python "$task_py" --output "$data"
+    --python "$task_py" --output "$data" --limit 1
 
   {
     echo "ARENO_PI_EXECUTABLE=$pi_bin"
@@ -279,8 +281,9 @@ PY
 }
 
 # 已知 profile。当前各 profile 共用同一套准备（下面的 AReno NPU 源码构建）；
-# 需要额外依赖的 profile 在这里按 PROFILE 分支。pi 已不支持（QLoRA 为 CUDA-only），
-# 保留 pi_npu 与 install_pi_toolchain 以备将来试非 QLoRA 变体。
+# 需要额外依赖的 profile 在这里按 PROFILE 分支。pi 走非 QLoRA 变体：QLoRA 在
+# areno 源码里 CUDA-only，但与 pi 机制正交，去掉即全参训练 Ling（4 卡 TP +
+# adam-4bit + triton-ascend/fla）。
 SUPPORTED_PROFILES="bash_game_npu codebreaker_npu coding_npu duelgrid_npu shopping_npu terminal_hacking_npu tictactoe_npu tictactoe_no_tool_npu math_npu alpaca_npu tictactoe_image_npu ave_event_recognition_npu pi_npu"
 case "$PROFILE" in
   bash_game_npu | codebreaker_npu | coding_npu | duelgrid_npu | shopping_npu | terminal_hacking_npu | tictactoe_npu | tictactoe_no_tool_npu | math_npu | alpaca_npu | tictactoe_image_npu | ave_event_recognition_npu | pi_npu) ;;
@@ -313,5 +316,5 @@ case "$PROFILE" in
   bash_game_npu | terminal_hacking_npu) install_triton_fla_stack ;;
   tictactoe_image_npu) ensure_media_deps; install_triton_fla_stack ;;
   ave_event_recognition_npu) install_ave_media_deps; stage_ave_fixture ;;
-  pi_npu) install_pi_toolchain ;;
+  pi_npu) install_pi_toolchain; install_triton_fla_stack ;;
 esac
