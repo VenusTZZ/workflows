@@ -169,7 +169,9 @@ ensure_media_deps() {
   tv_ver="0.$((torch_minor + 15)).0"  # torch 2.N <-> torchvision 0.(N+15)（2.6->0.21 ... 2.10->0.25）
   echo "installing torchvision ${tv_ver} to match the local torch"
   python -m pip install -q --force-reinstall --no-deps "torchvision==${tv_ver}"
-  python -m pip install -q Pillow
+  # "$@" 是调用方追加的媒体包（ave 的 av/librosa/soundfile）——不能丢，
+  # 丢了会装不上音频链，transformers 的 load_audio 到 rollout 才报缺 librosa。
+  python -m pip install -q Pillow "$@"
   # 功能校验：不看 torchvision.__version__（残缺 stub 没有该属性）。
   python - <<'PY'
 import torch
@@ -214,14 +216,28 @@ PY
 }
 
 install_ave_media_deps() {
-  # ave_event_recognition：音视频路径需 av（解容器）/ librosa（重采样）/
-  # soundfile（areno 直接 import）以及抽音轨用的 ffmpeg；图像走 ensure_media_deps。
+  # ave_event_recognition：音视频路径需 av（解容器）/ librosa（transformers 的
+  # load_audio 用它读音频）/ soundfile（areno 直接 import）以及抽音轨用的 ffmpeg；
+  # 图像走 ensure_media_deps。
   ensure_media_deps "av>=12" "librosa>=0.11" "soundfile>=0.13"
   command -v ffmpeg >/dev/null 2>&1 || {
     apt-get update -qq >/dev/null
     apt-get install -y -qq ffmpeg >/dev/null
   }
   command -v ffmpeg
+  # 功能校验：librosa 的 import 依赖 numba/numpy 配套——坏了的话 transformers
+  # 的 load_audio 只会笼统报 "requires the librosa library ... not found"，
+  # 在 setup 阶段直接 import 才能提前看到真实报错。
+  python - <<'PY'
+import av
+import librosa
+import soundfile
+
+import torchvision
+import torchvision.transforms.v2  # noqa: F401
+
+print("ave media stack ok: librosa", librosa.__version__, "| soundfile", soundfile.__version__, "| av", av.__version__)
+PY
 }
 
 stage_ave_fixture() {
