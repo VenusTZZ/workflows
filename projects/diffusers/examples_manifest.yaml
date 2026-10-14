@@ -881,28 +881,27 @@ supported:
   #     - --max_train_steps 1
   #   timeout_minutes: 90
 
-  # # PixArt-α ControlNet 训练（T5 文本编码器；无硬编码 cuda，用 accelerate）。
-  # # 模型 PixArt-alpha/PixArt-XL-2-512x512 由 setup 预下到本地（${PIXART_MODEL_PATH}，
-  # # hf_transfer 并行 + 跳过用不上的 fp16 分片），run 步不占下载时间；数据集
-  # # fusing/fill50k 走 hf-mirror 在线取（均公开、非 gated）。脚本同级导入
-  # # pipeline_pixart_alpha_controlnet、仓库根相对导入
-  # # examples.research_projects.pixart.controlnet_pixart_alpha——在 run_example 的
-  # # cwd=仓库根 + PYTHONPATH=脚本目录下都能解析。--train_batch_size 默认 16，必须压
-  # # 到 1；--mixed_precision 默认 fp32，用 bf16 + gradient_checkpointing 压显存；
-  # # --report_to 默认 tensorboard（非 wandb）。
-  # - path: examples/research_projects/pixart/train_pixart_controlnet_hf.py
-  #   profile: diffusers-pixart
-  #   runner: linux-aarch64-a2-1
-  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-  #   overlay_args:
-  #     - --pretrained_model_name_or_path ${PIXART_MODEL_PATH}
-  #     - --dataset_name fusing/fill50k
-  #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --train_batch_size 1
-  #     - --gradient_checkpointing
-  #     - --mixed_precision bf16
-  #     - --max_train_steps 1
-  #   timeout_minutes: 120
+  # PixArt-α ControlNet 训练（T5 文本编码器；无硬编码 cuda，用 accelerate）。
+  # 模型 PixArt-alpha/PixArt-XL-2-512x512 由 setup 预下到本地（${PIXART_MODEL_PATH}，
+  # hf_transfer 并行 + 跳过用不上的 fp16 分片），run 步不占下载时间；数据集
+  # fusing/fill50k 走 hf-mirror 在线取（均公开、非 gated）。脚本同级导入
+  # pipeline_pixart_alpha_controlnet、仓库根相对导入
+  # examples.research_projects.pixart.controlnet_pixart_alpha——在 run_example 的
+  # cwd=仓库根 + PYTHONPATH=脚本目录下都能解析。--train_batch_size 默认 16，必须压
+  # 到 1；--mixed_precision 默认 fp32，用 bf16 + gradient_checkpointing 压显存；
+  # --report_to 默认 tensorboard（非 wandb）。
+  - path: examples/research_projects/pixart/train_pixart_controlnet_hf.py
+    profile: diffusers-pixart
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path ${PIXART_MODEL_PATH}
+      - --dataset_name fusing/fill50k
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --train_batch_size 1
+      - --mixed_precision bf16
+      - --max_train_steps 1
+    timeout_minutes: 120
 
   # # ReFiLL（reference-based inpainting）SD1.5-inpainting LoRA 微调。脚本无硬编码
   # # cuda（全程 accelerator.device，仅 :163 一处 no-op 的 empty_cache）。模型用
@@ -972,37 +971,37 @@ supported:
   #     - --max_train_steps 1
   #   timeout_minutes: 120
 
-  # HiDream-I1-Dev（17B DiT）LoRA DreamBooth。脚本 NPU-aware（allow_internal_format
-  # =False）+ --offload（文本编码器/vae 用完挪 CPU，:1127）。第 4 编码器
-  # Llama-3.1-8B 用 NousResearch 镜像（非 gated；分片与 meta 原仓逐字节同大小，
-  # HiDream 只取 hidden_states 不用 LM head/chat template，替换零影响）——
-  # --pretrained_text_encoder_4 与 --pretrained_tokenizer_4 两个参数都指向它。
-  # a2-4 + ZeRO-3 是撞墙实验（同 qwenimage21 8 卡那轮），三道墙：
-  # 1) :1140 无条件 transformer.to(device)——17B bf16=35GB > 29.49GB 单卡，只有
-  #    zero.Init 在加载时把它分片才放得下；
-  # 2) 既往实测 stage 3 的 zero.Init 会打坏冻结、未被 engine 接管的编码器
-  #    （SDXL CLIP max_position_embeddings: 0 前科）；
-  # 3) host RAM：权重合计 ~64GB（transformer 35 + llama 16 + T5 9.5 + 其它），
-  #    qwen 20B 在 a2-4 上 ~56GB 暂存即被内核 OOM killer SIGKILL。
-  - path: examples/dreambooth/train_dreambooth_lora_hidream.py
-    profile: diffusers-hidream
-    launcher: accelerate-deepspeed-zero3
-    runner: linux-aarch64-a2-4
-    npu_devices: '0,1,2,3'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path ${HIDREAM_MODEL_PATH}
-      - --pretrained_text_encoder_4_name_or_path ${HIDREAM_LLAMA_PATH}
-      - --pretrained_tokenizer_4_name_or_path ${HIDREAM_LLAMA_PATH}
-      - --instance_data_dir ${FIXTURE_DIR}/images
-      - --instance_prompt "a photo of sks dog"
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --train_batch_size 1
-      - --gradient_checkpointing
-      - --mixed_precision bf16
-      - --offload
-      - --max_train_steps 1
-    timeout_minutes: 300
+  # # HiDream-I1-Dev（17B DiT）LoRA DreamBooth。脚本 NPU-aware（allow_internal_format
+  # # =False）+ --offload（文本编码器/vae 用完挪 CPU，:1127）。第 4 编码器
+  # # Llama-3.1-8B 用 NousResearch 镜像（非 gated；分片与 meta 原仓逐字节同大小，
+  # # HiDream 只取 hidden_states 不用 LM head/chat template，替换零影响）——
+  # # --pretrained_text_encoder_4 与 --pretrained_tokenizer_4 两个参数都指向它。
+  # # a2-4 + ZeRO-3 是撞墙实验（同 qwenimage21 8 卡那轮），三道墙：
+  # # 1) :1140 无条件 transformer.to(device)——17B bf16=35GB > 29.49GB 单卡，只有
+  # #    zero.Init 在加载时把它分片才放得下；
+  # # 2) 既往实测 stage 3 的 zero.Init 会打坏冻结、未被 engine 接管的编码器
+  # #    （SDXL CLIP max_position_embeddings: 0 前科）；
+  # # 3) host RAM：权重合计 ~64GB（transformer 35 + llama 16 + T5 9.5 + 其它），
+  # #    qwen 20B 在 a2-4 上 ~56GB 暂存即被内核 OOM killer SIGKILL。
+  # - path: examples/dreambooth/train_dreambooth_lora_hidream.py
+  #   profile: diffusers-hidream
+  #   launcher: accelerate-deepspeed-zero3
+  #   runner: linux-aarch64-a2-4
+  #   npu_devices: '0,1,2,3'
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --pretrained_model_name_or_path ${HIDREAM_MODEL_PATH}
+  #     - --pretrained_text_encoder_4_name_or_path ${HIDREAM_LLAMA_PATH}
+  #     - --pretrained_tokenizer_4_name_or_path ${HIDREAM_LLAMA_PATH}
+  #     - --instance_data_dir ${FIXTURE_DIR}/images
+  #     - --instance_prompt "a photo of sks dog"
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --train_batch_size 1
+  #     - --gradient_checkpointing
+  #     - --mixed_precision bf16
+  #     - --offload
+  #     - --max_train_steps 1
+  #   timeout_minutes: 300
 
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
 unsupported:

@@ -424,6 +424,15 @@ declare -A PROFILE_PIP=(
   [diffusers-lcm-zero3]="deepspeed>=0.18.2 webdataset braceexpand"
   [diffusers-controlnet-sdxl]="deepspeed>=0.18.2"
   [diffusers-kandinsky-prior]="deepspeed>=0.18.2"
+  # controlnet-wds runs with launcher=accelerate-deepspeed (ZeRO-2), hence
+  # deepspeed; the rest mirrors its vendored-webdataset requirements.
+  [diffusers-controlnet-wds]="webdataset==0.2.86 braceexpand opencv-python-headless deepspeed>=0.18.2"
+  [diffusers-orpo-wds]="webdataset braceexpand"
+  # hf_transfer: parallel hub downloads for the pre-downloaded models.
+  # diffusers-hidream runs with launcher=accelerate-deepspeed-zero3.
+  [diffusers-pixart]="hf_transfer"
+  [diffusers-flux2-klein]="hf_transfer"
+  [diffusers-hidream]="hf_transfer deepspeed>=0.18.2"
 )
 
 # download_assets tokens (comma-separated) for the profile's models/datasets.
@@ -438,6 +447,9 @@ declare -A PROFILE_ASSETS=(
   [diffusers-lcm]="sd15"
   [diffusers-cogvideo]="cogvideo"
   [diffusers-cogvideo-i2v]="cogvideo-dataset"
+  [diffusers-sana]="sana-sprint"
+  [diffusers-multi-subject-inpaint]="sd15-inpaint"
+  [diffusers-realfill]="sd15-inpaint"
 )
 
 # fusing/fill50k is a script-based dataset, so the controlnet examples need it.
@@ -445,6 +457,40 @@ declare -A PROFILE_ENV=(
   [diffusers-controlnet]="HF_DATASETS_TRUST_REMOTE_CODE=1"
   [diffusers-controlnet-sdxl]="HF_DATASETS_TRUST_REMOTE_CODE=1"
 )
+
+# ---------------------------------------------------------------
+# Shared helper for bespoke profiles: pre-download a hub repo into
+# <workspace>/<dest_subdir> and export the local path as <env_var> for the
+# run step (local paths also avoid from_pretrained's model_info round-trip).
+# allow/ignore are comma-separated glob lists; "-" means "not used".
+# Needs HF_ENDPOINT (set engine-side); speeds up with hf_transfer when the
+# profile pulled it in via PROFILE_PIP (run_profile sets the switch).
+# ---------------------------------------------------------------
+hub_snapshot() {
+  local repo="$1" dest="$2" env_var="$3" allow="$4" ignore="$5"
+  HUB_SNAPSHOT_REPO="$repo" HUB_SNAPSHOT_DEST="$dest" HUB_SNAPSHOT_VAR="$env_var" \
+    HUB_SNAPSHOT_ALLOW="$allow" HUB_SNAPSHOT_IGNORE="$ignore" python3 - <<'PY'
+import os
+from pathlib import Path
+
+from huggingface_hub import snapshot_download
+
+repo = os.environ["HUB_SNAPSHOT_REPO"]
+dest = Path(os.environ["GITHUB_WORKSPACE"]) / os.environ["HUB_SNAPSHOT_DEST"]
+dest.mkdir(parents=True, exist_ok=True)
+kwargs = {"local_dir": str(dest)}
+allow = os.environ.get("HUB_SNAPSHOT_ALLOW", "-")
+ignore = os.environ.get("HUB_SNAPSHOT_IGNORE", "-")
+if allow != "-":
+    kwargs["allow_patterns"] = [p for p in allow.split(",") if p]
+if ignore != "-":
+    kwargs["ignore_patterns"] = [p for p in ignore.split(",") if p]
+snapshot_download(repo, **kwargs)
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"{os.environ['HUB_SNAPSHOT_VAR']}={dest}\n")
+print(f"pre-downloaded {repo} -> {dest}", flush=True)
+PY
+}
 
 # diffusers-gligen: research_projects/gligen text-box training. Base stack only:
 # dataset.py needs just torch/PIL/torchvision, and make_datasets.py's
@@ -456,7 +502,6 @@ declare -A PROFILE_ENV=(
 # 768-d}; that embedding is a constant conditioning input (never optimized), so
 # zeros are fine. A 512x512 image makes --resolution 512 a no-op.
 setup_diffusers_gligen() {
-  install_example_stack
   python3 - <<'PY'
 import os
 
@@ -506,9 +551,6 @@ PY
 # the run hangs silently (pwatermark=0.0 here cost a 55-min CI hang; 0.1
 # passes). opencv-headless for the canny control image.
 setup_diffusers_controlnet_wds() {
-  install_example_stack
-  # deepspeed: the entry runs with launcher=accelerate-deepspeed (ZeRO-2).
-  python -m pip install "webdataset==0.2.86" braceexpand opencv-python-headless "deepspeed>=0.18.2"
   python3 - <<'PY'
 import io
 import json
@@ -565,8 +607,6 @@ PY
 # pin needed. label txt values decode to str, so the == 0.5/== 0 comparisons
 # never fire and the pair order is deterministically [jpg_0, jpg_1].
 setup_diffusers_orpo_wds() {
-  install_example_stack
-  python -m pip install webdataset braceexpand
   python3 - <<'PY'
 import io
 import os
@@ -617,8 +657,6 @@ PY
 # (TypeError). A hand-built parquet keeps "image" as plain binary so datasets
 # returns bytes. Columns must be exactly llava (str) + image (bytes).
 setup_diffusers_sana() {
-  install_example_stack
-  download_assets sana-sprint
   python3 - <<'PY'
 import io
 import os
@@ -663,9 +701,8 @@ setup_diffusers_multi_subject_inpaint() {
   # 名字含 "mask" 的列。所以仿 Hub 数据集的落盘布局：平铺的
   # train-*.parquet / test-*.parquet，load_dataset 按扩展名推断 parquet builder、
   # 按文件名推断 split，features（Image）存在 schema metadata 里，读回即 PIL。
-  # 模型必须是 9 通道的 inpainting 版（不是基础版 SD1.5）。
-  install_example_stack
-  download_assets sd15-inpaint
+  # 模型必须是 9 通道的 inpainting 版（不是基础版 SD1.5），由 PROFILE_ASSETS
+  # 表预下。
   python3 - <<'PY'
 import os
 from pathlib import Path
@@ -704,9 +741,7 @@ setup_diffusers_realfill() {
   # train_realfill.py 的 RealFillDataset 认死一个目录结构：
   #   <root>/ref/*.png + <root>/target/target.png + <root>/target/mask.png
   # 缺任一就直接 ValueError（:445）。这里现场合成一个最小 fixture（纯合成图，零下载）。
-  # 模型是 SD1.5-inpainting（同样 9 通道）。
-  install_example_stack
-  download_assets sd15-inpaint
+  # 模型是 SD1.5-inpainting（同样 9 通道），由 PROFILE_ASSETS 表预下。
   python3 - <<'PY'
 import os
 from pathlib import Path
@@ -744,77 +779,23 @@ setup_diffusers_pixart() {
   # PixArt-alpha/PixArt-XL-2-512x512 在 ModelScope 无镜像，只能走 hf-mirror。
   # 它的 text_encoder 是 T5-XXL：脚本按默认（不带 --variant）加载，只会用 fp32
   # 权重（4 分片 ~19GB），另有一套 fp16 分片（~9GB）用不上——预下时跳过 *.fp16.*
-  # 省掉一半。预下放在 setup（不占 run 步预算、带重试）并落到本地目录，run 步直接
-  # 读本地路径（避免 from_pretrained 的 model_info 网络抖动）；同时装 hf_transfer
-  # 走并行下载，剩余的数据集下载也能受益。
-  install_example_stack
-  if python -m pip install hf_transfer; then
-    export HF_HUB_ENABLE_HF_TRANSFER=1
-    echo "HF_HUB_ENABLE_HF_TRANSFER=1" >> "$GITHUB_ENV"
-  fi
-  PIXART_REPO="PixArt-alpha/PixArt-XL-2-512x512" python3 - <<'PY'
-import os
-from pathlib import Path
-
-from huggingface_hub import snapshot_download
-
-repo = os.environ["PIXART_REPO"]
-dest = Path(os.environ["GITHUB_WORKSPACE"]) / "pixart_model"
-dest.mkdir(parents=True, exist_ok=True)
-snapshot_download(
-    repo,
-    local_dir=str(dest),
-    # Only the model components. Skip asset/ (README images + samples.txt that
-    # hf-mirror keeps timing out on) and the unused fp16 weight duplicates.
-    allow_patterns=[
-        "model_index.json",
-        "scheduler/*",
-        "tokenizer/*",
-        "text_encoder/*",
-        "transformer/*",
-        "vae/*",
-    ],
-    ignore_patterns=["*.fp16.*", "*.bin", "*.ckpt"],
-)
-with open(os.environ["GITHUB_ENV"], "a") as fh:
-    fh.write(f"PIXART_MODEL_PATH={dest}\n")
-print(f"pre-downloaded {repo} -> {dest}", flush=True)
-PY
+  # 省掉一半，且只下组件目录（asset/ 里的 README 图/样例文本 hf-mirror 反复超时）。
+  hub_snapshot "PixArt-alpha/PixArt-XL-2-512x512" pixart_model PIXART_MODEL_PATH \
+    "model_index.json,scheduler/*,tokenizer/*,text_encoder/*,transformer/*,vae/*" \
+    "*.fp16.*,*.bin,*.ckpt"
 }
 
 setup_diffusers_flux2_klein() {
-  # FLUX.2-klein-4B：BFL 的开放权重档（实测非 gated、匿名可取）。预下到本地
-  # 目录（跳过顶层 ~7.2GB 单文件 checkpoint 重复），run 步直接读本地路径；
-  # hf_transfer 并行加速。img2img 条目的 DreamBoothDataset 会把整个数据集
-  # 急切物化进宿主内存（fill50k 的 1000 对图+条件图直接把 RAM 吃穿 → 内核
-  # SIGKILL），脚本又没有 max_train_samples 切片参数，所以现场合成 8 对小
-  # 数据集（列 image/conditioning_image/text）。
-  install_example_stack
-  if python -m pip install hf_transfer; then
-    export HF_HUB_ENABLE_HF_TRANSFER=1
-    echo "HF_HUB_ENABLE_HF_TRANSFER=1" >> "$GITHUB_ENV"
-  fi
-  FLUX2_KLEIN_REPO="black-forest-labs/FLUX.2-klein-4B" python3 - <<'PY'
+  # FLUX.2-klein-4B：BFL 的开放权重档（实测非 gated、匿名可取）。预下只取组件
+  # 目录（跳过顶层 ~7.2GB 单文件 checkpoint 重复）。img2img 条目的
+  # DreamBoothDataset 会把整个数据集急切物化进宿主内存（fill50k 的 1000 对
+  # 图+条件图直接把 RAM 吃穿 → 内核 SIGKILL），脚本又没有 max_train_samples
+  # 切片参数，所以现场合成 8 对小数据集（列 image/conditioning_image/text）。
+  hub_snapshot "black-forest-labs/FLUX.2-klein-4B" flux2_klein_model FLUX2_KLEIN_MODEL_PATH \
+    "model_index.json,scheduler/*,tokenizer/*,text_encoder/*,transformer/*,vae/*" -
+  python3 - <<'PY'
 import os
 from pathlib import Path
-
-from huggingface_hub import snapshot_download
-
-repo = os.environ["FLUX2_KLEIN_REPO"]
-dest = Path(os.environ["GITHUB_WORKSPACE"]) / "flux2_klein_model"
-dest.mkdir(parents=True, exist_ok=True)
-snapshot_download(
-    repo,
-    local_dir=str(dest),
-    allow_patterns=[
-        "model_index.json",
-        "scheduler/*",
-        "tokenizer/*",
-        "text_encoder/*",
-        "transformer/*",
-        "vae/*",
-    ],
-)
 
 from datasets import Dataset, Features, Image as ImageFeature, Value
 from PIL import Image, ImageDraw
@@ -845,9 +826,8 @@ data_dir.mkdir(parents=True, exist_ok=True)
 ds.to_parquet(str(data_dir / "train-00000-of-00001.parquet"))
 
 with open(os.environ["GITHUB_ENV"], "a") as fh:
-    fh.write(f"FLUX2_KLEIN_MODEL_PATH={dest}\n")
     fh.write(f"FLUX2_KLEIN_DATASET={data_dir}\n")
-print(f"pre-downloaded {repo} -> {dest}; img2img dataset -> {data_dir}", flush=True)
+print(f"prepared img2img dataset at {data_dir}", flush=True)
 PY
 }
 
@@ -856,61 +836,30 @@ setup_diffusers_hidream() {
   # Llama-3.1-8B-Instruct 用 NousResearch 社区镜像（实测非 gated；4 个权重分片
   # 与 meta 原仓逐字节同大小、tokenizer.json/config 一致；HiDream 只取 32 层
   # hidden_states，不用 LM head/chat template，替换零影响）。跳过 llama 仓
-  # original/ 里 16GB 的 .pth 重复。合计下载 ~64GB。deepspeed：条目跑
-  # ZeRO-3 launcher（bespoke 函数不查 PROFILE_PIP 表，须在此显式安装）。
-  install_example_stack
-  python -m pip install "deepspeed>=0.18.2"
-  if python -m pip install hf_transfer; then
-    export HF_HUB_ENABLE_HF_TRANSFER=1
-    echo "HF_HUB_ENABLE_HF_TRANSFER=1" >> "$GITHUB_ENV"
-  fi
-  HIDREAM_REPO="HiDream-ai/HiDream-I1-Dev" HIDREAM_LLAMA="NousResearch/Meta-Llama-3.1-8B-Instruct" python3 - <<'PY'
-import os
-from pathlib import Path
-
-from huggingface_hub import snapshot_download
-
-ws = Path(os.environ["GITHUB_WORKSPACE"])
-
-dest = ws / "hidream_model"
-dest.mkdir(parents=True, exist_ok=True)
-snapshot_download(
-    os.environ["HIDREAM_REPO"],
-    local_dir=str(dest),
-    allow_patterns=[
-        "model_index.json",
-        "scheduler/*",
-        "tokenizer/*", "tokenizer_2/*", "tokenizer_3/*",
-        "text_encoder/*", "text_encoder_2/*", "text_encoder_3/*",
-        "transformer/*",
-        "vae/*",
-    ],
-)
-
-llama = ws / "llama31_8b_instruct"
-llama.mkdir(parents=True, exist_ok=True)
-snapshot_download(
-    os.environ["HIDREAM_LLAMA"],
-    local_dir=str(llama),
-    ignore_patterns=["original/*"],
-)
-
-with open(os.environ["GITHUB_ENV"], "a") as fh:
-    fh.write(f"HIDREAM_MODEL_PATH={dest}\n")
-    fh.write(f"HIDREAM_LLAMA_PATH={llama}\n")
-print(f"pre-downloaded HiDream -> {dest}, llama -> {llama}", flush=True)
-PY
+  # original/ 里 16GB 的 .pth 重复。合计下载 ~64GB。deepspeed（ZeRO-3
+  # launcher）与 hf_transfer 由 PROFILE_PIP 表提供。
+  hub_snapshot "HiDream-ai/HiDream-I1-Dev" hidream_model HIDREAM_MODEL_PATH \
+    "model_index.json,scheduler/*,tokenizer/*,tokenizer_2/*,tokenizer_3/*,text_encoder/*,text_encoder_2/*,text_encoder_3/*,transformer/*,vae/*" \
+    -
+  hub_snapshot "NousResearch/Meta-Llama-3.1-8B-Instruct" llama31_8b_instruct HIDREAM_LLAMA_PATH \
+    - "original/*"
 }
 
+# Base stack + the three tables ALWAYS apply; a bespoke setup_<profile>()
+# function, when present, runs ON TOP of them for the genuinely bespoke steps
+# (hub model pre-downloads, fixture synthesis) instead of replacing everything.
+# This keeps pip/env/assets registration in one place: a profile that needs
+# deepspeed just gets a PROFILE_PIP row - no bespoke function can forget it.
 run_profile() {
-  local fn="setup_${PROFILE//-/_}"
-  if declare -F "$fn" >/dev/null 2>&1; then
-    "$fn"
-    return
-  fi
   install_example_stack
   if [[ -n "${PROFILE_PIP[$PROFILE]:-}" ]]; then
     python -m pip install ${PROFILE_PIP[$PROFILE]}
+  fi
+  # hf_transfer (pulled in via PROFILE_PIP above): parallel hub downloads for
+  # both the setup-time hub_snapshot calls and the run step.
+  if [[ "${PROFILE_PIP[$PROFILE]:-}" == *hf_transfer* ]] && python -c "import hf_transfer" >/dev/null 2>&1; then
+    export HF_HUB_ENABLE_HF_TRANSFER=1
+    echo "HF_HUB_ENABLE_HF_TRANSFER=1" >> "$GITHUB_ENV"
   fi
   if [[ -n "${PROFILE_ASSETS[$PROFILE]:-}" ]]; then
     download_assets "${PROFILE_ASSETS[$PROFILE]}"
@@ -919,6 +868,10 @@ run_profile() {
   for var in ${PROFILE_ENV[$PROFILE]:-}; do
     echo "$var" >> "$GITHUB_ENV"
   done
+  local fn="setup_${PROFILE//-/_}"
+  if declare -F "$fn" >/dev/null 2>&1; then
+    "$fn"
+  fi
 }
 
 if [[ -z "${TARGET_ROOT:-}" || -z "${GITHUB_WORKSPACE:-}" || -z "${GITHUB_ENV:-}" ]]; then
