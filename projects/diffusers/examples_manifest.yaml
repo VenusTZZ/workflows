@@ -8,7 +8,7 @@ scan:
   # 对齐收口：原 scan.exclude 的 33 条规则全部迁入
   # unsupported 段（上游自测 / helper / pipeline 模块 / community 整目录等，
   # 带分组注释与理由），scan 只保留 root + include_extensions 两个键。
-  # unsupported 覆盖全部 308 个扫描文件：supported(49) + unsupported(259)。
+  # unsupported 覆盖全部 308 个扫描文件：supported(53) + unsupported(255)。
 
 # 新版 diffusers 需求 huggingface-hub>=1.23，huggingface-hub>=1.23 需求
 # transformers>=5.x，任何 transformers<5.x 的用例都无法跑通
@@ -899,7 +899,6 @@ supported:
       - --dataset_name fusing/fill50k
       - --output_dir ${CI_OUTPUT_DIR}
       - --train_batch_size 1
-      - --gradient_checkpointing
       - --mixed_precision bf16
       - --max_train_steps 1
     timeout_minutes: 120
@@ -925,11 +924,105 @@ supported:
       - --train_batch_size 1
       - --gradient_checkpointing
       - --max_train_steps 1
-    timeout_minutes: 90
+        timeout_minutes: 90
 
-# ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
+  # FLUX.2 Klein 4B LoRA DreamBooth（t2i）。脚本 NPU-aware（is_torch_npu_available
+  # + --enable_npu_flash_attention 走 set_attention_backend("_native_npu")，全仓
+  # 第二处 NPU 专属接口）；模型 klein-4B 是 BFL 开放权重档（实测非 gated、匿名
+  # 可取），setup 预下 ~15GB（跳过顶层单文件重复）。LoRA + bf16 + offload，冻结
+  # transformer ~7.2GB，a2-1 放得下。风险：文本编码器是 Qwen3ForCausalLM，与
+  # z_image 的 Qwen3Model 同一 modeling_qwen3 注意力路径，transformers 5.x 的
+  # q_proj 形状 bug 可能同样触发——待上卡验证。
+  - path: examples/dreambooth/train_dreambooth_lora_flux2_klein.py
+    profile: diffusers-flux2-klein
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path ${FLUX2_KLEIN_MODEL_PATH}
+      - --instance_data_dir ${FIXTURE_DIR}/images
+      - --instance_prompt "a photo of sks dog"
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --train_batch_size 1
+      - --gradient_checkpointing
+      - --mixed_precision bf16
+      - --max_train_steps 1
+    timeout_minutes: 120
+
+  # FLUX.2 Klein 4B LoRA DreamBooth（img2img）。同上（NPU-aware / 模型预下 /
+  # Qwen3 编码器已随 t2i 条目实测通过）。它无条件取 batch["cond_pixel_values"]
+  # （:1541），纯图片目录会 KeyError，必须用带条件图列的数据集；且
+  # DreamBoothDataset 会把整个数据集急切物化进宿主内存——fill50k 的 1000 对
+  # 图+条件图直接吃穿 RAM（内核 SIGKILL），脚本又没有 max_train_samples 切片，
+  # 故用 setup 合成的 8 对本地数据集（列 image/conditioning_image/text）。
+  - path: examples/dreambooth/train_dreambooth_lora_flux2_klein_img2img.py
+    profile: diffusers-flux2-klein
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path ${FLUX2_KLEIN_MODEL_PATH}
+      - --dataset_name ${FLUX2_KLEIN_DATASET}
+      - --cond_image_column conditioning_image
+      - --caption_column text
+      - --instance_prompt "a photo of sks dog"
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --train_batch_size 1
+      - --gradient_checkpointing
+      - --mixed_precision bf16
+      - --max_train_steps 1
+    timeout_minutes: 120
+
+  # # HiDream-I1-Dev（17B DiT）LoRA DreamBooth。脚本 NPU-aware（allow_internal_format
+  # # =False）+ --offload（文本编码器/vae 用完挪 CPU，:1127）。第 4 编码器
+  # # Llama-3.1-8B 用 NousResearch 镜像（非 gated；分片与 meta 原仓逐字节同大小，
+  # # HiDream 只取 hidden_states 不用 LM head/chat template，替换零影响）——
+  # # --pretrained_text_encoder_4 与 --pretrained_tokenizer_4 两个参数都指向它。
+  # # a2-4 + ZeRO-3 是撞墙实验（同 qwenimage21 8 卡那轮），三道墙：
+  # # 1) :1140 无条件 transformer.to(device)——17B bf16=35GB > 29.49GB 单卡，只有
+  # #    zero.Init 在加载时把它分片才放得下；
+  # # 2) 既往实测 stage 3 的 zero.Init 会打坏冻结、未被 engine 接管的编码器
+  # #    （SDXL CLIP max_position_embeddings: 0 前科）；
+  # # 3) host RAM：权重合计 ~64GB（transformer 35 + llama 16 + T5 9.5 + 其它），
+  # #    qwen 20B 在 a2-4 上 ~56GB 暂存即被内核 OOM killer SIGKILL。
+  # - path: examples/dreambooth/train_dreambooth_lora_hidream.py
+  #   profile: diffusers-hidream
+  #   launcher: accelerate-deepspeed-zero3
+  #   runner: linux-aarch64-a2-4
+  #   npu_devices: '0,1,2,3'
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --pretrained_model_name_or_path ${HIDREAM_MODEL_PATH}
+  #     - --pretrained_text_encoder_4_name_or_path ${HIDREAM_LLAMA_PATH}
+  #     - --pretrained_tokenizer_4_name_or_path ${HIDREAM_LLAMA_PATH}
+  #     - --instance_data_dir ${FIXTURE_DIR}/images
+  #     - --instance_prompt "a photo of sks dog"
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --train_batch_size 1
+  #     - --gradient_checkpointing
+  #     - --mixed_precision bf16
+  #     - --offload
+  #     - --max_train_steps 1
+  #   timeout_minutes: 300
+
+  # AutoencoderRAE（research_projects）：冻结 encoder、只训 decoder 的 RAE 自编码器
+  # 训练。无 cuda 硬编码（全 accelerator.device），依赖标准栈（diffusers.AutoencoderRAE
+  # 已导出），--report_to 默认 tensorboard，结尾不构建 pipeline。数据是 ImageFolder
+  # 风格（<root>/<class>/*.jpg），用 fixtures/imagefolder（含 dog/ 子目录）。
+  # --train_batch_size 默认 8 且 dataloader drop_last=True，图少会静默 0 步，压到 1。
+  - path: examples/research_projects/autoencoder_rae/train_autoencoder_rae.py
+    profile: diffusers-research-plain
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --train_data_dir ${FIXTURE_DIR}/imagefolder
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --train_batch_size 1
+      - --max_train_steps 1
+    timeout_minutes: 60
+
 unsupported:
-  # ===== Flax/JAX 系列 ==================================================
+  # 验证中
+  - examples/dreambooth/train_dreambooth_lora_hidream.py
+  # ===== Flax/JAX 系列 =======================================================
   # 以下都是训练脚本的 Flax/JAX 版本，跑不通有三层原因：
   # 1) diffusers 0.40 起删除了全部 Flax 类（FlaxUNet2DConditionModel 等），
   #    transformers 5.x 起删除了 FlaxCLIPTextModel，脚本开头的 import 就失败；
@@ -943,7 +1036,7 @@ unsupported:
   - examples/research_projects/multi_token_textual_inversion/textual_inversion_flax.py
   - examples/research_projects/sdxl_flax/sdxl_single.py
   - examples/research_projects/sdxl_flax/sdxl_single_aot.py
-  # ===== 旧式 LoRA 构造 API 系列：机制已被 diffusers 删除，等上游改写 =====
+  # ===== 旧式 LoRA 构造 API 系列：机制已被 diffusers 删除，等上游改写 ==========
   # 这 4 个例子还在用"自己构造 LoRAAttnProcessor 再训练"的老写法，而新版
   # diffusers 已把这套机制删掉：这三个类还在，但 __init__ 只剩 pass（空壳），
   # 传 hidden_size / cross_attention_dim / rank 直接 TypeError。就算把调用
@@ -954,7 +1047,7 @@ unsupported:
   - examples/kandinsky2_2/text_to_image/train_text_to_image_lora_prior.py
   - examples/research_projects/lora/train_text_to_image_lora.py
   - examples/research_projects/dreambooth_inpaint/train_dreambooth_inpaint_lora.py
-  # ===== diffusion_policy：教学推理 demo 不适合看护 =====
+  # ===== diffusion_policy：教学推理 demo 不适合看护 ==========================
   # 1) 它不是训练脚本：201 行里没有优化器/loss/训练循环，只是下载预训练
   #    权重（dorsar/diffusion_policy/push_tblock.pt）跑一次 100 步去噪，
   #    打印一条 16 步轨迹；
@@ -966,8 +1059,8 @@ unsupported:
   #    唯一能跑的办法（ignore_mismatched_sizes / 手术 state_dict）等于把时间
   #    嵌入随机初始化，"预训练"失去意义，且都属 patch。
   - examples/reinforcement_learning/diffusion_policy.py
-  # ===== IP-Adapter 四条不支持（第三方包跟新版 diffusers 不兼容）=========
-  # 1) 这四个教程要用第三方的 ip_adapter 包——这是 diffusers 官方 examples
+  # ===== IP-Adapter 不支持（第三方包跟新版 diffusers 不兼容）=================
+  # 1) 这四个用例要用第三方的 ip_adapter 包，这是 diffusers 官方 examples
   #    的 requirements.txt 里指定要装的。
   # 2) 这个包从 2023 年 12 月起就没发过新版。它代码里写死了一句导入：
   #    from diffusers.pipelines.controlnet import MultiControlNetModel
@@ -998,9 +1091,13 @@ unsupported:
   # 恢复条件：上游更新这两条例子的 import 路径
   - examples/research_projects/wuerstchen/text_to_image/train_text_to_image_prior.py
   - examples/research_projects/wuerstchen/text_to_image/train_text_to_image_lora_prior.py
-  # ==== GATED_MODEL ===================================================
+  # ==== GATED_MODEL ========================================================
   # 需接受作者设定的许可条款并使用有效的 Hugging Face Token（HF_TOKEN）
   # 进行身份验证才能下载模型
+  # FLUX.1-dev        FLUX.1-Kontext-dev    FLUX.2-dev
+  # FLUX.2-klein-9B   SD3-medium            SD3.5-medium
+  # SD3.5-large       ideogram-4-nf4        Cosmos-Predict2.5-2B
+  # Krea-2-Raw        Krea-2-Turbo
   - examples/controlnet/train_controlnet_flux.py
   - examples/controlnet/train_controlnet_sd3.py
   - examples/flux-control/train_control_flux.py
@@ -1009,27 +1106,24 @@ unsupported:
   - examples/dreambooth/train_dreambooth_flux.py
   - examples/dreambooth/train_dreambooth_lora_sd3.py
   - examples/dreambooth/train_dreambooth_sd3.py
-  - examples/dreambooth/train_dreambooth_lora_hidream.py
   - examples/research_projects/sd3_lora_colab/train_dreambooth_lora_sd3_miniature.py
   - examples/dreambooth/train_dreambooth_lora_flux.py
   - examples/dreambooth/train_dreambooth_lora_flux_kontext.py
   - examples/dreambooth/train_dreambooth_lora_flux2.py
   - examples/dreambooth/train_dreambooth_lora_flux2_img2img.py
-  - examples/dreambooth/train_dreambooth_lora_flux2_klein.py
-  - examples/dreambooth/train_dreambooth_lora_flux2_klein_img2img.py
   - examples/dreambooth/train_dreambooth_lora_ideogram4.py
   - examples/cosmos/eval_cosmos_predict25_lora.py
   - examples/cosmos/eval_lora.sh
   - examples/cosmos/train_cosmos_predict25_lora.py
   - examples/cosmos/train_lora.sh
-  # ==== CUDA硬编码类 ==================================================
+  # ==== CUDA硬编码类 =======================================================
   - examples/cogview4-control/train_control_cogview4.py
   - examples/community/tiled_upscaling.py
   - examples/community/dps_pipeline.py
   - examples/community/run_onnx_controlnet.py
   - examples/community/run_tensorrt_controlnet.py
   - examples/research_projects/control_lora/control_lora.py
-  - examples/cosmos3/inference_cosmos3.py # GATED_MODEL
+  - examples/cosmos3/inference_cosmos3.py
   - examples/profiling/profiling_pipelines.py
   - examples/profiling/run_profiling.sh
   - examples/research_projects/flux_lora_quantization/compute_embeddings.py # GATED_MODEL
@@ -1046,7 +1140,7 @@ unsupported:
   # colossalai（依赖 CUDA/NCCL）
   - examples/research_projects/colossalai/inference.py
   - examples/research_projects/colossalai/train_dreambooth_colossalai.py
-  # ===== transformers 版本不兼容 ==================================================
+  # ===== transformers 版本不兼容 ===========================================
   # 上游 transformers 5.x 的 API 变动导致这些脚本无法兼容：
   # 1) custom_diffusion：新 transformers 把 modifier token <new1> 切成多个 token，
   #    与 initializer_token 的 [32] 维度不一致 → RuntimeError: expand
@@ -1062,7 +1156,7 @@ unsupported:
   - examples/dreambooth/train_dreambooth_lora_qwenimage21_img2img.py
   - examples/dreambooth/train_dreambooth_lora_krea2.py # GATED_MODEL
   - examples/research_projects/multi_token_textual_inversion/textual_inversion.py
-  # ===== OOM（显存溢出） ==========================================================
+  # ===== OOM（显存溢出） ===================================================
   # 这些用例在 CI 的 a2-1/a2-4 等规格上因显存不足而 OOM 崩溃：
   # 1) LCM 全量蒸馏：teacher + 学生 + EMA target 三张 SDXL unet 同时驻留显存，
   #    bf16 后仍 ~27.7GB，加梯度 >30GB/卡 > 29.5GB；ZeRO-3 又被 transformers
@@ -1079,31 +1173,25 @@ unsupported:
   - examples/research_projects/scheduled_huber_loss_training/text_to_image/train_text_to_image_sdxl.py
   - examples/consistency_distillation/train_lcm_distill_lora_sdxl.py
   - examples/dreambooth/train_dreambooth_lora_qwen_image.py
-  # ===== NPU 算子/功能缺口 =======================================================
+  # ===== NPU 算子/功能缺口 =================================================
   # 这些用例需要 NPU 尚未实现的 PyTorch 功能：
   # SANA-Sprint 蒸馏：SCM 蒸馏损失硬依赖 torch.func.jvp（前向自动微分），
   # 而 NPU 的 matmul(linear) 未实现前向 AD → NotImplementedError
   # 回归条件：torch_npu 补 matmul 的前向 AD，或上游提供非 jvp 的蒸馏实现
   - examples/research_projects/sana/train_sana_sprint_diffusers.py
-  # ===== 代码BUG ================================================================
+  # ===== 代码BUG ==========================================================
   # 这些用例存在明确的代码缺陷，修复后可恢复：
   # autoencoderkl：final validation 用 AutoencoderKL.from_pretrained(output_dir)
   # 加载到 CPU，未 .to(accelerator.device)，NPU 上 conv 报 "weight is on cpu,
   # different from ... npu:0"；该路径无条件执行，去掉 --validation_image 还会
   # enumerate(None) 报错
   - examples/research_projects/autoencoderkl/train_autoencoderkl.py
-  # ===== 外部依赖/环境不可用 =====
-  # 这些用例依赖 CI 环境中无法安装或不可用的外部依赖：
-  # 1) run_diffuser_locomotion：import d4rl + gym，gym.make("hopper-medium-v2")；
-  #    README 要求 gym==0.24.1 + free-mujoco-py + d4rl（MuJoCo 二进制，
-  #    aarch64/py3.12 装不上）
-  # 2) train_controlnet_hf_diffusers.sh：pixart controlnet 的启动脚本，
-  #    非标准训练脚本，依赖特定环境配置
-  # 3) autoencoder_rae：需进一步分析具体失败原因（文件名暗示 RAE 自编码器训练）
+  # ===== 外部依赖/环境不可用 ================================================
+  # run_diffuser_locomotion：import d4rl + gym，gym.make("hopper-medium-v2")；
+  # README 要求 gym==0.24.1 + free-mujoco-py + d4rl（MuJoCo 二进制，
+  # aarch64/py3.12 装不上）。
   - examples/reinforcement_learning/run_diffuser_locomotion.py
-  - examples/research_projects/pixart/train_controlnet_hf_diffusers.sh
-  - examples/research_projects/autoencoder_rae/train_autoencoder_rae.py
-  # ===== OTHER_BACKEND（其他训练后端） =====
+  # ===== OTHER_BACKEND（其他训练后端） =====================================
   # 这些用例使用非 PyTorch 原生训练后端，昇腾 NPU 不支持：
   # 1) intel_extension_for_pytorch / neural_compressor：Intel 针对 Xeon/Core Ultra/
   #    Intel GPU/Gaudi 的扩展，不是昇腾 NPU 后端
@@ -1313,3 +1401,4 @@ unsupported:
   - examples/community/unclip_image_interpolation.py
   - examples/community/unclip_text_interpolation.py
   - examples/community/wildcard_stable_diffusion.py
+  - examples/research_projects/pixart/train_controlnet_hf_diffusers.sh
