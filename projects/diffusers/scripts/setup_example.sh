@@ -29,7 +29,7 @@ SUPPORTED_PROFILES=(
   diffusers-controlnet-sdxl diffusers-llada2 diffusers-gligen diffusers-controlnet-wds
   diffusers-orpo-wds diffusers-sdxl-full diffusers-lcm-zero3
   diffusers-kandinsky-prior diffusers-multi-subject-inpaint diffusers-pixart
-  diffusers-realfill
+  diffusers-realfill diffusers-flux2-klein
 )
 profile_known=0
 for _p in "${SUPPORTED_PROFILES[@]}"; do
@@ -778,6 +778,44 @@ snapshot_download(
 )
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"PIXART_MODEL_PATH={dest}\n")
+print(f"pre-downloaded {repo} -> {dest}", flush=True)
+PY
+}
+
+setup_diffusers_flux2_klein() {
+  # FLUX.2-klein-4B：BFL 的开放权重档（实测非 gated、匿名可取）。预下到本地
+  # 目录（跳过顶层 ~7.2GB 单文件 checkpoint 重复），run 步直接读本地路径；
+  # hf_transfer 并行加速。fill50k（img2img 条目用）是 script 数据集，
+  # 需要 trust_remote_code。
+  install_example_stack
+  if python -m pip install hf_transfer; then
+    export HF_HUB_ENABLE_HF_TRANSFER=1
+    echo "HF_HUB_ENABLE_HF_TRANSFER=1" >> "$GITHUB_ENV"
+  fi
+  echo "HF_DATASETS_TRUST_REMOTE_CODE=1" >> "$GITHUB_ENV"
+  FLUX2_KLEIN_REPO="black-forest-labs/FLUX.2-klein-4B" python3 - <<'PY'
+import os
+from pathlib import Path
+
+from huggingface_hub import snapshot_download
+
+repo = os.environ["FLUX2_KLEIN_REPO"]
+dest = Path(os.environ["GITHUB_WORKSPACE"]) / "flux2_klein_model"
+dest.mkdir(parents=True, exist_ok=True)
+snapshot_download(
+    repo,
+    local_dir=str(dest),
+    allow_patterns=[
+        "model_index.json",
+        "scheduler/*",
+        "tokenizer/*",
+        "text_encoder/*",
+        "transformer/*",
+        "vae/*",
+    ],
+)
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"FLUX2_KLEIN_MODEL_PATH={dest}\n")
 print(f"pre-downloaded {repo} -> {dest}", flush=True)
 PY
 }
