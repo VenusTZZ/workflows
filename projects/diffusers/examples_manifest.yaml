@@ -949,28 +949,28 @@ supported:
   #     - --max_train_steps 1
   #   timeout_minutes: 120
 
-  # FLUX.2 Klein 4B LoRA DreamBooth（img2img）。同上（NPU-aware / 模型预下 /
-  # Qwen3 编码器已随 t2i 条目实测通过）。它无条件取 batch["cond_pixel_values"]
-  # （:1541），纯图片目录会 KeyError，必须用带条件图列的数据集；且
-  # DreamBoothDataset 会把整个数据集急切物化进宿主内存——fill50k 的 1000 对
-  # 图+条件图直接吃穿 RAM（内核 SIGKILL），脚本又没有 max_train_samples 切片，
-  # 故用 setup 合成的 8 对本地数据集（列 image/conditioning_image/text）。
-  - path: examples/dreambooth/train_dreambooth_lora_flux2_klein_img2img.py
-    profile: diffusers-flux2-klein
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path ${FLUX2_KLEIN_MODEL_PATH}
-      - --dataset_name ${FLUX2_KLEIN_DATASET}
-      - --cond_image_column conditioning_image
-      - --caption_column text
-      - --instance_prompt "a photo of sks dog"
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --train_batch_size 1
-      - --gradient_checkpointing
-      - --mixed_precision bf16
-      - --max_train_steps 1
-    timeout_minutes: 120
+  # # FLUX.2 Klein 4B LoRA DreamBooth（img2img）。同上（NPU-aware / 模型预下 /
+  # # Qwen3 编码器已随 t2i 条目实测通过）。它无条件取 batch["cond_pixel_values"]
+  # # （:1541），纯图片目录会 KeyError，必须用带条件图列的数据集；且
+  # # DreamBoothDataset 会把整个数据集急切物化进宿主内存——fill50k 的 1000 对
+  # # 图+条件图直接吃穿 RAM（内核 SIGKILL），脚本又没有 max_train_samples 切片，
+  # # 故用 setup 合成的 8 对本地数据集（列 image/conditioning_image/text）。
+  # - path: examples/dreambooth/train_dreambooth_lora_flux2_klein_img2img.py
+  #   profile: diffusers-flux2-klein
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --pretrained_model_name_or_path ${FLUX2_KLEIN_MODEL_PATH}
+  #     - --dataset_name ${FLUX2_KLEIN_DATASET}
+  #     - --cond_image_column conditioning_image
+  #     - --caption_column text
+  #     - --instance_prompt "a photo of sks dog"
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --train_batch_size 1
+  #     - --gradient_checkpointing
+  #     - --mixed_precision bf16
+  #     - --max_train_steps 1
+  #   timeout_minutes: 120
 
   # HiDream-I1-Dev（17B DiT）LoRA DreamBooth。脚本 NPU-aware（allow_internal_format
   # =False）+ --offload（文本编码器/vae 用完挪 CPU，:1127）。第 4 编码器

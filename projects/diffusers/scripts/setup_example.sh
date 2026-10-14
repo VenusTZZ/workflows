@@ -856,8 +856,10 @@ setup_diffusers_hidream() {
   # Llama-3.1-8B-Instruct 用 NousResearch 社区镜像（实测非 gated；4 个权重分片
   # 与 meta 原仓逐字节同大小、tokenizer.json/config 一致；HiDream 只取 32 层
   # hidden_states，不用 LM head/chat template，替换零影响）。跳过 llama 仓
-  # original/ 里 16GB 的 .pth 重复。合计下载 ~64GB。
+  # original/ 里 16GB 的 .pth 重复。合计下载 ~64GB。deepspeed：条目跑
+  # ZeRO-3 launcher（bespoke 函数不查 PROFILE_PIP 表，须在此显式安装）。
   install_example_stack
+  python -m pip install "deepspeed>=0.18.2"
   if python -m pip install hf_transfer; then
     export HF_HUB_ENABLE_HF_TRANSFER=1
     echo "HF_HUB_ENABLE_HF_TRANSFER=1" >> "$GITHUB_ENV"
