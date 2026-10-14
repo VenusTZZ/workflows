@@ -29,7 +29,7 @@ SUPPORTED_PROFILES=(
   diffusers-controlnet-sdxl diffusers-llada2 diffusers-gligen diffusers-controlnet-wds
   diffusers-orpo-wds diffusers-sdxl-full diffusers-lcm-zero3
   diffusers-kandinsky-prior diffusers-multi-subject-inpaint diffusers-pixart
-  diffusers-realfill diffusers-flux2-klein
+  diffusers-realfill diffusers-flux2-klein diffusers-hidream
 )
 profile_known=0
 for _p in "${SUPPORTED_PROFILES[@]}"; do
@@ -785,14 +785,15 @@ PY
 setup_diffusers_flux2_klein() {
   # FLUX.2-klein-4B：BFL 的开放权重档（实测非 gated、匿名可取）。预下到本地
   # 目录（跳过顶层 ~7.2GB 单文件 checkpoint 重复），run 步直接读本地路径；
-  # hf_transfer 并行加速。fill50k（img2img 条目用）是 script 数据集，
-  # 需要 trust_remote_code。
+  # hf_transfer 并行加速。img2img 条目的 DreamBoothDataset 会把整个数据集
+  # 急切物化进宿主内存（fill50k 的 1000 对图+条件图直接把 RAM 吃穿 → 内核
+  # SIGKILL），脚本又没有 max_train_samples 切片参数，所以现场合成 8 对小
+  # 数据集（列 image/conditioning_image/text）。
   install_example_stack
   if python -m pip install hf_transfer; then
     export HF_HUB_ENABLE_HF_TRANSFER=1
     echo "HF_HUB_ENABLE_HF_TRANSFER=1" >> "$GITHUB_ENV"
   fi
-  echo "HF_DATASETS_TRUST_REMOTE_CODE=1" >> "$GITHUB_ENV"
   FLUX2_KLEIN_REPO="black-forest-labs/FLUX.2-klein-4B" python3 - <<'PY'
 import os
 from pathlib import Path
@@ -814,9 +815,88 @@ snapshot_download(
         "vae/*",
     ],
 )
+
+from datasets import Dataset, Features, Image as ImageFeature, Value
+from PIL import Image, ImageDraw
+
+size = 512
+images, conds, captions = [], [], []
+for i in range(8):
+    img = Image.new("RGB", (size, size), (60 + i % 180, 120, 160))
+    ImageDraw.Draw(img).rectangle([64, 64, size - 64, size - 64], outline=(240, 240, 240), width=6)
+    cond = Image.new("RGB", (size, size), (30, 30, 30))
+    ImageDraw.Draw(cond).line([0, (i * 61) % size, size, (i * 97) % size], fill=(255, 255, 255), width=8)
+    images.append(img)
+    conds.append(cond)
+    captions.append(f"a synthetic line drawing scene {i}")
+
+features = Features(
+    {
+        "image": ImageFeature(),
+        "conditioning_image": ImageFeature(),
+        "text": Value("string"),
+    }
+)
+ds = Dataset.from_dict(
+    {"image": images, "conditioning_image": conds, "text": captions}, features=features
+)
+data_dir = Path(os.environ["GITHUB_WORKSPACE"]) / "flux2_klein_img2img_dataset"
+data_dir.mkdir(parents=True, exist_ok=True)
+ds.to_parquet(str(data_dir / "train-00000-of-00001.parquet"))
+
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"FLUX2_KLEIN_MODEL_PATH={dest}\n")
-print(f"pre-downloaded {repo} -> {dest}", flush=True)
+    fh.write(f"FLUX2_KLEIN_DATASET={data_dir}\n")
+print(f"pre-downloaded {repo} -> {dest}; img2img dataset -> {data_dir}", flush=True)
+PY
+}
+
+setup_diffusers_hidream() {
+  # HiDream-I1-Dev（17B DiT + CLIP×2 + T5；仓内不含第 4 编码器）+ 第 4 编码器
+  # Llama-3.1-8B-Instruct 用 NousResearch 社区镜像（实测非 gated；4 个权重分片
+  # 与 meta 原仓逐字节同大小、tokenizer.json/config 一致；HiDream 只取 32 层
+  # hidden_states，不用 LM head/chat template，替换零影响）。跳过 llama 仓
+  # original/ 里 16GB 的 .pth 重复。合计下载 ~64GB。
+  install_example_stack
+  if python -m pip install hf_transfer; then
+    export HF_HUB_ENABLE_HF_TRANSFER=1
+    echo "HF_HUB_ENABLE_HF_TRANSFER=1" >> "$GITHUB_ENV"
+  fi
+  HIDREAM_REPO="HiDream-ai/HiDream-I1-Dev" HIDREAM_LLAMA="NousResearch/Meta-Llama-3.1-8B-Instruct" python3 - <<'PY'
+import os
+from pathlib import Path
+
+from huggingface_hub import snapshot_download
+
+ws = Path(os.environ["GITHUB_WORKSPACE"])
+
+dest = ws / "hidream_model"
+dest.mkdir(parents=True, exist_ok=True)
+snapshot_download(
+    os.environ["HIDREAM_REPO"],
+    local_dir=str(dest),
+    allow_patterns=[
+        "model_index.json",
+        "scheduler/*",
+        "tokenizer/*", "tokenizer_2/*", "tokenizer_3/*",
+        "text_encoder/*", "text_encoder_2/*", "text_encoder_3/*",
+        "transformer/*",
+        "vae/*",
+    ],
+)
+
+llama = ws / "llama31_8b_instruct"
+llama.mkdir(parents=True, exist_ok=True)
+snapshot_download(
+    os.environ["HIDREAM_LLAMA"],
+    local_dir=str(llama),
+    ignore_patterns=["original/*"],
+)
+
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"HIDREAM_MODEL_PATH={dest}\n")
+    fh.write(f"HIDREAM_LLAMA_PATH={llama}\n")
+print(f"pre-downloaded HiDream -> {dest}, llama -> {llama}", flush=True)
 PY
 }
 

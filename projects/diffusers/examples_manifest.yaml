@@ -8,7 +8,7 @@ scan:
   # 对齐收口：原 scan.exclude 的 33 条规则全部迁入
   # unsupported 段（上游自测 / helper / pipeline 模块 / community 整目录等，
   # 带分组注释与理由），scan 只保留 root + include_extensions 两个键。
-  # unsupported 覆盖全部 308 个扫描文件：supported(51) + unsupported(257)。
+  # unsupported 覆盖全部 308 个扫描文件：supported(52) + unsupported(256)。
 
 # 新版 diffusers 需求 huggingface-hub>=1.23，huggingface-hub>=1.23 需求
 # transformers>=5.x，任何 transformers<5.x 的用例都无法跑通
@@ -927,40 +927,41 @@ supported:
   #     - --max_train_steps 1
   #       timeout_minutes: 90
 
-  # FLUX.2 Klein 4B LoRA DreamBooth（t2i）。脚本 NPU-aware（is_torch_npu_available
-  # + --enable_npu_flash_attention 走 set_attention_backend("_native_npu")，全仓
-  # 第二处 NPU 专属接口）；模型 klein-4B 是 BFL 开放权重档（实测非 gated、匿名
-  # 可取），setup 预下 ~15GB（跳过顶层单文件重复）。LoRA + bf16 + offload，冻结
-  # transformer ~7.2GB，a2-1 放得下。风险：文本编码器是 Qwen3ForCausalLM，与
-  # z_image 的 Qwen3Model 同一 modeling_qwen3 注意力路径，transformers 5.x 的
-  # q_proj 形状 bug 可能同样触发——待上卡验证。
-  - path: examples/dreambooth/train_dreambooth_lora_flux2_klein.py
-    profile: diffusers-flux2-klein
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path ${FLUX2_KLEIN_MODEL_PATH}
-      - --instance_data_dir ${FIXTURE_DIR}/images
-      - --instance_prompt "a photo of sks dog"
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --train_batch_size 1
-      - --gradient_checkpointing
-      - --mixed_precision bf16
-      - --max_train_steps 1
-    timeout_minutes: 120
+  # # FLUX.2 Klein 4B LoRA DreamBooth（t2i）。脚本 NPU-aware（is_torch_npu_available
+  # # + --enable_npu_flash_attention 走 set_attention_backend("_native_npu")，全仓
+  # # 第二处 NPU 专属接口）；模型 klein-4B 是 BFL 开放权重档（实测非 gated、匿名
+  # # 可取），setup 预下 ~15GB（跳过顶层单文件重复）。LoRA + bf16 + offload，冻结
+  # # transformer ~7.2GB，a2-1 放得下。风险：文本编码器是 Qwen3ForCausalLM，与
+  # # z_image 的 Qwen3Model 同一 modeling_qwen3 注意力路径，transformers 5.x 的
+  # # q_proj 形状 bug 可能同样触发——待上卡验证。
+  # - path: examples/dreambooth/train_dreambooth_lora_flux2_klein.py
+  #   profile: diffusers-flux2-klein
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --pretrained_model_name_or_path ${FLUX2_KLEIN_MODEL_PATH}
+  #     - --instance_data_dir ${FIXTURE_DIR}/images
+  #     - --instance_prompt "a photo of sks dog"
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --train_batch_size 1
+  #     - --gradient_checkpointing
+  #     - --mixed_precision bf16
+  #     - --max_train_steps 1
+  #   timeout_minutes: 120
 
   # FLUX.2 Klein 4B LoRA DreamBooth（img2img）。同上（NPU-aware / 模型预下 /
-  # Qwen3 风险）。它无条件取 batch["cond_pixel_values"]（:1541），纯图片目录会
-  # KeyError，必须用带条件图列的数据集：fusing/fill50k（列
-  # image/conditioning_image/text，script 数据集需 trust_remote_code，profile
-  # 已设）。
+  # Qwen3 编码器已随 t2i 条目实测通过）。它无条件取 batch["cond_pixel_values"]
+  # （:1541），纯图片目录会 KeyError，必须用带条件图列的数据集；且
+  # DreamBoothDataset 会把整个数据集急切物化进宿主内存——fill50k 的 1000 对
+  # 图+条件图直接吃穿 RAM（内核 SIGKILL），脚本又没有 max_train_samples 切片，
+  # 故用 setup 合成的 8 对本地数据集（列 image/conditioning_image/text）。
   - path: examples/dreambooth/train_dreambooth_lora_flux2_klein_img2img.py
     profile: diffusers-flux2-klein
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --pretrained_model_name_or_path ${FLUX2_KLEIN_MODEL_PATH}
-      - --dataset_name fusing/fill50k
+      - --dataset_name ${FLUX2_KLEIN_DATASET}
       - --cond_image_column conditioning_image
       - --caption_column text
       - --instance_prompt "a photo of sks dog"
@@ -970,6 +971,38 @@ supported:
       - --mixed_precision bf16
       - --max_train_steps 1
     timeout_minutes: 120
+
+  # HiDream-I1-Dev（17B DiT）LoRA DreamBooth。脚本 NPU-aware（allow_internal_format
+  # =False）+ --offload（文本编码器/vae 用完挪 CPU，:1127）。第 4 编码器
+  # Llama-3.1-8B 用 NousResearch 镜像（非 gated；分片与 meta 原仓逐字节同大小，
+  # HiDream 只取 hidden_states 不用 LM head/chat template，替换零影响）——
+  # --pretrained_text_encoder_4 与 --pretrained_tokenizer_4 两个参数都指向它。
+  # a2-4 + ZeRO-3 是撞墙实验（同 qwenimage21 8 卡那轮），三道墙：
+  # 1) :1140 无条件 transformer.to(device)——17B bf16=35GB > 29.49GB 单卡，只有
+  #    zero.Init 在加载时把它分片才放得下；
+  # 2) 既往实测 stage 3 的 zero.Init 会打坏冻结、未被 engine 接管的编码器
+  #    （SDXL CLIP max_position_embeddings: 0 前科）；
+  # 3) host RAM：权重合计 ~64GB（transformer 35 + llama 16 + T5 9.5 + 其它），
+  #    qwen 20B 在 a2-4 上 ~56GB 暂存即被内核 OOM killer SIGKILL。
+  - path: examples/dreambooth/train_dreambooth_lora_hidream.py
+    profile: diffusers-hidream
+    launcher: accelerate-deepspeed-zero3
+    runner: linux-aarch64-a2-4
+    npu_devices: '0,1,2,3'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path ${HIDREAM_MODEL_PATH}
+      - --pretrained_text_encoder_4_name_or_path ${HIDREAM_LLAMA_PATH}
+      - --pretrained_tokenizer_4_name_or_path ${HIDREAM_LLAMA_PATH}
+      - --instance_data_dir ${FIXTURE_DIR}/images
+      - --instance_prompt "a photo of sks dog"
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --train_batch_size 1
+      - --gradient_checkpointing
+      - --mixed_precision bf16
+      - --offload
+      - --max_train_steps 1
+    timeout_minutes: 300
 
 # ===== unsupported（其余全部；后续逐例验证跑通后迁入 supported） =====
 unsupported:
@@ -1053,7 +1086,6 @@ unsupported:
   - examples/dreambooth/train_dreambooth_flux.py
   - examples/dreambooth/train_dreambooth_lora_sd3.py
   - examples/dreambooth/train_dreambooth_sd3.py
-  - examples/dreambooth/train_dreambooth_lora_hidream.py
   - examples/research_projects/sd3_lora_colab/train_dreambooth_lora_sd3_miniature.py
   - examples/dreambooth/train_dreambooth_lora_flux.py
   - examples/dreambooth/train_dreambooth_lora_flux_kontext.py
