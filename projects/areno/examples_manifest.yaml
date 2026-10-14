@@ -289,8 +289,8 @@ supported:
   # common 见 unsupported。
   - path: examples/multimodal/ave_event_recognition/run_agent.py
     profile: ave_event_recognition_npu
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
+    runner: linux-aarch64-a2-4
+    npu_devices: '0,1,2,3'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
     timeout_minutes: 240
     overlay_args:
@@ -309,8 +309,8 @@ supported:
       - --max-steps 1
       - --max-running-prompts 1
       - --max-new-tokens 64
-      - --max-prompt-tokens 8192
-      - --max-context-len 8192
+      - --max-prompt-tokens 4096
+      - --max-context-len 4096
       - --drop-rollout-state
   # # pi：用 pi coding agent（pi.dev）做 ModelScope SWE-smith sqlparse 仓库修复的
   # # agentic RLVR（GRPO）。run_agent.py 驱动外部 pi CLI（Node.js），经二级代理
