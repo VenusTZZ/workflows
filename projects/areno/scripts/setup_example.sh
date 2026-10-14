@@ -156,14 +156,39 @@ install_pi_toolchain() {
   } >> "$GITHUB_ENV"
 }
 
-install_ling_stack() {
-  # Ling（bailing_hybrid）的 KDA 路径两半都依赖 triton：训练 chunk kernel 是
-  # areno 自研 triton kernel（accel/kernels/kda_fla/chunk_intra.py），推理
-  # recurrent 增量直接调 fla.ops.kda.fused_recurrent_kda（accel/npu/kda.py:29，
-  # docstring 明言 "Ascend FLA owns the recurrent kernels"）。npu.txt 的注释点名
+ensure_media_deps() {
+  # requirements/default.txt 的多模态媒体栈在 requirements/npu.txt 里被有意省略。
+  # VL 的 Fast 图像处理器（Qwen2VLImageProcessorFast，见 checkpoint 的
+  # preprocessor_config.json）需要 torchvision：缺它 AutoProcessor.from_pretrained
+  # 抛错，被 load_processor 吞成 None，报 "multimodal rows require a checkpoint
+  # processor"。镜像里带的 torchvision 是残缺 stub（import 能过但没有
+  # transforms.v2，pip 以为已满足不装真包），故强制重装与当前 torch 配对的真包
+  # （--no-deps 只动它自己）；dataset_generator 用 Pillow。
+  local torch_minor tv_ver
+  torch_minor="$(python -c 'import torch; print(torch.__version__.split("+")[0].split(".")[1])')"
+  tv_ver="0.$((torch_minor + 15)).0"  # torch 2.N <-> torchvision 0.(N+15)（2.6->0.21 ... 2.10->0.25）
+  echo "installing torchvision ${tv_ver} to match the local torch"
+  python -m pip install -q --force-reinstall --no-deps "torchvision==${tv_ver}"
+  python -m pip install -q Pillow
+  # 功能校验：不看 torchvision.__version__（残缺 stub 没有该属性）。
+  python - <<'PY'
+import torch
+import torchvision
+import torchvision.transforms.v2  # noqa: F401 - transformers Fast 图像处理器依赖
+
+print("media deps ok: torch", torch.__version__, "torchvision", getattr(torchvision, "__version__", "n/a"), torchvision.__file__)
+PY
+}
+
+install_triton_fla_stack() {
+  # triton-ascend + flash-linear-attention：Ling 的 KDA（训练 chunk kernel 是
+  # areno 自研 triton kernel accel/kernels/kda_fla/chunk_intra.py；推理增量直接调
+  # fla.ops.kda.fused_recurrent_kda，见 accel/npu/kda.py:29）与 Qwen3.5 的
+  # GatedDeltaNet（训练/推理都走 fla 的 chunk/fused_recurrent gated_delta_rule，
+  # qwen3_5/model.py:420 无条件 _require_fla_gdn）都依赖它。npu.txt 的注释点名
   # CANN 配套栈含 triton-ascend，镜像未带——从 Ascend 源补装（--no-deps 防止
   # pip 顺带换 torch）。fla 同样 --no-deps：其依赖里的 triton 会从 PyPI 拉
-  # CUDA 版把 triton-ascend 顶掉，故手动补 einops 即可。
+  # CUDA 版把 triton-ascend 顶掉。
   python -m pip install -q --no-deps --extra-index-url "$ASCEND_PIP_INDEX" "triton-ascend==3.2.2"
   # triton-ascend 3.2.2 的 METADATA 依赖是 vendor 测试环境 pin，不能照装：
   # - triton==3.5.0：wheel 已自带完整 triton 包体，装 PyPI 的会用 CUDA 版覆盖它；
@@ -175,21 +200,25 @@ install_ling_stack() {
   python -m pip install -q pybind11 psutil einops
   python -m pip install -q --no-deps \
     "flash-linear-attention @ git+https://github.com/fla-org/flash-linear-attention.git@e52dbc0ea19d3a40d7ab7f9eed855d2b473994d2"
-  # 与 areno 相同的导入链做功能校验。
+  # 与 areno 相同的导入链做功能校验（覆盖 Ling 的 KDA 与 Qwen3.5 的 GDN 两组）。
   python - <<'PY'
 import triton
-from fla.ops.kda import fused_recurrent_kda  # noqa: F401 - accel/npu/kda.py:29 的调用目标
+from fla.ops.gated_delta_rule import (  # noqa: F401 - Qwen3.5 GDN（dynamo_wrappers.py:17-19）
+    chunk_gated_delta_rule,
+    fused_recurrent_gated_delta_rule,
+)
+from fla.ops.kda import fused_recurrent_kda  # noqa: F401 - Ling KDA 推理（accel/npu/kda.py:29）
 
-print("triton-ascend + fla KDA imports ok: triton", triton.__version__)
+print("triton-ascend + fla ok: triton", triton.__version__)
 PY
 }
 
 # 已知 profile。当前各 profile 共用同一套准备（下面的 AReno NPU 源码构建）；
 # 需要额外依赖的 profile 在这里按 PROFILE 分支。pi 已不支持（QLoRA 为 CUDA-only），
 # 保留 pi_npu 与 install_pi_toolchain 以备将来试非 QLoRA 变体。
-SUPPORTED_PROFILES="bash_game_npu codebreaker_npu coding_npu duelgrid_npu shopping_npu terminal_hacking_npu tictactoe_npu tictactoe_no_tool_npu math_npu alpaca_npu pi_npu"
+SUPPORTED_PROFILES="bash_game_npu codebreaker_npu coding_npu duelgrid_npu shopping_npu terminal_hacking_npu tictactoe_npu tictactoe_no_tool_npu math_npu alpaca_npu tictactoe_image_npu pi_npu"
 case "$PROFILE" in
-  bash_game_npu | codebreaker_npu | coding_npu | duelgrid_npu | shopping_npu | terminal_hacking_npu | tictactoe_npu | tictactoe_no_tool_npu | math_npu | alpaca_npu | pi_npu) ;;
+  bash_game_npu | codebreaker_npu | coding_npu | duelgrid_npu | shopping_npu | terminal_hacking_npu | tictactoe_npu | tictactoe_no_tool_npu | math_npu | alpaca_npu | tictactoe_image_npu | pi_npu) ;;
   *)
     echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
     exit 1
@@ -209,6 +238,7 @@ python -m pip install -q openai httpx
 
 # 逐 profile 的额外工具链（AReno 之外的外部依赖）。
 case "$PROFILE" in
-  bash_game_npu | terminal_hacking_npu) install_ling_stack ;;
+  bash_game_npu | terminal_hacking_npu) install_triton_fla_stack ;;
+  tictactoe_image_npu) ensure_media_deps; install_triton_fla_stack ;;
   pi_npu) install_pi_toolchain ;;
 esac
