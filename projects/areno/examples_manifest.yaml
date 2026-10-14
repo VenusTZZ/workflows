@@ -275,73 +275,79 @@ supported:
   #     - --max-prompt-tokens 8192
   #     - --max-new-tokens 64
   #     - --drop-rollout-state
-  # # ave_event_recognition：Gemma4 音视频事件识别 agentic GRPO（RLVR）。
-  # # run_agent.py 把 10s 视频 + 同步音频以 OpenAI video_url / audio_url 发进本地
-  # # rollout 代理，做一次 report_events 工具调用；reward.py 调外部 OpenAI 兼容
-  # # judge 语义比对事件集合（CI 由 run_example.sh 的标准库存根 judge 提供，引擎
-  # # 只认退出码、不校验奖励数值）。底座 google/gemma-4-E2B-it（权重 10.25GB，
-  # # 单卡可放）。上游数据是整包 AVE，CI 用 setup 生成的 10s 合成音视频 + 单行
-  # # manifest（${AVE_DATASET}）代替。此前 Gemma4 视觉塔在 transformers 5.19 的
-  # # create_bidirectional_mask 抛 IndexError（mask 维数不符），看护已统一钉
-  # # transformers==5.15.*（areno 声明的 gemma4 多模态基线）。组件、数据生成器与
-  # # common 见 unsupported。
-  # - path: examples/multimodal/ave_event_recognition/run_agent.py
-  #   profile: ave_event_recognition_npu
-  #   runner: linux-aarch64-a2-1
-  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
-  #   timeout_minutes: 240
-  #   overlay_args:
-  #     - --ckpt google/gemma-4-E2B-it
-  #     - --dataset-path ${AVE_DATASET}
-  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/multimodal/ave_event_recognition/dataset_loader.py
-  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/multimodal/ave_event_recognition/reward.py
-  #     - --agent-fn ${EXAMPLES_ROOT}/examples/multimodal/ave_event_recognition/run_agent.py
-  #     - --algo grpo
-  #     - --batch-size 1
-  #     - --n-samples 2
-  #     - --mini-bs 1
-  #     - --max-steps 1
-  #     - --max-running-prompts 1
-  #     - --max-new-tokens 64
-  #     - --max-prompt-tokens 8192
-  #     - --max-context-len 8192
-  #     - --drop-rollout-state
-  # pi：用 pi coding agent（pi.dev）做 ModelScope SWE-smith sqlparse 仓库修复的
-  # agentic RLVR（GRPO）。run_agent.py 驱动外部 pi CLI（Node.js），经二级代理
-  # pi_proxy.py 适配流式请求到本地 rollout 代理（保留 token/logprob/routing 回放）；
-  # reward.py 跑 swesmith_verify 的 pytest 验证（0/1）。上游默认配方是单卡 QLoRA
-  # （Ling-3.0-tiny + NF4 + LoRA 32），但 QLoRA 在 areno 源码里 CUDA-only
-  # （engine/config.py:91,308 / worker.py:79）；QLoRA 与 pi 机制正交，故走非
-  # QLoRA 变体：全参训练 Ling（同 bash_game 的 4 卡 TP + adam-4bit +
-  # triton-ascend/fla）。外部 pi CLI + Node.js + fd/ripgrep 与 SWE-smith 数据由
-  # install_pi_toolchain 提供（npmmirror/apt/ModelScope；generate_dataset
-  # --limit 1 只取 1 个任务冒烟）。attempt 预算 32 次调用 / 1800s，timeout 放宽。
-  # 组件见 unsupported。
-  - path: examples/agentic/pi/run_agent.py
-    profile: pi_npu
-    runner: linux-aarch64-a2-4
-    npu_devices: '0,1,2,3'
+  # ave_event_recognition：Gemma4 音视频事件识别 agentic GRPO（RLVR）。
+  # run_agent.py 把 10s 视频 + 同步音频以 OpenAI video_url / audio_url 发进本地
+  # rollout 代理，做一次 report_events 工具调用；reward.py 调外部 OpenAI 兼容
+  # judge 语义比对事件集合（CI 由 run_example.sh 的标准库存根 judge 提供，引擎
+  # 只认退出码、不校验奖励数值）。底座 google/gemma-4-E2B-it（权重 10.25GB）：
+  # 单卡 rollout 可跑通（视频/音频/judge 全过），但全参训练 backward 单卡 29.5GB
+  # 放不下（权重+梯度+优化器状态 ≈41GB），故沿用 duelgrid 同款 gemma 配置——
+  # a2-2 + TP2 + --adam-4bit。上游数据是整包 AVE，CI 用 setup 生成的 10s 合成
+  # 音视频 + 单行 manifest（${AVE_DATASET}）代替；Gemma4 视觉塔此前在
+  # transformers 5.19 的 create_bidirectional_mask 抛 IndexError，看护已统一钉
+  # transformers==5.15.*（areno 声明的 gemma4 多模态基线）。组件、数据生成器与
+  # common 见 unsupported。
+  - path: examples/multimodal/ave_event_recognition/run_agent.py
+    profile: ave_event_recognition_npu
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
     timeout_minutes: 240
     overlay_args:
-      - --ckpt inclusionAI/Ling-3.0-tiny
-      - --tp-size 4
-      - --world-size 4
+      - --ckpt google/gemma-4-E2B-it
+      - --tp-size 2
+      - --world-size 2
       - --adam-4bit
-      - --dataset-path ${ARENO_PI_DATA}
-      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/pi/dataset_loader.py
-      - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/pi/reward.py
-      - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/pi/run_agent.py
+      - --dataset-path ${AVE_DATASET}
+      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/multimodal/ave_event_recognition/dataset_loader.py
+      - --reward-fn-path ${EXAMPLES_ROOT}/examples/multimodal/ave_event_recognition/reward.py
+      - --agent-fn ${EXAMPLES_ROOT}/examples/multimodal/ave_event_recognition/run_agent.py
       - --algo grpo
       - --batch-size 1
       - --n-samples 2
       - --mini-bs 1
       - --max-steps 1
-      - --max-running-prompts 2
-      - --max-context-len 32768
-      - --max-new-tokens 4096
-      - --disable-thinking
+      - --max-running-prompts 1
+      - --max-new-tokens 64
+      - --max-prompt-tokens 8192
+      - --max-context-len 8192
       - --drop-rollout-state
+  # # pi：用 pi coding agent（pi.dev）做 ModelScope SWE-smith sqlparse 仓库修复的
+  # # agentic RLVR（GRPO）。run_agent.py 驱动外部 pi CLI（Node.js），经二级代理
+  # # pi_proxy.py 适配流式请求到本地 rollout 代理（保留 token/logprob/routing 回放）；
+  # # reward.py 跑 swesmith_verify 的 pytest 验证（0/1）。上游默认配方是单卡 QLoRA
+  # # （Ling-3.0-tiny + NF4 + LoRA 32），但 QLoRA 在 areno 源码里 CUDA-only
+  # # （engine/config.py:91,308 / worker.py:79）；QLoRA 与 pi 机制正交，故走非
+  # # QLoRA 变体：全参训练 Ling（同 bash_game 的 4 卡 TP + adam-4bit +
+  # # triton-ascend/fla）。外部 pi CLI + Node.js + fd/ripgrep 与 SWE-smith 数据由
+  # # install_pi_toolchain 提供（npmmirror/apt/ModelScope；generate_dataset
+  # # --limit 1 只取 1 个任务冒烟）。attempt 预算 32 次调用 / 1800s，timeout 放宽。
+  # # 组件见 unsupported。
+  # - path: examples/agentic/pi/run_agent.py
+  #   profile: pi_npu
+  #   runner: linux-aarch64-a2-4
+  #   npu_devices: '0,1,2,3'
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+  #   timeout_minutes: 240
+  #   overlay_args:
+  #     - --ckpt inclusionAI/Ling-3.0-tiny
+  #     - --tp-size 4
+  #     - --world-size 4
+  #     - --adam-4bit
+  #     - --dataset-path ${ARENO_PI_DATA}
+  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/pi/dataset_loader.py
+  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/pi/reward.py
+  #     - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/pi/run_agent.py
+  #     - --algo grpo
+  #     - --batch-size 1
+  #     - --n-samples 2
+  #     - --mini-bs 1
+  #     - --max-steps 1
+  #     - --max-running-prompts 2
+  #     - --max-context-len 32768
+  #     - --max-new-tokens 4096
+  #     - --disable-thinking
+  #     - --drop-rollout-state
 unsupported:
   # =====================================================================
   # ===== 工具类套件
