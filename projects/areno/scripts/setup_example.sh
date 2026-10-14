@@ -252,17 +252,17 @@ PY
 
 stage_ave_fixture() {
   # 上游示例的数据是整包 AVE（数十 GB 视频），CI 用一段短合成音视频 + 单行
-  # manifest 代替，让 loader/agent/reward/train 全链路照常跑。片段刻意压到
-  # 2s@4fps（8 帧）：训练 backward 的激活/推理缓存随 token 数增长，10s@8fps
-  # （80 帧）在 a2-2 上 backward OOM。judge 由 run_example.sh 的存根服务提供
-  # （引擎不校验奖励数值、只认退出码）。
+  # manifest 代替，让 loader/agent/reward/train 全链路照常跑。片段必须 >= 32 帧：
+  # 视频 processor 固定采样 num_frames=32，少于此会报 "num_frames exceeds
+  # total_num_frames"；故取 5s@8fps = 40 帧（时长不影响采样后的视频 token 数）。
+  # judge 由 run_example.sh 的存根服务提供（引擎不校验奖励数值、只认退出码）。
   local dir="$GITHUB_WORKSPACE/ave-fixture"
   local manifest="$dir/manifest.jsonl"
   if [[ ! -f "$manifest" ]]; then
     mkdir -p "$dir"
     ffmpeg -nostdin -loglevel error -y \
-      -f lavfi -i "testsrc=size=224x224:rate=4:duration=2" \
-      -f lavfi -i "sine=frequency=440:sample_rate=16000:duration=2" \
+      -f lavfi -i "testsrc=size=224x224:rate=8:duration=5" \
+      -f lavfi -i "sine=frequency=440:sample_rate=16000:duration=5" \
       -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest "$dir/clip.mp4"
     ffmpeg -nostdin -loglevel error -y -i "$dir/clip.mp4" -vn -ac 1 -ar 16000 "$dir/clip.wav"
     python - "$dir" <<'PY'
@@ -281,7 +281,7 @@ row = {
     "event_classes": ["Speech"],
     "qualities": ["good"],
     "start_seconds": 0.0,
-    "end_seconds": 2.0,
+    "end_seconds": 5.0,
 }
 (root / "manifest.jsonl").write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
 print(f"wrote ave fixture manifest {root / 'manifest.jsonl'}")
