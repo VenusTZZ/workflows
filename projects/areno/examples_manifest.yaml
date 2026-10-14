@@ -22,10 +22,11 @@ supported:
   # README 用 Ling-3.0-tiny（bailing_hybrid MoE，权重 15.8GB ≈ 7.9B 参数）：
   # 单卡 29.5GB 在 prepare_infer_weights 即 OOM（实测已占 28.85GB），全参 RL
   # 训练总需 ≈54GB（权重+梯度+优化器状态），故 4 卡 TP + --adam-4bit（上游
-  # 原配方，NPU 有 4bit 优化器 kernel），每卡 ≈13.5GB。KDA/线性注意力/因果
-  # 卷积/MoE 均走 areno 自研 NPU kernel（RLVR 流程不依赖 fla）。数据走仓内
-  # fixture（fixtures/ci_bash_game_8.jsonl，上游 dataset_generator.py seed 42
-  # 生成）；组件与伴随物见 unsupported。
+  # 原配方，NPU 有 4bit 优化器 kernel），每卡 ≈13.5GB。KDA 训练 chunk kernel
+  # 为 areno 自研 triton kernel、推理增量直接调 fla（accel/npu/kda.py:29），
+  # 依赖 triton-ascend + flash-linear-attention（setup 的 install_ling_stack
+  # 补装）。数据走仓内 fixture（fixtures/ci_bash_game_8.jsonl，上游
+  # dataset_generator.py seed 42 生成）；组件与伴随物见 unsupported。
   - path: examples/agentic/bash_game/run_agent.py
     profile: bash_game_npu
     runner: linux-aarch64-a2-4
@@ -92,36 +93,36 @@ supported:
   #     - --max-prompt-tokens 4096
   #     - --max-new-tokens 128
   #     - --max-context-len 4096
-  # duelgrid：回合制网格战术游戏 RLVR（GSPO）。run_agent.py 经本地 rollout 代理
-  # 做一次 choose_action 工具调用（结构化 JSON 动作列表），reward.py 用规则引擎
-  # 打分（含未耗能量惩罚）。底座按上游 README 用 gemma-4-E2B-it（权重
-  # 10.25GB ≈ 5.1B 参数）：单卡 rollout 可过、训练 backward 的 embedding 梯度
-  # 需 4.38GB 时 OOM（实测已占 25.33GB），全参 RL 训练总需 ≈41GB，故 2 卡 TP +
-  # --adam-4bit（NPU 有 4bit 优化器 kernel），每卡 ≈20.5GB。数据走仓内
-  # fixture（fixtures/ci_duelgrid_8.jsonl，上游 dataset_generator.py seed 2026
-  # 生成）；组件与 web_ui 见 unsupported。
-  - path: examples/agentic/duelgrid/run_agent.py
-    profile: duelgrid_npu
-    runner: linux-aarch64-a2-2
-    npu_devices: '0,1'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
-    timeout_minutes: 120
-    overlay_args:
-      - --ckpt google/gemma-4-E2B-it
-      - --tp-size 2
-      - --world-size 2
-      - --adam-4bit
-      - --dataset-path ${FIXTURE_DIR}/ci_duelgrid_8.jsonl
-      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/duelgrid/dataset_loader.py
-      - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/duelgrid/reward.py
-      - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/duelgrid/run_agent.py
-      - --algo gspo
-      - --batch-size 2
-      - --n-samples 2
-      - --mini-bs 1
-      - --max-steps 1
-      - --max-prompt-tokens 2048
-      - --max-new-tokens 64
+  # # duelgrid：回合制网格战术游戏 RLVR（GSPO）。run_agent.py 经本地 rollout 代理
+  # # 做一次 choose_action 工具调用（结构化 JSON 动作列表），reward.py 用规则引擎
+  # # 打分（含未耗能量惩罚）。底座按上游 README 用 gemma-4-E2B-it（权重
+  # # 10.25GB ≈ 5.1B 参数）：单卡 rollout 可过、训练 backward 的 embedding 梯度
+  # # 需 4.38GB 时 OOM（实测已占 25.33GB），全参 RL 训练总需 ≈41GB，故 2 卡 TP +
+  # # --adam-4bit（NPU 有 4bit 优化器 kernel），每卡 ≈20.5GB。数据走仓内
+  # # fixture（fixtures/ci_duelgrid_8.jsonl，上游 dataset_generator.py seed 2026
+  # # 生成）；组件与 web_ui 见 unsupported。
+  # - path: examples/agentic/duelgrid/run_agent.py
+  #   profile: duelgrid_npu
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0,1'
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+  #   timeout_minutes: 120
+  #   overlay_args:
+  #     - --ckpt google/gemma-4-E2B-it
+  #     - --tp-size 2
+  #     - --world-size 2
+  #     - --adam-4bit
+  #     - --dataset-path ${FIXTURE_DIR}/ci_duelgrid_8.jsonl
+  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/duelgrid/dataset_loader.py
+  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/duelgrid/reward.py
+  #     - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/duelgrid/run_agent.py
+  #     - --algo gspo
+  #     - --batch-size 2
+  #     - --n-samples 2
+  #     - --mini-bs 1
+  #     - --max-steps 1
+  #     - --max-prompt-tokens 2048
+  #     - --max-new-tokens 64
   # # shopping：多轮工具调用购物 kit 任务 RLVR（GSPO）。run_agent.py 固定四轮工具
   # # 序列 search_catalog -> inspect_items -> check_kit -> submit_bundle（每轮
   # # tool_choice 强制单工具），reward.py 校验最终 bundle 满足类别/特征/预算约束并
@@ -147,8 +148,9 @@ supported:
   # 经本地 rollout 代理做一次 submit_candidates 工具调用（对可观测内存转储里的
   # 候选词过滤），reward.py 用稠密非对称奖励（多猜重罚、漏猜轻罚）。底座按上游
   # README 用 Ling-3.0-tiny（同 bash_game：单卡 OOM，4 卡 TP + --adam-4bit，
-  # 每卡 ≈13.5GB）。数据走仓内 fixture（fixtures/ci_terminal_hacking_8.jsonl，
-  # 上游 dataset_generator.py seed 2026 生成）；组件与 web_ui 见 unsupported。
+  # 每卡 ≈13.5GB；KDA 依赖 triton-ascend + fla，setup 的 install_ling_stack
+  # 补装）。数据走仓内 fixture（fixtures/ci_terminal_hacking_8.jsonl，上游
+  # dataset_generator.py seed 2026 生成）；组件与 web_ui 见 unsupported。
   - path: examples/agentic/terminal_hacking/run_agent.py
     profile: terminal_hacking_npu
     runner: linux-aarch64-a2-4

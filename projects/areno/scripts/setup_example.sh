@@ -156,6 +156,27 @@ install_pi_toolchain() {
   } >> "$GITHUB_ENV"
 }
 
+install_ling_stack() {
+  # Ling（bailing_hybrid）的 KDA 路径两半都依赖 triton：训练 chunk kernel 是
+  # areno 自研 triton kernel（accel/kernels/kda_fla/chunk_intra.py），推理
+  # recurrent 增量直接调 fla.ops.kda.fused_recurrent_kda（accel/npu/kda.py:29，
+  # docstring 明言 "Ascend FLA owns the recurrent kernels"）。npu.txt 的注释点名
+  # CANN 配套栈含 triton-ascend，镜像未带——从 Ascend 源补装（--no-deps 防止
+  # pip 顺带换 torch）。fla 同样 --no-deps：其依赖里的 triton 会从 PyPI 拉
+  # CUDA 版把 triton-ascend 顶掉，故手动补 einops 即可。
+  python -m pip install -q --no-deps --extra-index-url "$ASCEND_PIP_INDEX" "triton-ascend==3.2.2"
+  python -m pip install -q einops
+  python -m pip install -q --no-deps \
+    "flash-linear-attention @ git+https://github.com/fla-org/flash-linear-attention.git@e52dbc0ea19d3a40d7ab7f9eed855d2b473994d2"
+  # 与 areno 相同的导入链做功能校验。
+  python - <<'PY'
+import triton
+from fla.ops.kda import fused_recurrent_kda  # noqa: F401 - accel/npu/kda.py:29 的调用目标
+
+print("triton-ascend + fla KDA imports ok: triton", triton.__version__)
+PY
+}
+
 # 已知 profile。当前各 profile 共用同一套准备（下面的 AReno NPU 源码构建）；
 # 需要额外依赖的 profile 在这里按 PROFILE 分支。pi 已不支持（QLoRA 为 CUDA-only），
 # 保留 pi_npu 与 install_pi_toolchain 以备将来试非 QLoRA 变体。
@@ -181,5 +202,6 @@ python -m pip install -q openai httpx
 
 # 逐 profile 的额外工具链（AReno 之外的外部依赖）。
 case "$PROFILE" in
+  bash_game_npu | terminal_hacking_npu) install_ling_stack ;;
   pi_npu) install_pi_toolchain ;;
 esac
