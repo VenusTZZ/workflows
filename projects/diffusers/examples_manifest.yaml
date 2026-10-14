@@ -1001,7 +1001,7 @@ supported:
       - --mixed_precision bf16
       - --offload
       - --max_train_steps 1
-    timeout_minutes: 300
+    timeout_minutes: 600
 
   # # AutoencoderRAE（research_projects）：冻结 encoder、只训 decoder 的 RAE 自编码器
   # # 训练。无 cuda 硬编码（全 accelerator.device），依赖标准栈（diffusers.AutoencoderRAE
