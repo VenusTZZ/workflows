@@ -16,15 +16,31 @@ fi
 PROFILE="$1"
 
 # Validate the profile before installing anything (contract: unknown
-# profile must exit non-zero before any install).
-SUPPORTED_PROFILES="diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix diffusers-kandinsky diffusers-research diffusers-research-plain diffusers-t2i-adapter diffusers-text-to-image diffusers-textual-inversion diffusers-unconditional diffusers-vqgan diffusers-sdxl-online diffusers-flux diffusers-sana diffusers-lumina2 diffusers-z-image diffusers-qwen-image diffusers-amused diffusers-cogvideo diffusers-cogvideo-i2v diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet diffusers-controlnet-sdxl diffusers-llada2 diffusers-gligen"
-case "$PROFILE" in
-  diffusers-sdxl|diffusers-sd15|diffusers-dreambooth|diffusers-instruct-pix2pix|diffusers-kandinsky|diffusers-research|diffusers-research-plain|diffusers-t2i-adapter|diffusers-text-to-image|diffusers-textual-inversion|diffusers-unconditional|diffusers-vqgan|diffusers-sdxl-online|diffusers-flux|diffusers-sana|diffusers-lumina2|diffusers-z-image|diffusers-qwen-image|diffusers-amused|diffusers-cogvideo|diffusers-cogvideo-i2v|diffusers-lcm|diffusers-lcm-sdxl|diffusers-controlnet|diffusers-controlnet-sdxl|diffusers-llada2|diffusers-gligen) ;;
-  *)
-    echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
-    exit 1
-    ;;
-esac
+# profile must exit non-zero before any install). This array is the single
+# profile registry; a new profile also needs a PROFILE_* table entry or a
+# bespoke setup_<profile>() function (see the Profiles section).
+SUPPORTED_PROFILES=(
+  diffusers-sdxl diffusers-sd15 diffusers-dreambooth diffusers-instruct-pix2pix
+  diffusers-kandinsky diffusers-research diffusers-research-plain diffusers-t2i-adapter
+  diffusers-text-to-image diffusers-textual-inversion diffusers-unconditional
+  diffusers-vqgan diffusers-sdxl-online diffusers-flux diffusers-sana diffusers-lumina2
+  diffusers-z-image diffusers-qwen-image diffusers-amused diffusers-cogvideo
+  diffusers-cogvideo-i2v diffusers-lcm diffusers-lcm-sdxl diffusers-controlnet
+  diffusers-controlnet-sdxl diffusers-llada2 diffusers-gligen diffusers-controlnet-wds
+  diffusers-orpo-wds diffusers-sdxl-full diffusers-lcm-zero3
+  diffusers-kandinsky-prior diffusers-multi-subject-inpaint diffusers-pixart
+  diffusers-realfill
+)
+profile_known=0
+for _p in "${SUPPORTED_PROFILES[@]}"; do
+  if [[ "$_p" == "$PROFILE" ]]; then
+    profile_known=1
+  fi
+done
+if [[ "$profile_known" != 1 ]]; then
+  echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES[*]})" >&2
+  exit 1
+fi
 
 CLUSTER_PIP_HOST=cache-service.nginx-pypi-cache.svc.cluster.local
 export CLUSTER_PIP_INDEX="http://${CLUSTER_PIP_HOST}/pypi/simple"
@@ -119,17 +135,19 @@ install_example_stack() {
     "transformers>=5.0,<6.0" "accelerate>=1.0,<2.0" "peft>=0.6" \
     "datasets<4.0.0" ftfy tensorboard Jinja2 sentencepiece "torchvision==0.24.0" \
     prodigyopt "modelscope==1.37.0" wandb
-  python -c "import diffusers, transformers, accelerate, peft; print('diffusers', diffusers.__version__, '/ transformers', transformers.__version__, '/ accelerate', accelerate.__version__, '/ peft', peft.__version__)"
+  python -c "import diffusers, transformers, accelerate, peft; print('diffusers', diffusers.__version__, '/ transformers',\
+    transformers.__version__, '/ accelerate', accelerate.__version__, '/ peft', peft.__version__)"
 }
 
 # download_assets <what>: comma-separated tokens from
-# {sdxl, sdxl-vae, sd15, 3d-icon, cogvideo, ip-adapter, sana-sprint}. Each token exports a path to
-# GITHUB_ENV under the name overlay_args reference:
-#   sdxl      -> SDXL_BASE_PATH    (AI-ModelScope/stable-diffusion-xl-base-1.0)
-#   sdxl-vae  -> SDXL_VAE_PATH     (AI-ModelScope/sdxl-vae-fp16-fix)
-#   sd15      -> SD15_MODEL_PATH   (AI-ModelScope/stable-diffusion-v1-5)
-#   3d-icon   -> THREE_D_ICON_PATH (hf-mirror linoyts/3d_icon)
-#   cogvideo  -> COGVIDEOX_MODEL_PATH + COGVIDEOX_DATASET_DIR
+# {sdxl, sdxl-vae, sd15, sd15-inpaint, 3d-icon, cogvideo, sana-sprint}. Each token
+# exports a path to GITHUB_ENV under the name overlay_args reference:
+#   sdxl         -> SDXL_BASE_PATH      (AI-ModelScope/stable-diffusion-xl-base-1.0)
+#   sdxl-vae     -> SDXL_VAE_PATH       (AI-ModelScope/sdxl-vae-fp16-fix)
+#   sd15         -> SD15_MODEL_PATH     (AI-ModelScope/stable-diffusion-v1-5)
+#   sd15-inpaint -> SD15_INPAINT_PATH   (AI-ModelScope/stable-diffusion-inpainting)
+#   3d-icon      -> THREE_D_ICON_PATH   (hf-mirror linoyts/3d_icon)
+#   cogvideo     -> COGVIDEOX_MODEL_PATH + COGVIDEOX_DATASET_DIR
 download_assets() {
   DIFFUSERS_DOWNLOAD="$1" python - <<'PY'
 import os
@@ -252,6 +270,26 @@ if "sd15" in WANT:
         ignore_file_pattern=["*.fp16.*", "*.bin"],
     )
 
+# SD 1.5 inpainting (9-channel unet: 4 latent + 4 masked-latent + 1 mask).
+# Only entries that train an inpainting unet need it. Same component-only
+# filter as SD1.5, plus safety_checker: realfill's final
+# StableDiffusionInpaintPipeline.from_pretrained only overrides unet/text_encoder
+# (no safety_checker=None), so that component must be on disk too.
+if "sd15-inpaint" in WANT:
+    snapshot(
+        "SD15_INPAINT_PATH",
+        "AI-ModelScope/stable-diffusion-inpainting",
+        allow_file_pattern=[
+            "*.json", "*.txt", "*.model",
+            "unet/*", "vae/*",
+            "text_encoder/*", "tokenizer/*",
+            "scheduler/*", "feature_extractor/*", "safety_checker/*",
+        ],
+        # This repo ships only .bin + *.fp16.safetensors (no full-precision
+        # safetensors), so keep .bin and drop only the fp16 duplicates.
+        ignore_file_pattern=["*.fp16.*"],
+    )
+
 # SD 1.4 (the dreambooth examples' README base model). Same component-only
 # filter as SD1.5.
 if "sd14" in WANT:
@@ -328,27 +366,6 @@ if "3d-icon" in WANT:
         failures.append(f"linoyts/3d_icon: {type(exc).__name__}: {exc}")
         print(f"FAIL linoyts/3d_icon: {exc}", flush=True)
 
-# ip-adapter: CLIP image encoders for the IP-Adapter tutorials. The tutorials
-# call CLIPVisionModelWithProjection.from_pretrained(<path>) with no subfolder,
-# but the upstream repo keeps the encoders under models/image_encoder (SD1.5)
-# and sdxl_models/image_encoder (SDXL); point --image_encoder_path at the local
-# subdirs. ModelScope (AI-ModelScope/IP-Adapter) carries the same shas as
-# h94/IP-Adapter, avoiding the Xet-backed hf-mirror download of the weights.
-if "ip-adapter" in WANT:
-    try:
-        local = Path(
-            snapshot_download(
-                "AI-ModelScope/IP-Adapter",
-                cache_dir=str(MODEL_CACHE),
-                allow_file_pattern=["models/image_encoder/*", "sdxl_models/image_encoder/*"],
-            )
-        )
-        export("IP_ADAPTER_IMAGE_ENCODER_PATH", str(local / "models" / "image_encoder"))
-        export("IP_ADAPTER_SDXL_IMAGE_ENCODER_PATH", str(local / "sdxl_models" / "image_encoder"))
-    except Exception as exc:  # noqa: BLE001
-        failures.append(f"AI-ModelScope/IP-Adapter: {type(exc).__name__}: {exc}")
-        print(f"FAIL AI-ModelScope/IP-Adapter: {exc}", flush=True)
-
 # sana-sprint: the SANA-Sprint teacher model for research_projects/sana. The
 # script reads <path>/transformer/diffusion_pytorch_model.safetensors directly
 # (load_file, not from_pretrained), so --pretrained_model_name_or_path must be
@@ -381,156 +398,53 @@ PY
 # Profiles
 # ---------------------------------------------------------------
 #
-# Convention: install_example_stack() is the common stack. It already covers
-# everything every example dir's requirements.txt asks for EXCEPT the
-# per-dir extras below (transformers/accelerate/peft/datasets/torchvision/
-# ftfy/tensorboard/Jinja2/sentencepiece are all in the base; datasets is
-# pinned <4.0.0 project-wide). Each setup_diffusers_<profile>() adds only the
-# delta for its example dir, then pre-downloads that dir's model/dataset:
-#
-#   advanced_diffusion_training : base only
-#   amused                      : base only (no requirements.txt upstream)
-#   cogvideo                    : + decord2, imageio, imageio-ffmpeg
-#   consistency_distillation    : + webdataset, braceexpand
-#   controlnet                  : base only (datasets already pinned)
-#
-# NOTE: when adding a new example, diff its requirements.txt against the base
-# and add the delta here; never `pip install -r` it verbatim (it pins to git
-# main / loose versions and pulls CUDA-only deps).
+# install_example_stack() is the common stack; a profile declares only its
+# delta on top of it in the tables below, and profiles absent from all
+# three tables get the base stack alone. When adding a new example, diff
+# its requirements.txt against the base, add the profile to the
+# SUPPORTED_PROFILES registry at the top, and extend the tables (or add a
+# setup_<profile>() function for genuinely bespoke steps); never
+# `pip install -r` it verbatim (it pins to git main / loose versions and
+# pulls CUDA-only deps).
 
-# diffusers-sdxl: SDXL advanced dreambooth/LoRA training example. Uses the
-# tiny HF model at run time, so no ModelScope pre-download.
-setup_diffusers_sdxl() {
-  install_example_stack
-}
+# deepspeed serves the accelerate-deepspeed (ZeRO-3) launcher; decord2 is the
+# Ascend/aarch64 build of decord (plain decord has no NPU wheel).
+declare -A PROFILE_PIP=(
+  [diffusers-text-to-image]="deepspeed>=0.18.2"
+  [diffusers-flux]="deepspeed>=0.18.2 webdataset braceexpand"
+  [diffusers-vqgan]="timm"
+  [diffusers-lcm]="webdataset braceexpand"
+  [diffusers-lcm-sdxl]="webdataset braceexpand"
+  [diffusers-cogvideo]="decord2 imageio imageio-ffmpeg"
+  [diffusers-cogvideo-i2v]="decord2 imageio imageio-ffmpeg"
+  [diffusers-lumina2]="deepspeed>=0.18.2"
+  [diffusers-z-image]="deepspeed>=0.18.2"
+  [diffusers-qwen-image]="deepspeed>=0.18.2"
+  [diffusers-sdxl-full]="deepspeed>=0.18.2"
+  [diffusers-lcm-zero3]="deepspeed>=0.18.2 webdataset braceexpand"
+  [diffusers-controlnet-sdxl]="deepspeed>=0.18.2"
+  [diffusers-kandinsky-prior]="deepspeed>=0.18.2"
+)
 
-# diffusers-sd15: SD1.5 advanced dreambooth/LoRA training example.
-setup_diffusers_sd15() {
-  install_example_stack
-  download_assets sd15,3d-icon
-}
+# download_assets tokens (comma-separated) for the profile's models/datasets.
+declare -A PROFILE_ASSETS=(
+  [diffusers-sd15]="sd15,3d-icon"
+  [diffusers-dreambooth]="sd15"
+  [diffusers-instruct-pix2pix]="sd15"
+  [diffusers-research]="sd15"
+  [diffusers-text-to-image]="sd15"
+  [diffusers-textual-inversion]="sd15"
+  [diffusers-controlnet]="sd15"
+  [diffusers-lcm]="sd15"
+  [diffusers-cogvideo]="cogvideo"
+  [diffusers-cogvideo-i2v]="cogvideo-dataset"
+)
 
-# diffusers-dreambooth: SD1.5 dreambooth / dreambooth-LoRA training examples.
-# The dataset is the fixture image (fixtures/DOG.jpg). The model comes from
-# ModelScope as a LOCAL dir (SD15_MODEL_PATH): both scripts build the full
-# DiffusionPipeline from --pretrained_model_name_or_path at the end of
-# training, and a repo id there always calls the Hub API (model_info,
-# pipeline_utils.py:1649) for the file list - hf-mirror's /api endpoint is
-# flaky from the runner pool (same class as the cache-seed fetch_sha
-# timeouts) while the file CDN (/resolve/) is fine, so the run trained fine
-# and then died on the final save. A local path skips the network entirely.
-setup_diffusers_dreambooth() {
-  install_example_stack
-  download_assets sd15
-}
-
-# diffusers-instruct-pix2pix: SD1.5 InstructPix2Pix. The dataset
-# (fusing/instructpix2pix-1000-samples) is fetched by the example at run time.
-setup_diffusers_instruct_pix2pix() {
-  install_example_stack
-  download_assets sd15
-}
-
-# diffusers-kandinsky: Kandinsky 2.2 decoder training. Base only; the model
-# (kandinsky-community/kandinsky-2-2-decoder, no ModelScope mirror) and the
-# dataset are fetched by the example at run time.
-setup_diffusers_kandinsky() {
-  install_example_stack
-}
-
-# diffusers-research: research_projects SD1.5 training examples. Base + SD1.5
-# predownload; datasets (naruto / fixtures/DOG.jpg) at run time.
-setup_diffusers_research() {
-  install_example_stack
-  download_assets sd15
-}
-
-# diffusers-research-plain: research_projects examples that fetch their own
-# model + dataset at run time (cifar10 / inpainting / instruct-pix2pix /
-# wuerstchen-prior / sd-vae-ft-mse). Base only.
-setup_diffusers_research_plain() {
-  install_example_stack
-  # autoencoderkl needs lpips (perceptual loss) + taming_transformers;
-  # the ip_adapter tutorials import the `ip_adapter` PyPI package, whose
-  # requirements.txt (not install_requires) pulls einops + safetensors, so
-  # pip does not fetch them — install them explicitly.
-  python -m pip install lpips taming_transformers ip_adapter einops safetensors
-  # ip_adapter 0.1.0 (the ONLY PyPI release) does `from
-  # diffusers.pipelines.controlnet import MultiControlNetModel` at module
-  # level; that re-export shim was dropped in diffusers 0.41 while the class
-  # still lives at diffusers.models.controlnets.multicontrolnet. The
-  # tutorials only use ImageProjModel / Resampler / the vendored attention
-  # processors (pure torch), so rewrite that single import in the installed
-  # copy. Idempotent: a no-op if a fixed ip_adapter release ever lands.
-  python3 - <<'PY'
-import importlib.util
-from pathlib import Path
-
-# NB: never `import ip_adapter` here - importing the package executes the very
-# module-level import we are about to patch (chicken-and-egg, cost one CI
-# round). find_spec locates the installed copy without executing anything.
-spec = importlib.util.find_spec("ip_adapter")
-if spec is None or spec.origin is None:
-    raise SystemExit("ip_adapter is not installed; cannot patch")
-target = Path(spec.origin).parent / "ip_adapter.py"
-text = target.read_text()
-old = "from diffusers.pipelines.controlnet import MultiControlNetModel"
-new = "from diffusers.models.controlnets.multicontrolnet import MultiControlNetModel"
-if old in text:
-    target.write_text(text.replace(old, new))
-    print(f"patched {target}", flush=True)
-else:
-    print(f"no patch needed: {target}", flush=True)
-PY
-  # The IP-Adapter tutorials take the CLIP image encoder as a local path; the
-  # repo keeps it under models/image_encoder + sdxl_models/image_encoder.
-  download_assets ip-adapter
-}
-
-# diffusers-t2i-adapter: T2I-Adapter SDXL. The tiny SDXL / tiny adapter models
-# and the fill10 dataset are fetched via hf-mirror at run time. Base only.
-setup_diffusers_t2i_adapter() {
-  install_example_stack
-}
-
-# diffusers-text-to-image: text_to_image SD1.5 / SDXL (full + LoRA) examples.
-# Models/dataset fetched via hf-mirror at run time. deepspeed is required by
-# the accelerate-deepspeed launcher used by the full SDXL fine-tune (ZeRO-3).
-setup_diffusers_text_to_image() {
-  install_example_stack
-  download_assets sd15
-  python -m pip install "deepspeed>=0.18.2"
-}
-
-# diffusers-textual-inversion: textual_inversion SD1.5 / SDXL examples. Tiny
-# models are fetched via hf-mirror at run time; the dataset is the fixture
-# image (fixtures/DOG.jpg). Base only.
-setup_diffusers_textual_inversion() {
-  install_example_stack
-  download_assets sd15
-}
-
-# diffusers-unconditional: unconditional_image_generation (DDPM 64px). The
-# ddpm_dummy config and dummy_image_class_data dataset are fetched via
-# hf-mirror at run time. Base only.
-setup_diffusers_unconditional() {
-  install_example_stack
-}
-
-# diffusers-vqgan: VQGAN training (VQModel + Paella discriminator + timm
-# perceptual loss). timm is the example's own requirement; the dataset is the
-# tiny dummy_image_text_data and timm vgg19 weights are fetched at run time.
-setup_diffusers_vqgan() {
-  install_example_stack
-  python -m pip install timm
-}
-
-# diffusers-sdxl-online: SDXL examples that pull the model + datasets online
-# (hf-mirror) at run time, using the fp16 variant (~6.6GB) to keep the
-# download small. Base only.
-setup_diffusers_sdxl_online() {
-  install_example_stack
-}
+# fusing/fill50k is a script-based dataset, so the controlnet examples need it.
+declare -A PROFILE_ENV=(
+  [diffusers-controlnet]="HF_DATASETS_TRUST_REMOTE_CODE=1"
+  [diffusers-controlnet-sdxl]="HF_DATASETS_TRUST_REMOTE_CODE=1"
+)
 
 # diffusers-gligen: research_projects/gligen text-box training. Base stack only:
 # dataset.py needs just torch/PIL/torchvision, and make_datasets.py's
@@ -580,117 +494,311 @@ print(f"prepared gligen dataset at {data_path} (images in {image_dir})", flush=T
 PY
 }
 
-# diffusers-flux: full-model / large-model examples that need DeepSpeed ZeRO-3
-# sharding (launcher: accelerate-deepspeed) on multi-card runners. deepspeed
-# ships its own NPU accelerator and auto-detects torch_npu; webdataset +
-# braceexpand serve the LCM wds example.
-setup_diffusers_flux() {
+# controlnet-webdataset: webdataset pinned to 0.2.86 (the example's vendored
+# tar iterators predate the 0.2.96 shard-end separator and KeyError on it);
+# its dataloader hardcodes a 1000-sample shuffle buffer, so the shard must
+# carry >1000 filter-passing samples - synthesized here because the upstream
+# laion URL is unreachable. Each sample: jpg+png (image and control_image
+# rename from image extensions), txt, and a json with original_width/height
+# >= 512 + pwatermark for WebdatasetFilter. NB pwatermark must be truthy AND
+# <= 0.5: the filter computes `(x or 1.0)`, so 0.0 evaluates to 1.0 and the
+# sample is rejected - a rejected sample never enters the shuffle buffer and
+# the run hangs silently (pwatermark=0.0 here cost a 55-min CI hang; 0.1
+# passes). opencv-headless for the canny control image.
+setup_diffusers_controlnet_wds() {
   install_example_stack
-  python -m pip install "deepspeed>=0.18.2" webdataset braceexpand
+  # deepspeed: the entry runs with launcher=accelerate-deepspeed (ZeRO-2).
+  python -m pip install "webdataset==0.2.86" braceexpand opencv-python-headless "deepspeed>=0.18.2"
+  python3 - <<'PY'
+import io
+import json
+import os
+import tarfile
+
+from PIL import Image, ImageDraw
+
+num_samples = 1024
+size = 512
+root = os.path.join(os.environ["GITHUB_WORKSPACE"], "controlnet_wds")
+os.makedirs(root, exist_ok=True)
+tar_path = os.path.join(root, "train-00000.tar")
+meta = json.dumps({"original_width": size, "original_height": size, "pwatermark": 0.1}).encode()
+
+
+def make_image(i):
+    image = Image.new("RGB", (size, size), (60 + i % 180, 120, 160))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle([64, 64, size - 64, size - 64], outline=(240, 240, 240), width=6)
+    draw.line([0, i % size, size, (i * 7) % size], fill=(250, 200, 100), width=4)
+    return image
+
+
+def add(tf, name, data):
+    info = tarfile.TarInfo(name)
+    info.size = len(data)
+    tf.addfile(info, io.BytesIO(data))
+
+
+with tarfile.open(tar_path, "w") as tf:
+    for i in range(num_samples):
+        key = f"{i:06d}"
+        image = make_image(i)
+        for ext, fmt in (("jpg", "JPEG"), ("png", "PNG")):
+            buf = io.BytesIO()
+            image.save(buf, format=fmt)
+            add(tf, f"{key}.{ext}", buf.getvalue())
+        add(tf, f"{key}.txt", f"a synthetic line drawing scene {i}".encode())
+        add(tf, f"{key}.json", meta)
+
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"CONTROLNET_WDS_SHARDS={tar_path}\n")
+print(f"prepared {num_samples}-sample webdataset shard at {tar_path}", flush=True)
+PY
 }
 
-# diffusers-amused: Amused-256 finetuning. ModelScope has neither
-# amused/amused-256 nor the m1guelpf/nouns dataset, so nothing is
-# pre-downloaded: the example fetches both via hf-mirror at run time
-# (the engine sets HF_ENDPOINT + HF_HUB_DISABLE_XET).
-# amused's --report_to defaults to wandb (wandb is in the base stack; the
-# global WANDB_MODE=disabled keeps it offline). Do NOT use
-# --report_to tensorboard: amused passes list-valued args to init_trackers,
-# which tensorboard's add_hparams rejects.
-setup_diffusers_amused() {
-  install_example_stack
-}
-
-# diffusers-controlnet: ControlNet training with an SD1.5 base. The dataset
-# (fusing/fill50k) is pulled by the example itself via hf-mirror at run time.
-# fill50k is a script-based dataset: it needs datasets<4.0 (base pin) and
-# trust_remote_code. Persist the env var to the run step via GITHUB_ENV.
-setup_diffusers_controlnet() {
-  install_example_stack
-  echo "HF_DATASETS_TRUST_REMOTE_CODE=1" >> "$GITHUB_ENV"
-  download_assets sd15
-}
-
-# diffusers-controlnet-sdxl: same, with an SDXL base.
-setup_diffusers_controlnet_sdxl() {
-  install_example_stack
-  echo "HF_DATASETS_TRUST_REMOTE_CODE=1" >> "$GITHUB_ENV"
-  # SDXL is pulled online (hf-mirror, --variant fp16) by the example.
-}
-
-# diffusers-lcm: LCM consistency-distillation webdataset examples with an
-# SD1.5 teacher. Needs webdataset + braceexpand. The training shards are
-# streamed at run time (overlay URL), not pre-downloaded.
-setup_diffusers_lcm() {
+# orpo-webdataset: the upstream preference dataset (diffusion-preference-opt on
+# S3) went private, so the shard is synthesized here. Sample layout mirrors
+# get_dataset()'s rename: {key}.original_prompt.txt / jpg_0.jpg / jpg_1.jpg /
+# label_0.txt / label_1.txt (base_plus_ext groups by the first dot). The
+# dataloader's shuffle buffer is 690, so the shard carries 1024 samples.
+# Unlike controlnet-webdataset this uses the stock wds pipeline - no version
+# pin needed. label txt values decode to str, so the == 0.5/== 0 comparisons
+# never fire and the pair order is deterministically [jpg_0, jpg_1].
+setup_diffusers_orpo_wds() {
   install_example_stack
   python -m pip install webdataset braceexpand
-  download_assets sd15
+  python3 - <<'PY'
+import io
+import os
+import tarfile
+
+from PIL import Image, ImageDraw
+
+num_samples = 1024
+size = 512
+root = os.path.join(os.environ["GITHUB_WORKSPACE"], "orpo_wds")
+os.makedirs(root, exist_ok=True)
+tar_path = os.path.join(root, "train-00000.tar")
+
+
+def make_image(i):
+    image = Image.new("RGB", (size, size), (50 + i % 200, 110, 170))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse([64 + i % 64, 64, size - 64, size - 64 - i % 64], outline=(240, 240, 240), width=6)
+    return image
+
+
+def add(tf, name, data):
+    info = tarfile.TarInfo(name)
+    info.size = len(data)
+    tf.addfile(info, io.BytesIO(data))
+
+
+with tarfile.open(tar_path, "w") as tf:
+    for i in range(num_samples):
+        key = f"{i:06d}"
+        for name, image in (("jpg_0", make_image(i)), ("jpg_1", make_image(i + 256))):
+            buf = io.BytesIO()
+            image.save(buf, format="JPEG")
+            add(tf, f"{key}.{name}.jpg", buf.getvalue())
+        add(tf, f"{key}.original_prompt.txt", f"a synthetic ellipse scene {i}".encode())
+        add(tf, f"{key}.label_0.txt", b"1.0")
+        add(tf, f"{key}.label_1.txt", b"0.0")
+
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"ORPO_WDS_SHARDS={tar_path}\n")
+print(f"prepared {num_samples}-sample orpo webdataset shard at {tar_path}", flush=True)
+PY
 }
 
-# diffusers-lcm-sdxl: same, but with an SDXL teacher + SDXL fp16-safe VAE.
-setup_diffusers_lcm_sdxl() {
-  install_example_stack
-  python -m pip install webdataset braceexpand
-  # SDXL teacher + fp16-safe VAE are pulled online (hf-mirror) by the example.
-}
-
-# diffusers-cogvideo: CogVideoX-2b LoRA finetuning. decord + imageio /
-# imageio-ffmpeg are the example's own requirements (video decode / export).
-# Model from ModelScope; dataset (Wild-Heart/Disney-VideoGeneration-Dataset)
-# from hf-mirror.
-setup_diffusers_cogvideo() {
-  install_example_stack
-  # decord2 is the Ascend/aarch64 build of decord (plain decord does not work
-  # on NPU); it provides the `decord` import the example uses. imageio /
-  # imageio-ffmpeg are the example's own requirements (video export).
-  python -m pip install decord2 imageio imageio-ffmpeg
-  download_assets cogvideo
-}
-
-# diffusers-cogvideo-i2v: CogVideoX-5b-I2V LoRA finetuning. Same decord/video
-# deps and Disney dataset, but the 5b-I2V model is pulled online (hf-mirror)
-# by the example, so only the dataset is pre-downloaded here.
-setup_diffusers_cogvideo_i2v() {
-  install_example_stack
-  python -m pip install decord2 imageio imageio-ffmpeg
-  download_assets cogvideo-dataset
-}
-
-# diffusers-sana: research_projects/sana (SANA-Sprint) + Sana LoRA DreamBooth.
-# The sprint script reads <path>/transformer/diffusion_pytorch_model.safetensors
-# with load_file(), so its --pretrained_model_name_or_path must be a local dir;
-# pre-download the teacher model here.
+# sana (sprint distill): teacher from ModelScope/hf-mirror, plus a local parquet
+# fixture. The script's __getitem__ does Image.open(io.BytesIO(item["image"])),
+# and the upstream dataset's image column is auto-decoded to PIL by datasets
+# (TypeError). A hand-built parquet keeps "image" as plain binary so datasets
+# returns bytes. Columns must be exactly llava (str) + image (bytes).
 setup_diffusers_sana() {
   install_example_stack
   download_assets sana-sprint
+  python3 - <<'PY'
+import io
+import os
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+from PIL import Image, ImageDraw
+
+num_samples = 64
+size = 512
+root = os.path.join(os.environ["GITHUB_WORKSPACE"], "sana_fixture")
+os.makedirs(root, exist_ok=True)
+path = os.path.join(root, "sana_train.parquet")
+
+prompts = []
+images = []
+for i in range(num_samples):
+    image = Image.new("RGB", (size, size), (60 + i % 180, 120, 160))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle([64, 64, size - 64, size - 64], outline=(240, 240, 240), width=6)
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG")
+    images.append(buf.getvalue())
+    prompts.append(f"a synthetic line drawing scene {i}")
+
+table = pa.table(
+    {
+        "llava": pa.array(prompts, type=pa.string()),
+        "image": pa.array(images, type=pa.binary()),
+    }
+)
+pq.write_table(table, path)
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"SANA_FIXTURE_PARQUET={path}\n")
+print(f"prepared {num_samples}-sample sana fixture parquet at {path}", flush=True)
+PY
 }
 
-# diffusers-lumina2: Lumina2 LoRA DreamBooth (2-card ZeRO-3). deepspeed is
-# required by the accelerate-deepspeed launcher.
-setup_diffusers_lumina2() {
+setup_diffusers_multi_subject_inpaint() {
+  # multi_subject_dreambooth_inpainting 的 Dataset 用 load_dataset(path) 读本地
+  # 目录（不是 load_from_disk），固定取 train/test 两个 split，且列里要有一个
+  # 名字含 "mask" 的列。所以仿 Hub 数据集的落盘布局：平铺的
+  # train-*.parquet / test-*.parquet，load_dataset 按扩展名推断 parquet builder、
+  # 按文件名推断 split，features（Image）存在 schema metadata 里，读回即 PIL。
+  # 模型必须是 9 通道的 inpainting 版（不是基础版 SD1.5）。
   install_example_stack
-  python -m pip install "deepspeed>=0.18.2"
+  download_assets sd15-inpaint
+  python3 - <<'PY'
+import os
+from pathlib import Path
+
+from datasets import Dataset, Features, Image, Value
+from PIL import Image as PILImage
+from PIL import ImageDraw
+
+size = 512
+num_samples = 4
+prompts = [f"a photo of sks dog in scene {i}" for i in range(num_samples)]
+images = []
+masks = []
+for i in range(num_samples):
+    image = PILImage.new("RGB", (size, size), (60 + i % 180, 120, 160))
+    ImageDraw.Draw(image).rectangle([64, 64, size - 64, size - 64], outline=(240, 240, 240), width=6)
+    images.append(image)
+    mask = PILImage.new("L", (size, size), 0)
+    ImageDraw.Draw(mask).rectangle([64, 64, size - 64, size - 64], fill=255)
+    masks.append(mask)
+
+features = Features({"image": Image(), "prompt": Value("string"), "mask": Image()})
+split = Dataset.from_dict({"image": images, "prompt": prompts, "mask": masks}, features=features)
+
+root = Path(os.environ["GITHUB_WORKSPACE"]) / "multi_subject_inpaint_fixture"
+root.mkdir(parents=True, exist_ok=True)
+split.to_parquet(str(root / "train-00000-of-00001.parquet"))
+split.to_parquet(str(root / "test-00000-of-00001.parquet"))
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"MULTI_SUBJECT_INPAINT_DATASET={root}\n")
+print(f"prepared multi-subject inpainting fixture (train+test parquet) at {root}", flush=True)
+PY
 }
 
-# diffusers-z-image: Z-Image LoRA DreamBooth (2-card ZeRO-3). deepspeed is
-# required by the accelerate-deepspeed launcher.
-setup_diffusers_z_image() {
+setup_diffusers_realfill() {
+  # train_realfill.py 的 RealFillDataset 认死一个目录结构：
+  #   <root>/ref/*.png + <root>/target/target.png + <root>/target/mask.png
+  # 缺任一就直接 ValueError（:445）。这里现场合成一个最小 fixture（纯合成图，零下载）。
+  # 模型是 SD1.5-inpainting（同样 9 通道）。
   install_example_stack
-  python -m pip install "deepspeed>=0.18.2"
+  download_assets sd15-inpaint
+  python3 - <<'PY'
+import os
+from pathlib import Path
+
+from PIL import Image, ImageDraw
+
+size = 512
+root = Path(os.environ["GITHUB_WORKSPACE"]) / "realfill_fixture"
+(ref := root / "ref").mkdir(parents=True, exist_ok=True)
+(target := root / "target").mkdir(parents=True, exist_ok=True)
+
+
+def scene(seed):
+    img = Image.new("RGB", (size, size), (40 + seed % 160, 110, 150))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([80, 80, size - 80, size - 80], outline=(240, 240, 240), width=8)
+    draw.ellipse([180, 180, 330, 330], fill=(210, 90, 60))
+    return img
+
+
+for i in range(3):
+    scene(i).save(ref / f"ref{i}.png")
+scene(9).save(target / "target.png")
+mask = Image.new("L", (size, size), 0)
+ImageDraw.Draw(mask).rectangle([80, 80, size - 80, size - 80], fill=255)
+mask.save(target / "mask.png")
+
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"REALFILL_DATASET={root}\n")
+print(f"prepared realfill fixture at {root}", flush=True)
+PY
 }
 
-# diffusers-qwen-image: Qwen-Image LoRA DreamBooth (4-card ZeRO-3). deepspeed
-# is required by the accelerate-deepspeed launcher.
-setup_diffusers_qwen_image() {
+setup_diffusers_pixart() {
+  # PixArt-alpha/PixArt-XL-2-512x512 在 ModelScope 无镜像，只能走 hf-mirror。
+  # 它的 text_encoder 是 T5-XXL：脚本按默认（不带 --variant）加载，只会用 fp32
+  # 权重（4 分片 ~19GB），另有一套 fp16 分片（~9GB）用不上——预下时跳过 *.fp16.*
+  # 省掉一半。预下放在 setup（不占 run 步预算、带重试）并落到本地目录，run 步直接
+  # 读本地路径（避免 from_pretrained 的 model_info 网络抖动）；同时装 hf_transfer
+  # 走并行下载，剩余的数据集下载也能受益。
   install_example_stack
-  python -m pip install "deepspeed>=0.18.2"
+  if python -m pip install hf_transfer; then
+    export HF_HUB_ENABLE_HF_TRANSFER=1
+    echo "HF_HUB_ENABLE_HF_TRANSFER=1" >> "$GITHUB_ENV"
+  fi
+  PIXART_REPO="PixArt-alpha/PixArt-XL-2-512x512" python3 - <<'PY'
+import os
+from pathlib import Path
+
+from huggingface_hub import snapshot_download
+
+repo = os.environ["PIXART_REPO"]
+dest = Path(os.environ["GITHUB_WORKSPACE"]) / "pixart_model"
+dest.mkdir(parents=True, exist_ok=True)
+snapshot_download(
+    repo,
+    local_dir=str(dest),
+    # Only the model components. Skip asset/ (README images + samples.txt that
+    # hf-mirror keeps timing out on) and the unused fp16 weight duplicates.
+    allow_patterns=[
+        "model_index.json",
+        "scheduler/*",
+        "tokenizer/*",
+        "text_encoder/*",
+        "transformer/*",
+        "vae/*",
+    ],
+    ignore_patterns=["*.fp16.*", "*.bin", "*.ckpt"],
+)
+with open(os.environ["GITHUB_ENV"], "a") as fh:
+    fh.write(f"PIXART_MODEL_PATH={dest}\n")
+print(f"pre-downloaded {repo} -> {dest}", flush=True)
+PY
 }
 
-# diffusers-llada2: LLaDA2 block-refinement training smoke. Base stack is
-# enough (datasets is already pinned there); Qwen2.5-0.5B is fetched at run
-# time and --use_dummy_data avoids any dataset download.
-setup_diffusers_llada2() {
+run_profile() {
+  local fn="setup_${PROFILE//-/_}"
+  if declare -F "$fn" >/dev/null 2>&1; then
+    "$fn"
+    return
+  fi
   install_example_stack
+  if [[ -n "${PROFILE_PIP[$PROFILE]:-}" ]]; then
+    python -m pip install ${PROFILE_PIP[$PROFILE]}
+  fi
+  if [[ -n "${PROFILE_ASSETS[$PROFILE]:-}" ]]; then
+    download_assets "${PROFILE_ASSETS[$PROFILE]}"
+  fi
+  local var
+  for var in ${PROFILE_ENV[$PROFILE]:-}; do
+    echo "$var" >> "$GITHUB_ENV"
+  done
 }
 
 if [[ -z "${TARGET_ROOT:-}" || -z "${GITHUB_WORKSPACE:-}" || -z "${GITHUB_ENV:-}" ]]; then
@@ -717,5 +825,4 @@ echo "WANDB_MODE=disabled" >> "$GITHUB_ENV"
 # Ascend setups to avoid "address already in use" on multi-process init).
 echo "HCCL_NPU_SOCKET_PORT_RANGE=auto" >> "$GITHUB_ENV"
 
-# Profile names map to setup_<profile with '-' -> '_'> functions.
-"setup_${PROFILE//-/_}"
+run_profile

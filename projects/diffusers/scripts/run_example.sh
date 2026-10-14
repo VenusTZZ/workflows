@@ -129,21 +129,23 @@ count_npus() {
   "$PYTHON" -c "import torch, torch_npu; print(torch.npu.device_count())"
 }
 
-# Materialize an accelerate+DeepSpeed launch config whose num_processes follows
-# the visible NPU count. ZeRO-3 shards params/grads/optimizer across the cards,
-# so entries that OOM on a single card (e.g. full SDXL fine-tune) can run on
-# a2-2 / a2-4. LAUNCHER=accelerate-deepspeed.
+# Materialize an accelerate+DeepSpeed launch config (num_processes = visible
+# NPU count). LAUNCHER picks the ds config: ds_zero2.json (params replicated,
+# the default) or ds_zero3.json (params sharded, for 20B-scale models whose
+# params cannot replicate - frozen encoders must still fit whole per card).
 prepare_deepspeed_configs() {
-  local ds_json="${PROJECT_ROOT:?PROJECT_ROOT is required}/configs/ds_zero3.json"
+  local ds_name="$1"
+  local ds_json="${PROJECT_ROOT:?PROJECT_ROOT is required}/configs/$ds_name"
   local cfg_dir="$GITHUB_WORKSPACE/ci_patch"
+  local cfg_file="$cfg_dir/${ds_name%.json}.yml"
   mkdir -p "$cfg_dir"
   local npus
   npus=$(count_npus)
-  cat > "$cfg_dir/accelerate-deepspeed.yml" <<EOF
+  cat > "$cfg_file" <<EOF
 compute_environment: LOCAL_MACHINE
 deepspeed_config:
   deepspeed_config_file: $ds_json
-  zero3_init_flag: true
+  zero3_init_flag: false
 distributed_type: DEEPSPEED
 machine_rank: 0
 main_training_function: main
@@ -153,7 +155,7 @@ rdzv_backend: static
 same_network: true
 use_cpu: false
 EOF
-  echo "deepspeed launch config: $cfg_dir/accelerate-deepspeed.yml (ds: $ds_json, $npus npu(s))"
+  echo "deepspeed launch config: $cfg_file (ds: $ds_json, $npus npu(s))"
 }
 
 # Shell examples run with cwd = the example's directory; Python entry
@@ -166,15 +168,24 @@ case "$LAUNCH_PATH" in
     ;;
   *)
     cd "$TARGET_ROOT"
-    # Some examples import a package that sits next to them (e.g.
-    # examples/research_projects/ip_adapter imports `ip_adapter.ip_adapter`);
-    # add the example's own directory to PYTHONPATH.
-    export PYTHONPATH="$(dirname "$LAUNCH_PATH")${PYTHONPATH:+:$PYTHONPATH}"
+    # Examples import helper packages two ways: the module next to them (e.g.
+    # examples/research_projects/ip_adapter imports `ip_adapter.ip_adapter`) and
+    # the repo-root package namespace (e.g. the pixart scripts import
+    # `examples.research_projects.pixart.controlnet_pixart_alpha`). Put both the
+    # example's own directory and the repo root on PYTHONPATH (`python script.py`
+    # does not add the cwd, only the script's directory).
+    export PYTHONPATH="$(dirname "$LAUNCH_PATH"):$TARGET_ROOT${PYTHONPATH:+:$PYTHONPATH}"
     case "${LAUNCHER:-}" in
       accelerate-deepspeed)
-        prepare_deepspeed_configs
+        prepare_deepspeed_configs ds_zero2.json
         "$PYTHON" -m accelerate.commands.launch \
-          --config_file "$GITHUB_WORKSPACE/ci_patch/accelerate-deepspeed.yml" \
+          --config_file "$GITHUB_WORKSPACE/ci_patch/ds_zero2.yml" \
+          "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
+        ;;
+      accelerate-deepspeed-zero3)
+        prepare_deepspeed_configs ds_zero3.json
+        "$PYTHON" -m accelerate.commands.launch \
+          --config_file "$GITHUB_WORKSPACE/ci_patch/ds_zero3.yml" \
           "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
         ;;
       "")
@@ -185,7 +196,7 @@ case "$LAUNCH_PATH" in
           --mixed_precision no "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
         ;;
       *)
-        echo "unknown LAUNCHER: $LAUNCHER (supported: accelerate-deepspeed)" >&2
+        echo "unknown LAUNCHER: $LAUNCHER (supported: accelerate-deepspeed, accelerate-deepspeed-zero3)" >&2
         exit 2
         ;;
     esac
