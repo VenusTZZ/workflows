@@ -252,25 +252,25 @@ supported:
   #     - --gradient_checkpointing
   #   timeout_minutes: 90
 
-  # InstructPix2Pix（SD1.5）。上游命令见 examples/instruct_pix2pix/README.md；
-  # 去掉 --enable_xformers（CUDA-only）和 --push_to_hub。数据集
-  # fusing/instructpix2pix-1000-samples 运行时经 hf-mirror 取（Xet，CI 需 vendor/ModelScope）。
-  # --seed 必传：:458 无条件 manual_seed(args.seed)，默认 None 直接崩。
-  # 2026-09-18 昇腾机验证可跑。
-  - path: examples/instruct_pix2pix/train_instruct_pix2pix.py
-    profile: diffusers-instruct-pix2pix
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path ${SD15_MODEL_PATH}   # ModelScope: AI-ModelScope/stable-diffusion-v1-5
-      - --dataset_name fusing/instructpix2pix-1000-samples
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256
-      - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
-      - --max_train_steps 1
-      - --mixed_precision fp16
-      - --seed 42
-    timeout_minutes: 90
+  # # InstructPix2Pix（SD1.5）。上游命令见 examples/instruct_pix2pix/README.md；
+  # # 去掉 --enable_xformers（CUDA-only）和 --push_to_hub。数据集
+  # # fusing/instructpix2pix-1000-samples 运行时经 hf-mirror 取（Xet，CI 需 vendor/ModelScope）。
+  # # --seed 必传：:458 无条件 manual_seed(args.seed)，默认 None 直接崩。
+  # # 2026-09-18 昇腾机验证可跑。
+  # - path: examples/instruct_pix2pix/train_instruct_pix2pix.py
+  #   profile: diffusers-instruct-pix2pix
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --pretrained_model_name_or_path ${SD15_MODEL_PATH}   # ModelScope: AI-ModelScope/stable-diffusion-v1-5
+  #     - --dataset_name fusing/instructpix2pix-1000-samples
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --resolution 256
+  #     - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
+  #     - --max_train_steps 1
+  #     - --mixed_precision fp16
+  #     - --seed 42
+  #   timeout_minutes: 90
 
   # # Kandinsky 2.2 decoder（全量）。上游命令见
   # # examples/kandinsky2_2/text_to_image/README.md；默认模型
@@ -391,23 +391,23 @@ supported:
   #     - --max_train_steps 1
   #   timeout_minutes: 90
 
-  # InstructPix2Pix LoRA（需显式列名 + seed）
-  - path: examples/research_projects/instructpix2pix_lora/train_instruct_pix2pix_lora.py
-    profile: diffusers-research-plain
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --pretrained_model_name_or_path timbrooks/instruct-pix2pix
-      - --dataset_name instruction-tuning-sd/cartoonization
-      - --original_image_column original_image
-      - --edited_image_column cartoonized_image
-      - --edit_prompt_column edit_prompt
-      - --output_dir ${CI_OUTPUT_DIR}
-      - --resolution 256
-      - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
-      - --max_train_steps 1
-      - --seed 42
-    timeout_minutes: 90
+  # # InstructPix2Pix LoRA（需显式列名 + seed）
+  # - path: examples/research_projects/instructpix2pix_lora/train_instruct_pix2pix_lora.py
+  #   profile: diffusers-research-plain
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+  #   overlay_args:
+  #     - --pretrained_model_name_or_path timbrooks/instruct-pix2pix
+  #     - --dataset_name instruction-tuning-sd/cartoonization
+  #     - --original_image_column original_image
+  #     - --edited_image_column cartoonized_image
+  #     - --edit_prompt_column edit_prompt
+  #     - --output_dir ${CI_OUTPUT_DIR}
+  #     - --resolution 256
+  #     - --train_batch_size 1 --gradient_accumulation_steps 1 --gradient_checkpointing
+  #     - --max_train_steps 1
+  #     - --seed 42
+  #   timeout_minutes: 90
 
   # # VAE roundtrip（纯推理；输入图用 fixtures/DOG.jpg）
   # - path: examples/research_projects/vae/vae_roundtrip.py
@@ -676,29 +676,35 @@ supported:
   #     - --max_train_steps 1
   #     - --mixed_precision no
   #   timeout_minutes: 90
-  # # ControlNet webdataset 训练（SDXL）：原 unsupported 的三个原因全部在 profile
-  # # diffusers-controlnet-wds 里解决——webdataset 钉 0.2.86（例子里 vendored 的
-  # # 旧版 tar 迭代器在新版 webdataset 上直接 KeyError）；setup 现场合成 1024
-  # # 样本的 shard（上游 laion URL 不可达；且例子把 shuffle 缓冲写死 1000，样本
-  # # 不足 1000 时第一个 batch 永远不来，max_train_samples 需 ≥1000）；装
-  # # opencv-headless 供 canny 控制图。fp16 + 梯度检查点 + 256 分辨率压显存
-  # # （SDXL ControlNet 全量训练在 29.5GiB 单卡上贴边，OOM 则先试降分辨率）。
-  # - path: examples/research_projects/controlnet/train_controlnet_webdataset.py
-  #   profile: diffusers-controlnet-wds
-  #   runner: linux-aarch64-a2-1
-  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-  #   overlay_args:
-  #     - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
-  #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --train_shards_path_or_url ${CONTROLNET_WDS_SHARDS}
-  #     - --eval_shards_path_or_url ${CONTROLNET_WDS_SHARDS}
-  #     - --max_train_samples 1024
-  #     - --max_train_steps 1
-  #     - --resolution 256
-  #     - --train_batch_size 1
-  #     - --gradient_checkpointing
-  #     - --mixed_precision fp16
-  #   timeout_minutes: 180
+  # ControlNet webdataset 训练（SDXL）：原 unsupported 的三个原因全部在 profile
+  # diffusers-controlnet-wds 里解决——webdataset 钉 0.2.86（例子里 vendored 的
+  # 旧版 tar 迭代器在新版 webdataset 上直接 KeyError）；setup 现场合成 1024
+  # 样本的 shard（上游 laion URL 不可达；且例子把 shuffle 缓冲写死 1000，样本
+  # 不足 1000 时第一个 batch 永远不来，max_train_samples 需 ≥1000）；装
+  # opencv-headless 供 canny 控制图。
+  # 显存：单卡 fp16 在 optimizer.step() 处常驻 ~26.6GB（冻结 SDXL ~7GB + controlnet
+  # 的 fp32 master/fp16 副本/梯度/Adam ~19.5GB），与分辨率无关、贴边必炸；改双卡
+  # ZeRO-2（ds_zero2.json 带优化器 CPU offload）+ bf16（fp16 在 DS 反向有 aclnn
+  # 失败前科），每卡 ~20GB。训练管线用 wds.ResampledShards（随机重采样、不按 rank
+  # 切分），单 shard 双卡各自可读；eval 管线虽用 split_by_worker 但主循环不消费。
+  - path: examples/research_projects/controlnet/train_controlnet_webdataset.py
+    profile: diffusers-controlnet-wds
+    launcher: accelerate-deepspeed
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --train_shards_path_or_url ${CONTROLNET_WDS_SHARDS}
+      - --eval_shards_path_or_url ${CONTROLNET_WDS_SHARDS}
+      - --max_train_samples 1024
+      - --max_train_steps 1
+      - --resolution 256
+      - --train_batch_size 1
+      - --gradient_checkpointing
+      - --mixed_precision bf16
+    timeout_minutes: 180
   # # Diffusion-ORPO SDXL LoRA（webdataset 流式版，兄弟条目 train_diffusion_orpo_sdxl_lora.py
   # # 已 supported）。原 unsupported 原因：上游偏好数据集（S3 上的
   # # diffusion-preference-opt）转私有不可达。解法在 profile diffusers-orpo-wds：
@@ -725,47 +731,55 @@ supported:
   #     - --gradient_checkpointing
   #     - --mixed_precision fp16
   #   timeout_minutes: 180
-  # # SDXL ControlNet（fusing/fill50k，trust_remote_code 由 profile 提供）。
-  # # 纯 fp32 + 双卡 ZeRO-3：脚本预计算的文本嵌入经 datasets 序列化后是 fp32，
-  # # 混精度权重会在 SDPA 处 dtype 冲突（query=half / key=value=float），
-  # # 统一 fp32 根治；显存 = 冻结 unet fp32 复制 ~10.4GB + controlnet 分片
-  # # + 优化器 offload，双卡每卡 ~18GB。
-  # - path: examples/controlnet/train_controlnet_sdxl.py
-  #   profile: diffusers-controlnet-sdxl
-  #   launcher: accelerate-deepspeed
-  #   runner: linux-aarch64-a2-2
-  #   npu_devices: '0,1'
-  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-  #   overlay_args:
-  #     - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
-  #     - --variant fp16
-  #     - --dataset_name fusing/fill50k
-  #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --resolution 256
-  #     - --train_batch_size 1
-  #     - --gradient_checkpointing
-  #     - --max_train_steps 1
-  #   timeout_minutes: 60
-  # # ===== SDXL 全量微调（多卡 ZeRO-3，launcher=accelerate-deepspeed）=====
-  # # 统一纯 fp32：脚本文本嵌入的 dtype 流转与混精度冲突（SDPA 处 query=half /
-  # # key=value=float）；显存 = 权重+梯度跨卡分片 + 优化器 CPU offload
-  # # （configs/ds_zero3.json），双卡每卡 ~14GB。
-  # - path: examples/text_to_image/train_text_to_image_sdxl.py
-  #   profile: diffusers-sdxl-full
-  #   launcher: accelerate-deepspeed
-  #   runner: linux-aarch64-a2-2
-  #   npu_devices: '0,1'
-  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-  #   overlay_args:
-  #     - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
-  #     - --variant fp16
-  #     - --dataset_name hf-internal-testing/dummy_image_text_data
-  #     - --output_dir ${CI_OUTPUT_DIR}
-  #     - --resolution 256
-  #     - --train_batch_size 1
-  #     - --gradient_checkpointing
-  #     - --max_train_steps 1
-  #   timeout_minutes: 60
+  # SDXL ControlNet（fusing/fill50k，trust_remote_code 由 profile 提供）。
+  # 纯 fp32 + 双卡 ZeRO-3：脚本预计算的文本嵌入经 datasets 序列化后是 fp32，
+  # 混精度权重会在 SDPA 处 dtype 冲突（query=half / key=value=float），
+  # 统一 fp32 根治；显存 = 冻结 unet fp32 复制 ~10.4GB + controlnet 分片
+  # + 优化器 offload，双卡每卡 ~18GB。
+  # --max_train_samples 100：fill50k 全量 1000 行在 dataset.map 预计算嵌入时
+  # 一个 batch 全进 CLIP（激活 ~1.5GB），叠加驻留的 fp32 全家桶 ~19GB 贴边，
+  # 碎片化抖动后差 ~200MB 即 OOM；切片发生在 map 之前（:716），100 行后激活
+  # 仅 ~0.1GB。
+  - path: examples/controlnet/train_controlnet_sdxl.py
+    profile: diffusers-controlnet-sdxl
+    launcher: accelerate-deepspeed
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
+      - --variant fp16
+      - --dataset_name fusing/fill50k
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --resolution 256
+      - --train_batch_size 1
+      - --gradient_checkpointing
+      - --max_train_steps 1
+      - --max_train_samples 100
+    timeout_minutes: 60
+  # ===== SDXL 全量微调（多卡 ZeRO-2，launcher=accelerate-deepspeed）=====
+  # bf16：纯 fp32 会在 DS ZeRO-2 初始化的平坦缓冲处爆——unet fp32 10.3GB +
+  # DS 内部副本 + 19GB 缓冲 ≈ 38GB/卡（缓冲每卡全量、加卡不减）。曾担心混精度
+  # 撞 SDPA dtype 冲突（query=half / key=value=float，那是 controlnet_sdxl 的
+  # 问题），但 t2i_sdxl 在训练循环里显式把嵌入 cast 成 weight_dtype（:1120），
+  # 且同 profile 的 lpl（bf16 + ZeRO-2 + a2-2）已跑绿。
+  - path: examples/text_to_image/train_text_to_image_sdxl.py
+    profile: diffusers-sdxl-full
+    launcher: accelerate-deepspeed
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0
+      - --variant fp16
+      - --dataset_name hf-internal-testing/dummy_image_text_data
+      - --output_dir ${CI_OUTPUT_DIR}
+      - --resolution 256
+      - --train_batch_size 1
+      - --gradient_checkpointing
+      - --mixed_precision bf16
+      - --max_train_steps 1
+    timeout_minutes: 60
   # # kandinsky prior 全量训练（naruto）。只训 prior，CLIP 双塔冻结，图像嵌入
   # # 循环内现算（无 Arrow 往返）。bf16 + ZeRO-2：静态 ~8GB/卡，富余。prior 仓
   # # 各组件按需拉 ~9GB，收尾无条件组装完整 pipeline 再拉 decoder 仓 9.8GB
@@ -784,8 +798,12 @@ supported:
   #     - --mixed_precision bf16
   #     - --max_train_steps 1
   #   timeout_minutes: 240
-  # InstructPix2Pix SDXL 全量（同上，数据集 fusing/instructpix2pix-1000-samples；
-  # --seed 必传：:518 无条件 manual_seed(args.seed)）
+  # InstructPix2Pix SDXL 全量（同上，数据集 fusing/instructpix2pix-1000-samples）。
+  # --seed 必传：:518 无条件 manual_seed(args.seed)。
+  # --mixed_precision bf16 必传：脚本不像 t2i_sdxl 那样 del 文本编码器/vae（:803/:978
+  # 全程驻留），fp32 下 base ~14GB 叠加 ZeRO-2 初始化平坦缓冲 ~19GB（每卡全量、加卡
+  # 不减）> 29.5GB OOM；bf16 把冻结模块与 DS 缓冲同时减半。validation 双重守卫
+  # （val_image_url_or_path + validation_prompt 都不传）→ 不跑 pipeline 推理。
   - path: examples/instruct_pix2pix/train_instruct_pix2pix_sdxl.py
     profile: diffusers-sdxl-full
     launcher: accelerate-deepspeed
@@ -800,6 +818,7 @@ supported:
       - --resolution 256
       - --train_batch_size 1
       - --gradient_checkpointing
+      - --mixed_precision bf16
       - --max_train_steps 1
       - --seed 42
     timeout_minutes: 60

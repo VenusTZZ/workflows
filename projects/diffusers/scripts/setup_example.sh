@@ -507,7 +507,8 @@ PY
 # passes). opencv-headless for the canny control image.
 setup_diffusers_controlnet_wds() {
   install_example_stack
-  python -m pip install "webdataset==0.2.86" braceexpand opencv-python-headless
+  # deepspeed: the entry runs with launcher=accelerate-deepspeed (ZeRO-2).
+  python -m pip install "webdataset==0.2.86" braceexpand opencv-python-headless "deepspeed>=0.18.2"
   python3 - <<'PY'
 import io
 import json
