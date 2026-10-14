@@ -294,13 +294,14 @@ PY
 # 需要额外依赖的 profile 在这里按 PROFILE 分支。pi 走非 QLoRA 变体：QLoRA 在
 # areno 源码里 CUDA-only，但与 pi 机制正交，去掉即全参训练 Ling（4 卡 TP +
 # adam-4bit + triton-ascend/fla）。
-SUPPORTED_PROFILES="bash_game_npu codebreaker_npu coding_npu duelgrid_npu shopping_npu terminal_hacking_npu tictactoe_npu tictactoe_no_tool_npu math_npu alpaca_npu tictactoe_image_npu ave_event_recognition_npu pi_npu"
-case "$PROFILE" in
-  bash_game_npu | codebreaker_npu | coding_npu | duelgrid_npu | shopping_npu | terminal_hacking_npu | tictactoe_npu | tictactoe_no_tool_npu | math_npu | alpaca_npu | tictactoe_image_npu | ave_event_recognition_npu | pi_npu) ;;
-  *)
-    echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES})" >&2
-    exit 1
-    ;;
+SUPPORTED_PROFILES=(
+  bash_game_npu codebreaker_npu coding_npu duelgrid_npu shopping_npu
+  terminal_hacking_npu tictactoe_npu tictactoe_no_tool_npu math_npu
+  alpaca_npu tictactoe_image_npu ave_event_recognition_npu pi_npu
+)
+case " ${SUPPORTED_PROFILES[*]} " in
+  *" ${PROFILE} "*) ;;
+  *) echo "unknown profile: ${PROFILE} (supported: ${SUPPORTED_PROFILES[*]})" >&2; exit 1 ;;
 esac
 
 select_pip_index

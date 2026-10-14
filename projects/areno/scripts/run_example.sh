@@ -41,6 +41,11 @@ source_vendor_env /usr/local/Ascend/ascend-toolkit/set_env.sh
 export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
+# Ling(Qwen3.5) 的 KDA/GDN 走 triton-ascend，首次训练要 JIT+autotune 编译 kernel
+# （可长达 1h+）。triton 默认缓存 ~/.triton 不一定跨 job 持久；/root/.cache 已知
+# 持久（modelscope 复用过），故把 triton 缓存也指到那里，让一次性编译成果跨 run
+# 复用（kernel 源码/triton/SoC 变了会按 key 正确重编）。
+export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-/root/.cache/triton}"
 
 python -c "import torch, torch_npu; print('NPU available:', torch.npu.is_available(), 'devices:', torch.npu.device_count())"
 
