@@ -924,7 +924,7 @@ supported:
       - --train_batch_size 1
       - --gradient_checkpointing
       - --max_train_steps 1
-        timeout_minutes: 90
+    timeout_minutes: 90
 
   # FLUX.2 Klein 4B LoRA DreamBooth（t2i）。脚本 NPU-aware（is_torch_npu_available
   # + --enable_npu_flash_attention 走 set_attention_backend("_native_npu")，全仓
