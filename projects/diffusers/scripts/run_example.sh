@@ -135,7 +135,7 @@ count_npus() {
 # params cannot replicate - frozen encoders must still fit whole per card).
 prepare_deepspeed_configs() {
   local ds_name="$1"
-  local ds_json="${PROJECT_ROOT:?PROJECT_ROOT is required}/configs/$ds_name"
+  local ds_json="${PROJECT_ROOT:?PROJECT_ROOT is required}/fixtures/configs/$ds_name"
   local cfg_dir="$GITHUB_WORKSPACE/ci_patch"
   local cfg_file="$cfg_dir/${ds_name%.json}.yml"
   mkdir -p "$cfg_dir"
