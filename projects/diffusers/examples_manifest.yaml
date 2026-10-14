@@ -946,7 +946,7 @@ supported:
       - --gradient_checkpointing
       - --mixed_precision bf16
       - --max_train_steps 1
-    timeout_minutes: 120
+    timeout_minutes: 600
 
   # FLUX.2 Klein 4B LoRA DreamBooth（img2img）。同上（NPU-aware / 模型预下 /
   # Qwen3 编码器已随 t2i 条目实测通过）。它无条件取 batch["cond_pixel_values"]
@@ -1001,7 +1001,7 @@ supported:
   #     - --mixed_precision bf16
   #     - --offload
   #     - --max_train_steps 1
-  #   timeout_minutes: 300
+  #   timeout_minutes: 600
 
   # AutoencoderRAE（research_projects）：冻结 encoder、只训 decoder 的 RAE 自编码器
   # 训练。无 cuda 硬编码（全 accelerator.device），依赖标准栈（diffusers.AutoencoderRAE
@@ -1021,7 +1021,7 @@ supported:
 
 unsupported:
   # 验证中
-  - examples/dreambooth/train_dreambooth_lora_hidream.py
+  # examples/dreambooth/train_dreambooth_lora_hidream.py
   # ===== Flax/JAX 系列 =======================================================
   # 以下都是训练脚本的 Flax/JAX 版本，跑不通有三层原因：
   # 1) diffusers 0.40 起删除了全部 Flax 类（FlaxUNet2DConditionModel 等），

@@ -858,8 +858,8 @@ run_profile() {
   # hf_transfer (pulled in via PROFILE_PIP above): parallel hub downloads for
   # both the setup-time hub_snapshot calls and the run step.
   if [[ "${PROFILE_PIP[$PROFILE]:-}" == *hf_transfer* ]] && python -c "import hf_transfer" >/dev/null 2>&1; then
-    export HF_HUB_ENABLE_HF_TRANSFER=1
-    echo "HF_HUB_ENABLE_HF_TRANSFER=1" >> "$GITHUB_ENV"
+    export HF_XET_HIGH_PERFORMANCE=1
+    echo "HF_XET_HIGH_PERFORMANCE=1" >> "$GITHUB_ENV"
   fi
   if [[ -n "${PROFILE_ASSETS[$PROFILE]:-}" ]]; then
     download_assets "${PROFILE_ASSETS[$PROFILE]}"
