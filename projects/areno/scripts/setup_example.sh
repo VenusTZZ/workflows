@@ -165,7 +165,14 @@ install_ling_stack() {
   # pip 顺带换 torch）。fla 同样 --no-deps：其依赖里的 triton 会从 PyPI 拉
   # CUDA 版把 triton-ascend 顶掉，故手动补 einops 即可。
   python -m pip install -q --no-deps --extra-index-url "$ASCEND_PIP_INDEX" "triton-ascend==3.2.2"
-  python -m pip install -q einops
+  # triton-ascend 3.2.2 的 METADATA 依赖是 vendor 测试环境 pin，不能照装：
+  # - triton==3.5.0：wheel 已自带完整 triton 包体，装 PyPI 的会用 CUDA 版覆盖它；
+  # - numpy==1.26.4：降级会破坏 torch 2.10/torch_npu/pandas/transformers 栈；
+  # - scipy/attrs/decorator/pyyaml/pytest-xdist：全量扫描 wheel 的 import，均不在
+  #   运行链上（纯测试 pin；pytest 环境已有）。运行链上真正缺的只有 pybind11
+  # （backends/ascend/utils.py）与 psutil（backends/ascend/runtime/autotuner.py，
+  # 在 import triton 链上），两者纯 Python、无版本冲突；einops 是 fla 的运行依赖。
+  python -m pip install -q pybind11 psutil einops
   python -m pip install -q --no-deps \
     "flash-linear-attention @ git+https://github.com/fla-org/flash-linear-attention.git@e52dbc0ea19d3a40d7ab7f9eed855d2b473994d2"
   # 与 areno 相同的导入链做功能校验。
