@@ -84,11 +84,19 @@ ensure_torch_stack() {
 
 install_areno() {
   source_vendor_env /usr/local/Ascend/ascend-toolkit/set_env.sh
-  # 只编译 AReno 与其 Ascend C 扩展，跳过 CI 用不到的两个重包：flash-attn-npu
-  # （只服务 --attn-backend flash，leg 固定 native）与 flash-linear-attention
-  # （只服务 KDA/线性注意力模型，leg 用 dense 底座，且 areno 在 NPU 上把
-  # lightning attn 路由到自研 accel.npu.seg_la）。故用 --no-deps 装 AReno，再按
-  # requirements/npu.txt 从 wheel 安装其余依赖。
+  # 只编译 AReno 与其 NPU 扩展：装了 torch_npu 后根 setup.py 只走 NPU 分支
+  # （areno/accel/csrc/npu/setup.py），CUDA 扩展（csrc/*.cu）不会编。另跳过两个
+  # 重包：flash-attn-npu（只服务 --attn-backend flash，leg 固定 native）与
+  # flash-linear-attention（Ling/Qwen3.5 的 leg 由 install_triton_fla_stack 按
+  # profile 另装）。故用 --no-deps 装 AReno，再按 requirements/npu.txt 装 wheel。
+  # Ascend C kernel 编译默认单线程——csrc/npu/setup.py 只在设置 MAX_JOBS 时才给
+  # cmake 传 --parallel（torch 的 BuildExtension 也读它）。用满核并行（封顶 32：
+  # ccec 单任务内存可观，防极端多核节点打爆内存）。
+  local jobs
+  jobs="$(nproc)"
+  jobs=$(( jobs > 32 ? 32 : jobs ))
+  export MAX_JOBS="${MAX_JOBS:-$jobs}"
+  echo "building areno with MAX_JOBS=$MAX_JOBS"
   python -m pip install -e "$TARGET_ROOT" --no-build-isolation --no-deps
   local deps
   deps=$(grep -vE '^[[:space:]]*(#|flash-attn-npu|flash-linear-attention)' \
