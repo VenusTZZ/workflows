@@ -17,350 +17,395 @@ scan:
   root: examples
   include_extensions: ['.py', '.sh']
 supported:
-  # bash_game：巴什博弈单轮策略游戏 RLVR（GSPO）。run_agent.py 经本地
-  # rollout 代理做单轮 submit_move 工具调用，reward.py 确定性打分。数据走仓内
-  # fixture（fixtures/ci_bash_game_8.jsonl，上游 dataset_generator.py seed 42
-  # 生成）；组件与伴随物见 unsupported。
-  - path: examples/agentic/bash_game/run_agent.py
-    profile: bash_game_npu
-    runner: linux-aarch64-a2-1
+  # # bash_game：巴什博弈单轮策略游戏 RLVR（GSPO）。run_agent.py 经本地
+  # # rollout 代理做单轮 submit_move 工具调用，reward.py 确定性打分。底座按上游
+  # # README 用 Ling-3.0-tiny（bailing_hybrid MoE，权重 15.8GB ≈ 7.9B 参数）：
+  # # 单卡 29.5GB 在 prepare_infer_weights 即 OOM（实测已占 28.85GB），全参 RL
+  # # 训练总需 ≈54GB（权重+梯度+优化器状态），故 4 卡 TP + --adam-4bit（上游
+  # # 原配方，NPU 有 4bit 优化器 kernel），每卡 ≈13.5GB。KDA 训练 chunk kernel
+  # # 为 areno 自研 triton kernel、推理增量直接调 fla（accel/npu/kda.py:29），
+  # # 依赖 triton-ascend + flash-linear-attention（setup 的 install_ling_stack
+  # # 补装）。数据走仓内 fixture（fixtures/ci_bash_game_8.jsonl，上游
+  # # dataset_generator.py seed 42 生成）；组件与伴随物见 unsupported。
+  # - path: examples/agentic/bash_game/run_agent.py
+  #   profile: bash_game_npu
+  #   runner: linux-aarch64-a2-4
+  #   npu_devices: '0,1,2,3'
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+  #   timeout_minutes: 300
+  #   overlay_args:
+  #     - --ckpt inclusionAI/Ling-3.0-tiny
+  #     - --tp-size 4
+  #     - --world-size 4
+  #     - --adam-4bit
+  #     - --dataset-path ${FIXTURE_DIR}/ci_bash_game_8.jsonl
+  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/bash_game/dataset_loader.py
+  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/bash_game/reward.py
+  #     - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/bash_game/run_agent.py
+  #     - --algo gspo
+  #     - --batch-size 2
+  #     - --n-samples 4
+  #     - --mini-bs 1
+  #     - --max-steps 1
+  #     - --max-new-tokens 48
+  #     - --max-prompt-tokens 2048
+  # # codebreaker：多轮 Bulls and Cows 演绎游戏 RLVR（GSPO）。run_agent.py 经本地
+  # # rollout 代理做最多 6 轮 guess_code 工具调用 + 收尾总结，状态仅经 tool
+  # # result 累积（部分可观测），reward.py 按解题效率打分。数据走仓内 fixture
+  # # （fixtures/ci_codebreaker_8.jsonl，上游 dataset_generator.py seed 2026 生成）；
+  # # 组件与伴随物见 unsupported。
+  # - path: examples/agentic/codebreaker/run_agent.py
+  #   profile: codebreaker_npu
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+  #   timeout_minutes: 90
+  #   overlay_args:
+  #     - --dataset-path ${FIXTURE_DIR}/ci_codebreaker_8.jsonl
+  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/codebreaker/dataset_loader.py
+  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/codebreaker/reward.py
+  #     - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/codebreaker/run_agent.py
+  #     - --algo gspo
+  #     - --batch-size 1
+  #     - --n-samples 2
+  #     - --mini-bs 1
+  #     - --max-steps 1
+  #     - --max-new-tokens 64
+  # # coding：SWE-bench 风格多轮编码智能体 RLVR（GSPO）。run_agent.py 是薄封装，
+  # # 调用包内 areno.agent.run_agentic_coding_loop（agent 循环与九工具实现都在
+  # # 包里，rg 为纯 Python、run_command 经 subprocess 有超时/rm 拦截）。数据走仓内
+  # # fixture（fixtures/ci_coding_2.jsonl：上游 dataset.jsonl 前 2 条 + max_turns 2）；
+  # # 组件与交互入口见 unsupported。
+  # - path: examples/agentic/coding/run_agent.py
+  #   profile: coding_npu
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+  #   timeout_minutes: 240
+  #   overlay_args:
+  #     - --dataset-path ${FIXTURE_DIR}/ci_coding_2.jsonl
+  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/coding/dataset_loader.py
+  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/coding/reward.py
+  #     - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/coding/run_agent.py
+  #     - --algo gspo
+  #     - --batch-size 1
+  #     - --n-samples 2
+  #     - --mini-bs 1
+  #     - --max-steps 1
+  #     - --max-prompt-tokens 4096
+  #     - --max-new-tokens 128
+  #     - --max-context-len 4096
+  # # duelgrid：回合制网格战术游戏 RLVR（GSPO）。run_agent.py 经本地 rollout 代理
+  # # 做一次 choose_action 工具调用（结构化 JSON 动作列表），reward.py 用规则引擎
+  # # 打分（含未耗能量惩罚）。底座按上游 README 用 gemma-4-E2B-it（权重
+  # # 10.25GB ≈ 5.1B 参数）：单卡 rollout 可过、训练 backward 的 embedding 梯度
+  # # 需 4.38GB 时 OOM（实测已占 25.33GB），全参 RL 训练总需 ≈41GB，故 2 卡 TP +
+  # # --adam-4bit（NPU 有 4bit 优化器 kernel），每卡 ≈20.5GB。数据走仓内
+  # # fixture（fixtures/ci_duelgrid_8.jsonl，上游 dataset_generator.py seed 2026
+  # # 生成）；组件与 web_ui 见 unsupported。
+  # - path: examples/agentic/duelgrid/run_agent.py
+  #   profile: duelgrid_npu
+  #   runner: linux-aarch64-a2-2
+  #   npu_devices: '0,1'
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+  #   timeout_minutes: 120
+  #   overlay_args:
+  #     - --ckpt google/gemma-4-E2B-it
+  #     - --tp-size 2
+  #     - --world-size 2
+  #     - --adam-4bit
+  #     - --dataset-path ${FIXTURE_DIR}/ci_duelgrid_8.jsonl
+  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/duelgrid/dataset_loader.py
+  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/duelgrid/reward.py
+  #     - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/duelgrid/run_agent.py
+  #     - --algo gspo
+  #     - --batch-size 2
+  #     - --n-samples 2
+  #     - --mini-bs 1
+  #     - --max-steps 1
+  #     - --max-prompt-tokens 2048
+  #     - --max-new-tokens 64
+  # # shopping：多轮工具调用购物 kit 任务 RLVR（GSPO）。run_agent.py 固定四轮工具
+  # # 序列 search_catalog -> inspect_items -> check_kit -> submit_bundle（每轮
+  # # tool_choice 强制单工具），reward.py 校验最终 bundle 满足类别/特征/预算约束并
+  # # 按工具序列正确性给分。数据走仓内 fixture（fixtures/ci_shopping_8.jsonl，上游
+  # # dataset_generator.py seed 2026 生成）；组件见 unsupported。
+  # - path: examples/agentic/shopping/run_agent.py
+  #   profile: shopping_npu
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+  #   timeout_minutes: 90
+  #   overlay_args:
+  #     - --dataset-path ${FIXTURE_DIR}/ci_shopping_8.jsonl
+  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/shopping/dataset_loader.py
+  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/shopping/reward.py
+  #     - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/shopping/run_agent.py
+  #     - --algo gspo
+  #     - --batch-size 2
+  #     - --n-samples 2
+  #     - --mini-bs 1
+  #     - --max-steps 1
+  #     - --max-new-tokens 128
+  # # terminal_hacking：单步候选词演绎 RLVR（GSPO，上下文老虎机式）。run_agent.py
+  # # 经本地 rollout 代理做一次 submit_candidates 工具调用（对可观测内存转储里的
+  # # 候选词过滤），reward.py 用稠密非对称奖励（多猜重罚、漏猜轻罚）。底座按上游
+  # # README 用 Ling-3.0-tiny（同 bash_game：单卡 OOM，4 卡 TP + --adam-4bit，
+  # # 每卡 ≈13.5GB；KDA 依赖 triton-ascend + fla，setup 的 install_ling_stack
+  # # 补装）。数据走仓内 fixture（fixtures/ci_terminal_hacking_8.jsonl，上游
+  # # dataset_generator.py seed 2026 生成）；组件与 web_ui 见 unsupported。
+  # - path: examples/agentic/terminal_hacking/run_agent.py
+  #   profile: terminal_hacking_npu
+  #   runner: linux-aarch64-a2-4
+  #   npu_devices: '0,1,2,3'
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+  #   timeout_minutes: 300
+  #   overlay_args:
+  #     - --ckpt inclusionAI/Ling-3.0-tiny
+  #     - --tp-size 4
+  #     - --world-size 4
+  #     - --adam-4bit
+  #     - --dataset-path ${FIXTURE_DIR}/ci_terminal_hacking_8.jsonl
+  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/terminal_hacking/dataset_loader.py
+  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/terminal_hacking/reward.py
+  #     - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/terminal_hacking/run_agent.py
+  #     - --algo gspo
+  #     - --batch-size 2
+  #     - --n-samples 2
+  #     - --mini-bs 1
+  #     - --max-steps 1
+  #     - --max-new-tokens 256
+  #     - --max-prompt-tokens 4096
+  # # tictactoe（tool-call 变体）：井字棋单步 RLVR（GSPO）。run_agent.py 经本地
+  # # rollout 代理做一次 choose_square 工具调用，reward.py 用 minimax 最优步校验
+  # # 打分。数据走仓内 fixture（fixtures/ci_tictactoe_8.jsonl，上游 dataset_generator.py
+  # # seed 2026 生成，两个变体共用）；组件见 unsupported。
+  # - path: examples/agentic/tictactoe/run_agent.py
+  #   profile: tictactoe_npu
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+  #   timeout_minutes: 90
+  #   overlay_args:
+  #     - --dataset-path ${FIXTURE_DIR}/ci_tictactoe_8.jsonl
+  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/tictactoe/dataset_loader.py
+  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/tictactoe/reward.py
+  #     - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/tictactoe/run_agent.py
+  #     - --algo gspo
+  #     - --batch-size 2
+  #     - --n-samples 4
+  #     - --mini-bs 1
+  #     - --max-steps 1
+  #     - --max-new-tokens 32
+  # # tictactoe（XML no-tool 变体）：同一棋盘，改为纯文本 `<move>N</move>` 输出
+  # # （无工具）；reward_no_tool.py 解析 XML 标签后用同一 minimax 打分。共用上面的
+  # # fixture。
+  # - path: examples/agentic/tictactoe/run_agent_no_tool.py
+  #   profile: tictactoe_no_tool_npu
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+  #   timeout_minutes: 90
+  #   overlay_args:
+  #     - --dataset-path ${FIXTURE_DIR}/ci_tictactoe_8.jsonl
+  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/tictactoe/dataset_loader_no_tool.py
+  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/tictactoe/reward_no_tool.py
+  #     - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/tictactoe/run_agent_no_tool.py
+  #     - --algo gspo
+  #     - --batch-size 2
+  #     - --n-samples 4
+  #     - --mini-bs 1
+  #     - --max-steps 1
+  #     - --max-new-tokens 64
+  # # math：数学 RLVR（无独立入口文件，由 areno train 组合 dataset_loader +
+  # # math_verify_reward）。Qwen3-0.6B 在 ModelScope 的 gsm8k:main 上做 1 步 GSPO，
+  # # reward 用 math_verify 校验 \boxed{}。math_verify_reward.py 见 unsupported。
+  # - path: examples/math/dataset_loader.py
+  #   profile: math_npu
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+  #   timeout_minutes: 90
+  #   overlay_args:
+  #     - --dataset-path gsm8k:main
+  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/math/dataset_loader.py
+  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/math/math_verify_reward.py
+  #     - --algo gspo
+  #     - --batch-size 1
+  #     - --max-steps 1
+  #     - --max-new-tokens 256
+  # # alpaca：Alpaca 风格 SFT 数据加载器契约示例。dataset_loader.py 把
+  # # instruction/input/output 行规整成 prompt/response，用 Qwen3-0.6B 做 1 步 SFT。
+  # # 数据走仓内 fixture（fixtures/ci_alpaca_8.jsonl，Alpaca schema，替代 HF 在线
+  # # yahma/alpaca-cleaned）。
+  # - path: examples/sft/alpaca/dataset_loader.py
+  #   profile: alpaca_npu
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+  #   timeout_minutes: 90
+  #   overlay_args:
+  #     - --algo sft
+  #     - --dataset-path ${FIXTURE_DIR}/ci_alpaca_8.jsonl
+  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/sft/alpaca/dataset_loader.py
+  #     - --batch-size 2
+  #     - --mini-bs 1
+  #     - --max-steps 1
+  #     - --max-prompt-tokens 128
+  #     - --max-new-tokens 64
+  # # tictactoe_image：Qwen3.5-VL 图像井字棋 RLVR（GSPO）。run_agent.py 把板图以
+  # # OpenAI image_url data URL 发进本地 rollout 代理，做一次 choose_square 工具
+  # # 调用；reward.py 用同一 minimax 最优步校验打分。底座 Qwen3.5-0.8B 即 VL 预设
+  # # （areno/dashboard/flow/model_presets.py:11），其 GatedDeltaNet 训练/推理都走
+  # # fla（qwen3_5/model.py:420 无条件 _require_fla_gdn）——依赖由 setup 的
+  # # install_triton_fla_stack 提供（triton 昇腾版 triton-ascend + fla，此前"环境
+  # # 无 triton"的阻塞已解）；图像路径另需 torchvision（ensure_media_deps 强制
+  # # 重装与 torch 配对的真包，镜像自带残缺 stub）。数据走仓内 fixture
+  # # （fixtures/ci_tictactoe_image_8.jsonl，上游 dataset_generator.py seed 2026
+  # # 生成的图文行）；组件、数据生成器与 web_ui 见 unsupported。
+  # - path: examples/vl/tictactoe_image/run_agent.py
+  #   profile: tictactoe_image_npu
+  #   runner: linux-aarch64-a2-1
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+  #   timeout_minutes: 300
+  #   overlay_args:
+  #     - --ckpt Qwen/Qwen3.5-0.8B
+  #     - --dataset-path ${FIXTURE_DIR}/ci_tictactoe_image_8.jsonl
+  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/vl/tictactoe_image/dataset_loader.py
+  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/vl/tictactoe_image/reward.py
+  #     - --agent-fn ${EXAMPLES_ROOT}/examples/vl/tictactoe_image/run_agent.py
+  #     - --algo gspo
+  #     - --batch-size 2
+  #     - --n-samples 4
+  #     - --mini-bs 1
+  #     - --max-steps 1
+  #     - --max-prompt-tokens 8192
+  #     - --max-new-tokens 64
+  #     - --drop-rollout-state
+  # # ave_event_recognition：Gemma4 音视频事件识别 agentic GRPO（RLVR）。
+  # # run_agent.py 把 10s 视频 + 同步音频以 OpenAI video_url / audio_url 发进本地
+  # # rollout 代理，做一次 report_events 工具调用；reward.py 调外部 OpenAI 兼容
+  # # judge 语义比对事件集合（CI 由 run_example.sh 的标准库存根 judge 提供，引擎
+  # # 只认退出码、不校验奖励数值）。底座 google/gemma-4-E2B-it（权重 10.25GB）：
+  # # 全参训练很吃显存——单卡 29.5GB backward OOM，TP2+adam-4bit 在 8192 上下文也
+  # # OOM，故用 a2-4 + TP4 + --adam-4bit 留足余量。上游数据是整包 AVE，CI 用 setup
+  # # 生成的 5s 合成音视频（40 帧；视频 processor 固定采样 num_frames=32，少于 32
+  # # 帧会报 "num_frames exceeds total_num_frames"）+ 单行 manifest（${AVE_DATASET}）
+  # # 代替；Gemma4 视觉塔此前在 transformers 5.19 的 create_bidirectional_mask 抛
+  # # IndexError，看护已统一钉 transformers==5.15.*（areno 声明的 gemma4 多模态
+  # # 基线）。组件、数据生成器与 common 见 unsupported。
+  # - path: examples/multimodal/ave_event_recognition/run_agent.py
+  #   profile: ave_event_recognition_npu
+  #   runner: linux-aarch64-a2-4
+  #   npu_devices: '0,1,2,3'
+  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+  #   timeout_minutes: 240
+  #   overlay_args:
+  #     - --ckpt google/gemma-4-E2B-it
+  #     - --tp-size 4
+  #     - --world-size 4
+  #     - --adam-4bit
+  #     - --dataset-path ${AVE_DATASET}
+  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/multimodal/ave_event_recognition/dataset_loader.py
+  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/multimodal/ave_event_recognition/reward.py
+  #     - --agent-fn ${EXAMPLES_ROOT}/examples/multimodal/ave_event_recognition/run_agent.py
+  #     - --algo grpo
+  #     - --batch-size 1
+  #     - --n-samples 2
+  #     - --mini-bs 1
+  #     - --max-steps 1
+  #     - --max-running-prompts 1
+  #     - --max-new-tokens 64
+  #     - --max-prompt-tokens 8192
+  #     - --max-context-len 8192
+  #     - --drop-rollout-state
+  # pi：用 pi coding agent（pi.dev）做 ModelScope SWE-smith sqlparse 仓库修复的
+  # agentic RLVR（GRPO）。run_agent.py 驱动外部 pi CLI（Node.js），经二级代理
+  # pi_proxy.py 适配流式请求到本地 rollout 代理（保留 token/logprob/routing 回放）；
+  # reward.py 跑 swesmith_verify 的 pytest 验证（0/1）。上游默认配方是单卡 QLoRA
+  # （Ling-3.0-tiny + NF4 + LoRA 32），但 QLoRA 在 areno 源码里 CUDA-only
+  # （engine/config.py:91,308 / worker.py:79）；QLoRA 与 pi 机制正交，故走非
+  # QLoRA 变体：全参训练 Ling（同 bash_game 的 4 卡 TP + adam-4bit +
+  # triton-ascend/fla）。外部 pi CLI + Node.js + fd/ripgrep 与 SWE-smith 数据由
+  # install_pi_toolchain 提供（npmmirror/apt/ModelScope；generate_dataset
+  # --limit 1 只取 1 个任务冒烟；overlay 把 max-new-tokens 压到 256（示例默认
+  # 4096 × 32 轮 ≈ 13 万 token/attempt → 约 73 分钟，CI 压不动）。max_turns/
+  # timeout 属数据契约/训练语义，不动；256 token × 32 轮 ≈ 4.5 分钟。
+  # 只影响耗时不影响退出码（引擎只认退出码；GRPO 需 n-samples≥2，故保留 2）。
+  # 组件见 unsupported。
+  - path: examples/agentic/pi/run_agent.py
+    profile: pi_npu
+    runner: linux-aarch64-a2-4
+    npu_devices: '0,1,2,3'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
-    timeout_minutes: 90
+    timeout_minutes: 300
     overlay_args:
       - --ckpt inclusionAI/Ling-3.0-tiny
-      - --dataset-path ${FIXTURE_DIR}/ci_bash_game_8.jsonl
-      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/bash_game/dataset_loader.py
-      - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/bash_game/reward.py
-      - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/bash_game/run_agent.py
-      - --algo gspo
-      - --batch-size 2
-      - --n-samples 4
-      - --mini-bs 1
-      - --max-steps 1
-      - --max-new-tokens 48
-      - --max-prompt-tokens 2048
-  # codebreaker：多轮 Bulls and Cows 演绎游戏 RLVR（GSPO）。run_agent.py 经本地
-  # rollout 代理做最多 6 轮 guess_code 工具调用 + 收尾总结，状态仅经 tool
-  # result 累积（部分可观测），reward.py 按解题效率打分。数据走仓内 fixture
-  # （fixtures/ci_codebreaker_8.jsonl，上游 dataset_generator.py seed 2026 生成）；
-  # 组件与伴随物见 unsupported。
-  - path: examples/agentic/codebreaker/run_agent.py
-    profile: codebreaker_npu
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
-    timeout_minutes: 90
-    overlay_args:
-      - --dataset-path ${FIXTURE_DIR}/ci_codebreaker_8.jsonl
-      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/codebreaker/dataset_loader.py
-      - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/codebreaker/reward.py
-      - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/codebreaker/run_agent.py
-      - --algo gspo
+      - --tp-size 4
+      - --world-size 4
+      - --adam-4bit
+      - --dataset-path ${ARENO_PI_DATA}
+      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/pi/dataset_loader.py
+      - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/pi/reward.py
+      - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/pi/run_agent.py
+      - --algo grpo
       - --batch-size 1
       - --n-samples 2
       - --mini-bs 1
       - --max-steps 1
-      - --max-new-tokens 64
-  # coding：SWE-bench 风格多轮编码智能体 RLVR（GSPO）。run_agent.py 是薄封装，
-  # 调用包内 areno.agent.run_agentic_coding_loop（agent 循环与九工具实现都在
-  # 包里，rg 为纯 Python、run_command 经 subprocess 有超时/rm 拦截）。数据走仓内
-  # fixture（fixtures/ci_coding_2.jsonl：上游 dataset.jsonl 前 2 条 + max_turns 2）；
-  # 组件与交互入口见 unsupported。
-  - path: examples/agentic/coding/run_agent.py
-    profile: coding_npu
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
-    timeout_minutes: 240
-    overlay_args:
-      - --dataset-path ${FIXTURE_DIR}/ci_coding_2.jsonl
-      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/coding/dataset_loader.py
-      - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/coding/reward.py
-      - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/coding/run_agent.py
-      - --algo gspo
-      - --batch-size 1
-      - --n-samples 2
-      - --mini-bs 1
-      - --max-steps 1
-      - --max-prompt-tokens 4096
-      - --max-new-tokens 128
-      - --max-context-len 4096
-  # duelgrid：回合制网格战术游戏 RLVR（GSPO）。run_agent.py 经本地 rollout 代理
-  # 做一次 choose_action 工具调用（结构化 JSON 动作列表），reward.py 用规则引擎
-  # 打分（含未耗能量惩罚）。数据走仓内 fixture（fixtures/ci_duelgrid_8.jsonl，
-  # 上游 dataset_generator.py seed 2026 生成）；组件与 web_ui 见 unsupported。
-  - path: examples/agentic/duelgrid/run_agent.py
-    profile: duelgrid_npu
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
-    timeout_minutes: 90
-    overlay_args:
-      - --ckpt google/gemma-4-E2B-it
-      - --dataset-path ${FIXTURE_DIR}/ci_duelgrid_8.jsonl
-      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/duelgrid/dataset_loader.py
-      - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/duelgrid/reward.py
-      - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/duelgrid/run_agent.py
-      - --algo gspo
-      - --batch-size 2
-      - --n-samples 2
-      - --mini-bs 1
-      - --max-steps 1
-      - --max-prompt-tokens 2048
-      - --max-new-tokens 64
-  # shopping：多轮工具调用购物 kit 任务 RLVR（GSPO）。run_agent.py 固定四轮工具
-  # 序列 search_catalog -> inspect_items -> check_kit -> submit_bundle（每轮
-  # tool_choice 强制单工具），reward.py 校验最终 bundle 满足类别/特征/预算约束并
-  # 按工具序列正确性给分。数据走仓内 fixture（fixtures/ci_shopping_8.jsonl，上游
-  # dataset_generator.py seed 2026 生成）；组件见 unsupported。
-  - path: examples/agentic/shopping/run_agent.py
-    profile: shopping_npu
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
-    timeout_minutes: 90
-    overlay_args:
-      - --dataset-path ${FIXTURE_DIR}/ci_shopping_8.jsonl
-      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/shopping/dataset_loader.py
-      - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/shopping/reward.py
-      - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/shopping/run_agent.py
-      - --algo gspo
-      - --batch-size 2
-      - --n-samples 2
-      - --mini-bs 1
-      - --max-steps 1
-      - --max-new-tokens 128
-  # terminal_hacking：单步候选词演绎 RLVR（GSPO，上下文老虎机式）。run_agent.py
-  # 经本地 rollout 代理做一次 submit_candidates 工具调用（对可观测内存转储里的
-  # 候选词过滤），reward.py 用稠密非对称奖励（多猜重罚、漏猜轻罚）。底座用
-  # Ling-3.0-tiny（bailing/KDA，需 fla）。数据走仓内 fixture（fixtures/ci_terminal_hacking_8.jsonl，上游
-  # dataset_generator.py seed 2026 生成）；组件与 web_ui 见 unsupported。
-  - path: examples/agentic/terminal_hacking/run_agent.py
-    profile: terminal_hacking_npu
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
-    timeout_minutes: 90
-    overlay_args:
-      - --ckpt inclusionAI/Ling-3.0-tiny
-      - --dataset-path ${FIXTURE_DIR}/ci_terminal_hacking_8.jsonl
-      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/terminal_hacking/dataset_loader.py
-      - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/terminal_hacking/reward.py
-      - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/terminal_hacking/run_agent.py
-      - --algo gspo
-      - --batch-size 2
-      - --n-samples 2
-      - --mini-bs 1
-      - --max-steps 1
+      - --max-running-prompts 2
+      - --max-context-len 32768
       - --max-new-tokens 256
-      - --max-prompt-tokens 4096
-  # tictactoe（tool-call 变体）：井字棋单步 RLVR（GSPO）。run_agent.py 经本地
-  # rollout 代理做一次 choose_square 工具调用，reward.py 用 minimax 最优步校验
-  # 打分。数据走仓内 fixture（fixtures/ci_tictactoe_8.jsonl，上游 dataset_generator.py
-  # seed 2026 生成，两个变体共用）；组件见 unsupported。
-  - path: examples/agentic/tictactoe/run_agent.py
-    profile: tictactoe_npu
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
-    timeout_minutes: 90
-    overlay_args:
-      - --dataset-path ${FIXTURE_DIR}/ci_tictactoe_8.jsonl
-      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/tictactoe/dataset_loader.py
-      - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/tictactoe/reward.py
-      - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/tictactoe/run_agent.py
-      - --algo gspo
-      - --batch-size 2
-      - --n-samples 4
-      - --mini-bs 1
-      - --max-steps 1
-      - --max-new-tokens 32
-  # tictactoe（XML no-tool 变体）：同一棋盘，改为纯文本 `<move>N</move>` 输出
-  # （无工具）；reward_no_tool.py 解析 XML 标签后用同一 minimax 打分。共用上面的
-  # fixture。
-  - path: examples/agentic/tictactoe/run_agent_no_tool.py
-    profile: tictactoe_no_tool_npu
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
-    timeout_minutes: 90
-    overlay_args:
-      - --dataset-path ${FIXTURE_DIR}/ci_tictactoe_8.jsonl
-      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/tictactoe/dataset_loader_no_tool.py
-      - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/tictactoe/reward_no_tool.py
-      - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/tictactoe/run_agent_no_tool.py
-      - --algo gspo
-      - --batch-size 2
-      - --n-samples 4
-      - --mini-bs 1
-      - --max-steps 1
-      - --max-new-tokens 64
-  # math：数学 RLVR（无独立入口文件，由 areno train 组合 dataset_loader +
-  # math_verify_reward）。Qwen3-0.6B 在 ModelScope 的 gsm8k:main 上做 1 步 GSPO，
-  # reward 用 math_verify 校验 \boxed{}。math_verify_reward.py 见 unsupported。
-  - path: examples/math/dataset_loader.py
-    profile: math_npu
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
-    timeout_minutes: 90
-    overlay_args:
-      - --dataset-path gsm8k:main
-      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/math/dataset_loader.py
-      - --reward-fn-path ${EXAMPLES_ROOT}/examples/math/math_verify_reward.py
-      - --algo gspo
-      - --batch-size 1
-      - --max-steps 1
-      - --max-new-tokens 256
-  # alpaca：Alpaca 风格 SFT 数据加载器契约示例。dataset_loader.py 把
-  # instruction/input/output 行规整成 prompt/response，用 Qwen3-0.6B 做 1 步 SFT。
-  # 数据走仓内 fixture（fixtures/ci_alpaca_8.jsonl，Alpaca schema，替代 HF 在线
-  # yahma/alpaca-cleaned）。
-  - path: examples/sft/alpaca/dataset_loader.py
-    profile: alpaca_npu
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
-    timeout_minutes: 90
-    overlay_args:
-      - --algo sft
-      - --dataset-path ${FIXTURE_DIR}/ci_alpaca_8.jsonl
-      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/sft/alpaca/dataset_loader.py
-      - --batch-size 2
-      - --mini-bs 1
-      - --max-steps 1
-      - --max-prompt-tokens 128
-      - --max-new-tokens 64
+      - --disable-thinking
+      - --drop-rollout-state
 unsupported:
-  # ===== bash_game 组件与非训练入口 =====
-  # 数据生成器：(n,m) 指纹去重 + 自校验的确定性 JSONL。
+  # =====================================================================
+  # ===== 工具类套件
+  # =====================================================================
   - examples/agentic/bash_game/dataset_generator.py
-  # 训练加载器：附 prompt，oracle 藏于 record。
   - examples/agentic/bash_game/dataset_loader.py
-  # 确定性奖励（exact / 合法近似 / 非法）。
   - examples/agentic/bash_game/reward.py
-  # held-out 评测：需先 areno serve。
   - examples/agentic/bash_game/eval.py
-  # 浏览器对玩 WebUI。
   - examples/agentic/bash_game/web_ui.py
-  # ===== codebreaker 组件与非训练入口 =====
-  # 数据生成器：隐藏四位数谜题 JSONL。
   - examples/agentic/codebreaker/dataset_generator.py
-  # 训练加载器（附 prompt，隐藏 secret）。
   - examples/agentic/codebreaker/dataset_loader.py
-  # 解题效率奖励（valid/solved/部分分与非法路径惩罚）。
   - examples/agentic/codebreaker/reward.py
-  # 终端对玩 TUI（可指向 OpenAI 兼容端点）。
   - examples/agentic/codebreaker/tui.py
-  # ===== coding 组件与非训练入口 =====
-  # 多轮 agent 循环兼容 shim（re-export areno.agent.agent_loop）。
   - examples/agentic/coding/agent_loop.py
-  # 交互式编码 CLI。
   - examples/agentic/coding/code_cli.py
-  # 九工具兼容 shim（re-export areno.agent.tools）。
   - examples/agentic/coding/coding_tools.py
-  # dataset.jsonl（100 条本地任务）加载器。
   - examples/agentic/coding/dataset_loader.py
-  # 奖励：patch + 必要测试全过 + submit solved 才满分，含部分分/负分。
   - examples/agentic/coding/reward.py
-  # ===== duelgrid 组件 =====
-  # 训练加载器（把生成的状态转成 prompt record）。
   - examples/agentic/duelgrid/dataset_loader.py
-  # 规则引擎奖励（含未耗能量惩罚）。
   - examples/agentic/duelgrid/reward.py
-  # 浏览器对玩 UI。
   - examples/agentic/duelgrid/web_ui.py
-  # ===== shopping 组件 =====
-  # 数据生成器：购物 kit 任务 JSONL。
   - examples/agentic/shopping/dataset_generator.py
-  # 训练加载器（补齐默认约束 + 附 prompt）。
   - examples/agentic/shopping/dataset_loader.py
-  # 奖励：最终 bundle 约束 + 工具序列正确性。
   - examples/agentic/shopping/reward.py
-  # ===== terminal_hacking 组件 =====
-  # 可观测 prompt 构造（隐藏密码不出现在 prompt）。
   - examples/agentic/terminal_hacking/dataset_loader.py
-  # 非对称稠密候选集奖励（多猜重罚、漏猜轻罚）。
   - examples/agentic/terminal_hacking/reward.py
-  # CRT 风格对玩 WebUI。
   - examples/agentic/terminal_hacking/web_ui.py
-  # ===== tictactoe 组件 =====
-  # XML no-tool 变体加载器（复用 tool 变体 loader 的格式化）。
   - examples/agentic/tictactoe/dataset_loader_no_tool.py
-  # tool-call 变体奖励。
   - examples/agentic/tictactoe/reward.py
-  # no-tool 变体奖励（<move> 标签解析）。
   - examples/agentic/tictactoe/reward_no_tool.py
-  # 浏览器对玩 UI（LLM / minimax 双模式）。
   - examples/agentic/tictactoe/web_ui.py
-  # ===== math 组件 =====
-  # math_verify 符号验证奖励（\\boxed{} 答案比对）。
   - examples/math/math_verify_reward.py
-  # ===== ave_event_recognition：不支持——Gemma4 视觉塔在 transformers 的
-  # create_bidirectional_mask 抛 IndexError: too many indices for tensor of
-  # dimension 1（mask 维数不符，上游 bug，transformers 5.19）；另依赖外部 OpenAI
-  # 兼容 judge（JUDGE_*）+ HF AVE 数据集 + ffmpeg 抽音频，CI 无法自包含。 =====
-  # 数据生成：AVE 下载 + 16 kHz 单声道 WAV 抽取 + 事件区间 manifest。
   - examples/multimodal/ave_event_recognition/dataset_generator.py
-  # 视频 + 同步音频的多模态 prompt 构造。
   - examples/multimodal/ave_event_recognition/dataset_loader.py
-  # 外部 judge 模型语义比对奖励（score/10 归一化，失败即报错）。
   - examples/multimodal/ave_event_recognition/reward.py
-  # report_events 工具调用 rollout。
-  - examples/multimodal/ave_event_recognition/run_agent.py
-  # ===== tictactoe_image：不支持——底座 Qwen3.5-0.8B 的 GatedDeltaNet 需要
-  # flash-linear-attention，而 fla 依赖 triton（CANN/torch_npu 环境无 triton）；
-  # NPU 自研 accel.npu.seg_la 只覆盖 lightning-attn、不覆盖 GDN。 =====
-  # 图文行加载（image_base64 / prompt / response，模型无关）。
   - examples/vl/tictactoe_image/dataset_loader.py
-  # RL 完成评分（与 agentic 井字棋同一最优步逻辑）。
   - examples/vl/tictactoe_image/reward.py
-  # image_url data URL 的 agentic rollout（经 OpenAI 兼容代理）。
-  - examples/vl/tictactoe_image/run_agent.py
-  # 浏览器对玩 UI。
   - examples/vl/tictactoe_image/web_ui.py
-  # ===== pi：不支持——用 pi coding agent（pi.dev）做 SWE-smith 仓库修复的
-  # agentic RLVR（GRPO）。示例默认配方用 --qlora（AReno 自研 NF4），而 QLoRA 在
-  # areno 源码里硬编码 CUDA-only（`QLoRA requires CUDA`：engine/config.py:91,308 /
-  # engine/worker.py:79），昇腾不支持；另依赖外部 pi CLI + Node.js + fd/ripgrep +
-  # SWE-smith 数据集。 =====
-  # pi agent 多轮 rollout 入口。
-  - examples/agentic/pi/run_agent.py
-  # 数据集生成：ModelScope SWE-smith -> JSONL。
   - examples/agentic/pi/generate_dataset.py
-  # 数据加载：SWE-smith 行 -> 训练 record。
   - examples/agentic/pi/dataset_loader.py
-  # 二级代理：适配 pi 的流式请求到 AReno 端点（含 token/logprob/routing 回放）。
   - examples/agentic/pi/pi_proxy.py
-  # 验证器奖励（调用 swesmith_verify）。
   - examples/agentic/pi/reward.py
-  # SWE-smith 测试校验助手。
   - examples/agentic/pi/swesmith_verify.py
-  # CPU 单测（pytest）。
   - examples/agentic/pi/test_generate_dataset_cpu.py
   - examples/agentic/pi/test_pi_cpu.py
-  # ===== 工具依赖段：被其他 example 文件 import 的共享模块（不属于独立
-  # 入口），每条注明 import 方。 =====
-  # 巴什博弈规则 oracle + prompt 渲染 + submit_move 解析；被 dataset_generator /
-  # dataset_loader / reward / run_agent import。
   - examples/agentic/bash_game/game.py
-  # Bulls and Cows 规则与 prompt 渲染；被 dataset_generator / dataset_loader /
-  # reward / run_agent / tui import。
   - examples/agentic/codebreaker/game.py
-  # 棋盘状态生成 + normalize/schema 共享；被 dataset_loader / reward / web_ui import。
   - examples/agentic/duelgrid/dataset_generator.py
-  # 回合制规则引擎（能量/拾取/陷阱）；被 dataset_generator / dataset_loader /
-  # reward / web_ui import。
   - examples/agentic/duelgrid/game.py
-  # 目录/特征/预算约束规则；被 dataset_loader / reward / run_agent import。
   - examples/agentic/shopping/game.py
-  # 谜题生成 + 共享 prompt/规则助手；被 web_ui import。
   - examples/agentic/terminal_hacking/dataset_generator.py
-  # 候选词过滤 prompt + 规则/replay；被 dataset_loader / reward / run_agent /
-  # web_ui import。
   - examples/agentic/terminal_hacking/game.py
-  # 棋局 JSONL 生成 + 共享 board/schema；被 dataset_loader import。
   - examples/agentic/tictactoe/dataset_generator.py
-  # tool-call 变体加载器；被 dataset_loader_no_tool import 复用其格式化。
   - examples/agentic/tictactoe/dataset_loader.py
-  # 棋面校验 + minimax 最优步；被 dataset_generator / dataset_loader / reward /
-  # reward_no_tool / web_ui import。
   - examples/agentic/tictactoe/game.py
-  # AVE 标注解析与 manifest 共享助手；被 dataset_generator / dataset_loader import。
   - examples/multimodal/ave_event_recognition/common.py
-  # Pillow 合成板图 + 共享 schema；被 dataset_loader / web_ui import。
   - examples/vl/tictactoe_image/dataset_generator.py
-  # 棋面校验 + BFS 最优步；被 dataset_generator / dataset_loader / reward /
-  # web_ui import。
   - examples/vl/tictactoe_image/game.py
