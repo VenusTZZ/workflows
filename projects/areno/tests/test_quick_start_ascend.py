@@ -1,21 +1,26 @@
-"""Quick-start-Ascend 文档测试：基于 ``MarkdownDocTestBase`` 契约的端到端用例。
+"""Quick-start-Ascend doc test: end-to-end case built on the ``MarkdownDocTestBase`` contract.
 
-被测文档：``projects/areno/docs/Quick-start-Ascend.md``
-（遵循 ``docs/markdown_doc_test_label.md`` 契约：每个 ``shell`` / ``python`` 代码块
-带 ``#test`` / ``#test-setup`` / ``#test-result`` 标签之一，以及 ``id=`` / ``store=``
-/ ``load='x>>y'`` / ``fuzzy='xxx'`` 参数）。
+Document under test: ``projects/areno/docs/Quick-start-Ascend.md``
+(follows the ``docs/markdown_doc_test_label.md`` contract: every ``shell`` /
+``python`` code block carries one of the ``#test`` / ``#test-setup`` /
+``#test-result`` labels, plus ``id=`` / ``store=`` / ``load='x>>y'`` /
+``fuzzy='xxx'`` parameters).
 
-运行：``python -m unittest tests.test_quick_start_ascend -v 2>&1``
+Run: ``python -m unittest tests.test_quick_start_ascend -v 2>&1``
 
-环境变量（由 quick-start 引擎 workflow ``quick-start-template.yml`` 注入，
-``areno-quick-start.yml`` 触发）：
-    ``MONITORED_DOC_URL``         必需；被测文档的 URL。
-    ``UPSTREAM_REF``              必需；最新 release tag。它的值由
-                                  ``#test-setup store="upstream_ref"`` 块的 stdout
-                                  捕获进 ``captures``，再替换到文档里 ``<ref>`` 处。
-    ``NPU_READY=true``            必需，否则整类跳过。端到端只在 NPU runner 上跑：
-                                  本地/普通 ubuntu runner 没有 ``/dev/davinci*``，
-                                  硬跑会在 ``import torch_npu`` 处失败。
+Environment variables (injected by the quick-start engine workflow
+``quick-start-template.yml``, triggered by ``areno-quick-start.yml``):
+    ``MONITORED_DOC_URL``         required; URL of the document under test.
+    ``UPSTREAM_REF``              required; latest release tag. Its value is
+                                  captured into ``captures`` from the stdout
+                                  of the ``#test-setup store="upstream_ref"``
+                                  block, then substituted into ``<ref>`` in
+                                  the doc.
+    ``NPU_READY=true``            required, otherwise the whole class is
+                                  skipped. End-to-end runs only on NPU
+                                  runners: local/plain ubuntu runners have
+                                  no ``/dev/davinci*`` and would fail hard
+                                  at ``import torch_npu``.
 """
 
 from __future__ import annotations
@@ -28,63 +33,71 @@ from workflows.markdown_doc_test_base import MarkdownDocTestBase
 
 
 def _is_truthy(value: str | None) -> bool:
-    """``'true'``（忽略大小写）-> True；其余（含未设）-> False。"""
+    """``'true'`` (case-insensitive) -> True; anything else (unset included) -> False."""
     if not value:
         return False
     return value.strip().lower() == 'true'
 
 
 def _e2e_enabled() -> bool:
-    """``NPU_READY=true`` 时返回 True，解除跳过。"""
+    """Return True when ``NPU_READY=true``, lifting the skip."""
     return _is_truthy(os.environ.get('NPU_READY'))
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
-    """``Quick-start-Ascend.md`` 端到端测试：取文档 -> 校验契约 -> 按序执行
-    ``#test-setup`` / ``#test`` -> 与 ``#test-result`` 比对。
+    """``Quick-start-Ascend.md`` end-to-end test: fetch the doc -> validate the
+    contract -> run the ``#test-setup`` / ``#test`` blocks in order -> compare
+    against ``#test-result``.
 
-    范围：NPU 栈检查（torch / torch_npu / 设备数）+ 从引擎解析到的最新 release
-    源码安装（安装器检测到 ``torch_npu`` 后走 ``requirements/npu.txt`` 并编译
-    ``areno.accel._areno_accel_npu``，无回退，故构建必须在 CANN 9.0.0 镜像上成功）
-    + CLI 入口冒烟 + GSPO-on-GSM8K 1 步 RLVR 冒烟（Qwen3-0.6B，ModelScope：rollout
-    + reward + train + 存 checkpoint）+ 对该 checkpoint 的 OpenAI 兼容 serve
-    （后台启动、/health 轮询、/v1/models 与 /v1/chat/completions 检查、teardown）。
+    Scope: NPU stack check (torch / torch_npu / device count) + source
+    install of the latest release resolved by the engine (the installer
+    detects ``torch_npu``, takes the ``requirements/npu.txt`` branch and
+    compiles ``areno.accel._areno_accel_npu`` with no fallback, so the build
+    must succeed on the CANN 9.0.0 image) + CLI entry smoke + a 1-step
+    GSPO-on-GSM8K RLVR smoke (Qwen3-0.6B, ModelScope: rollout + reward +
+    train + checkpoint save) + OpenAI-compatible serving of that checkpoint
+    (background start, /health polling, /v1/models and
+    /v1/chat/completions checks, teardown).
     """
 
-    # 60 分钟：``uv pip install -e . --no-build-isolation`` 里的 AscendC 内核 +
-    # torch_npu 扩展构建占大头；之后 1 步 GSPO 冒烟（0.6B，8 × 256 token rollout）
-    # 在冷下载模型/数据后再加几分钟。
+    # 60 minutes: the AscendC kernel + torch_npu extension build inside
+    # ``uv pip install -e . --no-build-isolation`` dominates; the 1-step GSPO
+    # smoke afterwards (0.6B, 8 x 256-token rollouts) adds a few more minutes
+    # after the cold model/dataset download.
     DEFAULT_COMMAND_TIMEOUT = 3600
-    USER_AGENT = 'cosdt-ci-test/quick-start'  # 被看护源是 cosdt-ci-test 下的 fork
+    USER_AGENT = 'cosdt-ci-test/quick-start'  # guarded source is a fork under cosdt-ci-test
     ERROR_MARKERS = (
-        *MarkdownDocTestBase.ERROR_MARKERS,  # 通用 [ERROR] + Traceback
-        'applicaiton exception',  # CANN 驱动的拼写（sic）
-        'ERR99999',  # CANN 不可恢复错误哨兵
+        *MarkdownDocTestBase.ERROR_MARKERS,  # generic [ERROR] + Traceback
+        'applicaiton exception',  # CANN driver spelling (sic)
+        'ERR99999',  # CANN unrecoverable-error sentinel
     )
 
-    # CANN toolkit：source 一次拿到 ASCEND_HOME / LD_LIBRARY_PATH 等。路径写死，
-    # 与 ``areno-quick-start.yml`` 的 ``image:`` 输入绑定的镜像一致。
+    # CANN toolkit: sourcing this once yields ASCEND_HOME / LD_LIBRARY_PATH
+    # etc. Hard-coded path, matching the image bound to the ``image:`` input
+    # of ``areno-quick-start.yml``.
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
     # ----------------------------------------------------------
-    # prepare_environment：CANN 环境 + uv（torch / torch_npu / AReno 的安装由
-    # 文档的 `#test-setup` / `#test` 块负责）
+    # prepare_environment: CANN env + uv (torch / torch_npu / AReno installs
+    # are the doc's `#test-setup` / `#test` blocks' job)
     # ----------------------------------------------------------
 
     @classmethod
     def prepare_environment(cls) -> None:
-        """source CANN 环境并安装 uv。
+        """Source the CANN environment and install uv.
 
-        ``torch / torch_npu`` 与 ``areno`` 由文档的 ``#test-setup`` / ``#test`` 块
-        负责；这里只做必须在那些块之前完成的 runner 侧脚手架。
+        ``torch / torch_npu`` and ``areno`` are handled by the doc's
+        ``#test-setup`` / ``#test`` blocks; this only does the runner-side
+        scaffolding that must happen before those blocks.
 
-        类级准备，由 ``setUpClass`` 触发一次（不是每个测试方法都跑的
-        ``unittest.TestCase.setUp``）。
+        Class-level preparation, triggered once by ``setUpClass`` (not the
+        per-test-method ``unittest.TestCase.setUp``).
         """
-        # 0) CANN 环境：source set_env.sh 并合并进 os.environ。workflow 级的
-        # jobs.env / steps.env 优先于 CANN 默认值。文档每个块子进程都继承该环境，
-        # 于是 ``uv pip install -e .`` 里的 AscendC 构建即使早于文档自己的 source
-        # 行也能看到 ASCEND_HOME_PATH。
+        # 0) CANN env: source set_env.sh and merge it into os.environ.
+        # Workflow-level jobs.env / steps.env take precedence over the CANN
+        # defaults. Every doc-block subprocess inherits this environment, so
+        # the AscendC build inside ``uv pip install -e .`` sees
+        # ASCEND_HOME_PATH even before the doc's own source line.
         if os.path.isfile(cls._CANN_SET_ENV):
             merged = subprocess.run(
                 ['bash', '-c', f'source {cls._CANN_SET_ENV} >/dev/null 2>&1; env'],
@@ -101,27 +114,29 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
                 f'setup: skipping CANN env source ({cls._CANN_SET_ENV} not present)'
             )
 
-        # 1) uv：文档的安装块用 ``uv pip install -e .``，它处理 PEP 517 构建依赖
-        # （以及 flash-linear-attention 的 git 直接引用）比 pip 更稳。继承 yml
-        # job 级 env 的 ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST``（集群缓存 + trusted
-        # host）。
+        # 1) uv: the doc's install blocks use ``uv pip install -e .``, which
+        # handles PEP 517 build deps (and flash-linear-attention's git
+        # direct reference) more reliably than pip. Inherits
+        # ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST`` from the yml job-level env
+        # (cluster cache + trusted host).
         subprocess.run(
             ['python', '-m', 'pip', 'install', 'uv'],
             check=True,
         )
 
     # ----------------------------------------------------------
-    # 测试入口
+    # Test entry points
     # ----------------------------------------------------------
 
     @classmethod
     def setUpClass(cls) -> None:
-        """每类跑一次环境准备：CANN 环境 + uv。
+        """Run the environment preparation once per class: CANN env + uv.
 
-        ``areno`` 不在这里装——原因见 ``prepare_environment``。
+        ``areno`` is NOT installed here - see ``prepare_environment`` for why.
 
-        ``@unittest.skipIf`` 只跳过测试*方法*，``setUpClass`` 本身总会执行；下面
-        ``if _e2e_enabled()`` 才是真正防止 ``NPU_READY`` 未设时触发重准备的部分。
+        ``@unittest.skipIf`` only skips test *methods*; ``setUpClass`` itself
+        always runs. The ``if _e2e_enabled()`` below is what actually keeps
+        the heavy preparation from running when ``NPU_READY`` is unset.
         """
         if _e2e_enabled():
             cls.prepare_environment()
@@ -131,9 +146,10 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         'end-to-end requires NPU runner; set NPU_READY=true',
     )
     def test_runs_doc(self) -> None:
-        """模板方法入口。基类 ``run_template()`` 跑完整的 ``pre_process`` ->
-        ``parse`` -> ``execute`` -> ``post_process``；``prepare_environment`` 由
-        ``setUpClass`` 触发一次，不在 ``run_template`` 里。"""
+        """Template-method entry point. The base class ``run_template()`` runs
+        the full ``pre_process`` -> ``parse`` -> ``execute`` ->
+        ``post_process``; ``prepare_environment`` is triggered once by
+        ``setUpClass``, not inside ``run_template``."""
 
         self.run_template()
 
