@@ -1021,7 +1021,7 @@ supported:
 
 unsupported:
   # 验证中
-  # examples/dreambooth/train_dreambooth_lora_hidream.py
+  - examples/dreambooth/train_dreambooth_lora_hidream.py
   # ===== Flax/JAX 系列 =======================================================
   # 以下都是训练脚本的 Flax/JAX 版本，跑不通有三层原因：
   # 1) diffusers 0.40 起删除了全部 Flax 类（FlaxUNet2DConditionModel 等），
