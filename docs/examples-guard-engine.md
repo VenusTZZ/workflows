@@ -7,7 +7,7 @@
 本仓（[cosdt-ci-test/workflows](https://github.com/cosdt-ci-test/workflows)）目前有两类看护流水线，处于两种不同的工程形态：
 
 - **quick start 已引擎化**：公共回路在 [quick-start-template.yml](../.github/workflows/quick-start-template.yml)（823 行，`on.workflow_call`），每个项目只持有一份约 60 行的薄触发器（如 [peft-quick-start.yml](../.github/workflows/peft-quick-start.yml)）。修一个 guard 缺陷只改引擎一处。
-- **examples 仍是复制式模板**：[templates/project-examples.yml](../templates/project-examples.yml) 是带 `<project>` / `<upstream_repo>` 占位符的 440 行骨架，14 个项目各持一份几乎全同的拷贝。同一个 monitor 缺陷要改 14 处；其三信号轮询（examples 树 / release / main HEAD）NPU 占用过高，ms-swift 与 trl 的 `schedule` 已被迫停用。
+- **examples 仍是复制式模板**：templates/project-examples.yml（已随迁移完成于 2026-10-08 删除）曾是带 `<project>` / `<upstream_repo>` 占位符的 440 行骨架，14 个项目各持一份几乎全同的拷贝。同一个 monitor 缺陷要改 14 处；其三信号轮询（examples 树 / release / main HEAD）NPU 占用过高，ms-swift 与 trl 的 `schedule` 已被迫停用。
 
 **本设计的目标**：产出通用引擎 `.github/workflows/examples-template.yml`（引擎 + 薄触发器形态，对齐 quick start）；监控**只保留一个信号——软件最新版本发布（release）**：上游发新版时，把清单 `supported` 条目的 example 在新版 tag 上跑一遍；**上游没有 release 时，显示没有 release，不产生执行结果**。看护回路的其余部分（supported 条目校验、矩阵调度、结果发布、outcome 回写）沿用 [ms-swift-examples.yml](../.github/workflows/ms-swift-examples.yml) 已验证的设计；**上游 example 新增发现不属于本引擎**——独立的监控 workflow（待单独设计，§2.7），新增未分类不阻塞已声明条目的执行。
 
@@ -17,7 +17,7 @@
 
 - 本仓 HEAD `067de9a`（2026-09-10）；同日新增的 [ms-swift-examples-guard.md](ms-swift-examples-guard.md) 是单项目设计视图，本文是其通用化后续。
 - peft 上游快照（2026-09-10）：latest release `v0.20.0`；`examples/sft/run_peft.sh` 是一个全参数化的 shell 训练入口（驱动 `train.py`，TRL SFTTrainer + LoRA），是 overlay 压规模的首选被测对象。
-- 参考实现：[quick-start-template.yml](../.github/workflows/quick-start-template.yml)（引擎化先例）、[ms-swift-examples.yml](../.github/workflows/ms-swift-examples.yml)（看护回路全量参考）、[scripts/check_supported_entries.py](../scripts/check_supported_entries.py)（引擎的 supported 校验 + 矩阵派生脚本，可单测）；legacy 差集脚本 [check_examples_manifest.py](../scripts/check_examples_manifest.py) 本引擎不复用、[projects/trl](../projects/trl/examples_manifest.yaml)（HF 栈 example 的 ModelScope 模型预下载 + fixture 数据集模式）。
+- 参考实现：[quick-start-template.yml](../.github/workflows/quick-start-template.yml)（引擎化先例）、[ms-swift-examples.yml](../.github/workflows/ms-swift-examples.yml)（看护回路全量参考）、[scripts/check_supported_entries.py](../scripts/check_supported_entries.py)（引擎的 supported 校验 + 矩阵派生脚本，可单测）；legacy 差集脚本 check_examples_manifest.py 本引擎不复用（2026-10-08 已随迁移完成删除）、[projects/trl](../projects/trl/examples_manifest.yaml)（HF 栈 example 的 ModelScope 模型预下载 + fixture 数据集模式）。
 
 ### 1.3 范围
 
@@ -177,17 +177,19 @@ peft 侧新增（引擎零改动）：
 
 ### 2.6 存量迁移计划（后续工作，不在本期范围）
 
-1. 新项目一律走引擎；`templates/project-examples.yml` 标记 deprecated。
+1. 新项目一律走引擎；`templates/project-examples.yml` 已于 2026-10-08 删除（迁移全部完成后清理）。
 2. 存量 14 份分批迁移：每项目 = 写薄触发器 + 删复制式 YAML；监控语义同时收敛为 release-only（旧三信号状态文件 `.examples_head` / `.last_tested_sha` 等成为无主文件）；cache key 切换到引擎格式（§2.4.6）→ 每项目冷启动一轮（[guarding-examples.md](guarding-examples.md) 已定性「无害」）。
 3. [guarding-examples.md](guarding-examples.md)「要求 2」的三信号描述随引擎落地同步更新。
+
+> 2026-10-08 状态：存量迁移全部完成（30 个 thin workflow 走引擎，31 份清单）；legacy 差集脚本 `check_examples_manifest.py`、复制式模板 `templates/project-examples.yml` 与 `schemas/manifest_check_result.schema.json` 已删除。
 
 ### 2.7 不在范围内的事
 
 - 不校验 example 输出数值（loss 等），只认退出码。
-- 不为引擎另建 result schema，沿用 [schemas/result.schema.json](../schemas/result.schema.json) 与 [manifest_check_result.schema.json](../schemas/manifest_check_result.schema.json)。
+- 不为引擎另建 result schema，沿用 [schemas/result.schema.json](../schemas/result.schema.json)（曾并用的 manifest_check_result.schema.json 已随 legacy 差集脚本删除，引擎自 2026-09-11 起本就不产该 artifact）。
 - 不跨 runner 切分单条 example（`max-parallel` 上限语义不变）。
 - 不改写上游 example 本体；看护失败如实标红，修复走上游 PR。
-- **不做上游 example 新增发现**（磁盘有、清单无的 new_paths）：本引擎只对已声明的 supported 条目负责，新增未分类**不阻塞执行**；「上游多了什么该纳入看护」是独立关注点，后续单独设计监控 workflow（定期扫描目标树与清单求差集、报告新增——形态待定）。
+- **不做上游 example 新增发现**（磁盘有、清单无的 new_paths）：本引擎只对已声明的 supported 条目负责，新增未分类**不阻塞执行**；「上游多了什么该纳入看护」是独立关注点，由每日对账 workflow 承担（设计见 [examples-check-design.md](examples-check-design.md)）。
 - **扫描模型简化为 files-only**（发现 workflow 采用；legacy 的 `unit: directories / mixed` 连同 marker / max_depth 废弃）：对账单位统一为**入口文件**——`scan` 只有两个键：`root`、`include_extensions`（只扫这几类，`.h`/`.md` 天然不进）。多文件 example 的内部 helper 源文件、`__init__.py`、上游自测等"不是 example 的配套物"一律登记在 `unsupported` 段（扫描引擎不消费的"声明性 exclude"字段已退役——曾经 8 份清单依赖它过滤扩展名之外的文件，但引擎本身从未实现 exclude，对账单位与 `load_scan` 实测一致）。随之 `path` 语义统一为**入口源文件**；`exec` 仅剩一种用途——path 是源码而启动的是构建产物（llama.cpp：`path: examples/simple/simple.cpp` + `exec: build/bin/llama-simple`）；python/shell 例不需要 exec，启动命令由项目脚本按扩展名分发（`.sh` → bash，其余 → python，解释器即 setup 装依赖的那个）。实施为独立 PR（涉及扫描脚本与 llama.cpp / whisper.cpp / trl 三个存量清单迁移），不混入本 PR。
 
 ## 3. 核心数据结构
