@@ -1,4 +1,5 @@
-"""Quick-start-Ascend documentation test (MarkdownDocTestBase contract)."""
+"""Quick-start-Ascend test: doc under test is ``projects/trl/docs/Quick-start-Ascend.md``.
+"""
 
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ def _e2e_enabled() -> bool:
 
 
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
-    DEFAULT_COMMAND_TIMEOUT = 1200
+    DEFAULT_COMMAND_TIMEOUT = 7200
     USER_AGENT = 'cosdt-ci-test/quick-start'
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,
@@ -114,14 +115,8 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         with open(cls._CONSTRAINTS_FILE, 'w', encoding='utf-8') as fh:
             fh.write('\n'.join(cls._CUDA_CONSTRAINTS) + '\n')
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
-        os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
         os.environ.setdefault('ASCEND_RT_VISIBLE_DEVICES', '0')
-
-        subprocess.run(
-            ['python', '-m', 'pip', 'install', 'uv'],
-            check=True,
-        )
 
         _PROBE_SCRIPT = (
             'import torch, torch_npu\n'

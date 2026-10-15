@@ -4,48 +4,64 @@ scan:
   include_extensions: ['.py']
   unit: files
 supported:
-  - path: examples/api/run_cache_refresh_flux.py
+  # examples/generate.py: thin wrapper over cache_dit.generate.entrypoint()
+  # (unified CLI, README "python3 -m cache_dit.generate"). Positional name
+  # "flux" selects the FLUX.1-dev example; --model-path resolves from the
+  # shared runner cache (cache-seed/cache-dit/ms_seeds.yaml plant,
+  # FLUX_MODEL_PATH GITHUB_ENV injection by setup_example.sh);
+  # --attn _native_npu is the NPU attention backend; --cache exercises
+  # cache-dit's DBCache path.
+  - path: examples/generate.py
     profile: flux
     runner: linux-aarch64-a2-1
     npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - --model flux
+      - flux
+      - --model-path ${FLUX_MODEL_PATH}
       - --attn _native_npu
-    timeout_minutes: 60
-  - path: examples/api/run_cache_refresh_wan_2.2.py
-    profile: wan2.2
-    runner: linux-aarch64-a2-1
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --model wan2.2
-      - --attn _native_npu
-    timeout_minutes: 60
-  - path: examples/api/run_steps_mask.py
-    profile: flux
-    runner: linux-aarch64-a2-1
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --attn _native_npu
-      - --steps-mask
-    timeout_minutes: 60
-  - path: examples/api/run_transformer_only.py
-    profile: flux
-    runner: linux-aarch64-a2-1
-    npu_devices: '0'
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - --attn _native_npu
-      - --transformer-only
-    timeout_minutes: 60
+      - --cache
+      - --cpu-offload
+      - --warmup 1
+      - --repeat 1
+      - --steps 8
+    timeout_minutes: 120
 unsupported:
-  - examples/ray/*
-  - examples/ptq/*
-  - examples/data/**
-  - examples/configs/**
-  - examples/assets/**
-  - examples/.gitignore
-  - examples/README.md
-  - examples/assets/**
+  # --- examples/api/*：上游坏脚本，manifest 层无法规避 ---
+  # PR #752（feat: add cache-dit-generate cli tool）删除了 examples/utils.py，
+  # 但未同步更新 examples/api/ 下的脚本；4 个脚本开头的
+  # `from utils import get_args, strify, MemoryTracker` 在干净 checkout 下
+  # 直接 ImportError（utils.py 仅存于 tests/api/utils.py，不在 examples 的
+  # sys.path 上）。上游修复后移回。
+  - examples/api/run_cache_refresh_flux.py
+  - examples/api/run_cache_refresh_wan_2.2.py
+  - examples/api/run_steps_mask.py
+  - examples/api/run_transformer_only.py
+  # --- examples/generate.py 分布式变体（torchrun 4 卡，ulysses/ring/usp，
+  # README "Distributed Inference"）：两条模型路线在 NPU 上均不可行，
+  # 上游适配后移回：
+  # 1) FLUX.1-dev：序列并行不分片权重，每个 rank 须装载完整 pipeline，
+  #    ~28.9GB bf16 超出 32GB 910B4 单卡可用显存（29.49GB；run
+  #    36657738934：4 rank 全部在 pipe.to(device) OOM）。加卡无效
+  #    （8 卡同样 OOM，权重不随卡数分摊）；--cpu-offload 在 torchrun
+  #    多进程下上游未验证。
+  # 2) Z-Image-Turbo（~19GB，显存适配，run 36660209993 已完成加载并
+  #    进入 warmup）：diffusers Z-Image 的 RoPE 频率表为 complex64
+  #    （torch.polar 预计算，按位置 id 索引），torch_npu 的 aclnnIndex
+  #    无 DT_COMPLEX64 kernel，warmup 第一步即崩（EZ1001, error
+  #    161002）；attention processor 的复数乘法同样存在缺口。上游官方
+  #    NPU 适配：https://github.com/huggingface/diffusers/pull/12979
+  #    （draft 未合入；cache-dit docs/supported_matrix/ASCEND_NPU.md
+  #    亦注明需合入该 PR 后方可支持 Z-Image-Turbo）。PR 合入后恢复
+  #    条目并补 setup 的模型下载即可（torchrun -m cache_dit.generate +
+  #    zimage_turbo），无需本地补丁。
+  - examples/generate.py
+  # --- examples/ptq/flux2_svdq_ptq.py：依赖 svdq CUDA kernel 扩展
+  #（cache_dit.kernels.svdq_extension_is_available），NPU 环境不可用。
+  - examples/ptq/flux2_svdq_ptq.py
+  # --- examples/ray/ray_wrapper_example.py：脚本 CUDA 硬编码，NPU 不可用
+  #（与 runner 卡数无关）：--use-init-fn 的 worker init_fn、主进程 pipeline、
+  # transformer 转移共 3 处 .to("cuda")；Ray GPU actor 生态面向 CUDA；
+  # --quantize(float8/torchao)、--use-compile 亦为 CUDA-only。上游适配
+  # NPU 后再评估。
+  - examples/ray/ray_wrapper_example.py

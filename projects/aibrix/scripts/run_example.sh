@@ -44,14 +44,22 @@ RUN_LOG="${CI_OUTPUT_DIR}/run.log"
 VLLM_LOG="${CI_OUTPUT_DIR}/vllm.log"
 VLLM_PID_FILE="${CI_OUTPUT_DIR}/vllm.pid"
 ENDPOINTS="${CI_OUTPUT_DIR}/endpoints.yaml"
-TOOLS="${AIBRIX_TOOLS_DIR:-/root/.cache/cosdt-ci-test/aibrix/tools}"
+TOOLS="${AIBRIX_TOOLS_DIR:-${HF_HOME:-${HOME}/.cache/huggingface}/aibrix/tools}"
 
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:${TOOLS}/bin:${TOOLS}/toolchain/go/bin:${PATH}"
 set +u
 # shellcheck disable=SC1091
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
-# shellcheck disable=SC1091
-source /usr/local/Ascend/nnal/atb/latest/atb/set_env.sh
+# ATB env: accept both the legacy bind-mount layout (atb/latest/atb)
+# and the CANN image layout (atb) - see setup_example.sh.
+if [[ -f /usr/local/Ascend/nnal/atb/latest/atb/set_env.sh ]]; then
+  source /usr/local/Ascend/nnal/atb/latest/atb/set_env.sh
+elif [[ -f /usr/local/Ascend/nnal/atb/set_env.sh ]]; then
+  source /usr/local/Ascend/nnal/atb/set_env.sh
+else
+  echo "ATB env script not found under /usr/local/Ascend/nnal" >&2
+  exit 1
+fi
 set -euo pipefail
 
 stop_backend() {

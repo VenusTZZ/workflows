@@ -64,7 +64,7 @@ jobs:
       # the cache I/O jobs (restore-cache / publish-and-persist) to
       # GitHub-hosted ubuntu-latest.
       test_runner: '["linux-aarch64-a2-1"]'
-      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
       container_options: >-
         --volume=/data/ci-cache/modelscope/stable-diffusion-webui:/root/.cache/modelscope
         --volume=/data/ci-cache/pip:/root/.cache/pip

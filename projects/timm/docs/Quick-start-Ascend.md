@@ -4,54 +4,39 @@
 
 ## 前置条件
 
-- **硬件**：Atlas 900 A2 / A3 或 Ascend 950 系列服务器，已挂载 NPU 设备。
-- **软件**：已装好 CANN，以及与 CANN 匹配的 `torch` + `torch_npu`（`torch.npu.is_available() == True`）。参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)与 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch)。
+### 硬件
 
-**本文档示例版本：**
+Atlas 900 A2 / A3 或 Ascend 950 系列服务器（Ascend 910B），并按需完成物理机或容器内的设备挂载。
 
-| 组件 | 版本 | 来源 |
-|---|---|---|
-| Python | 3.12 | - |
-| CANN | 9.1.0 | 昇腾官方 |
-| torch | 2.9.0+cpu | PyPI（CPU 版本） |
-| torch_npu | 2.9.0.post2 | 华为 Ascend PyPI |
-| torchvision | 0.24.0 | PyPI |
-| timm | v1.0.29（最新 release） | PyPI |
-| modelscope | 最新 release | PyPI（权重下载） |
+### 基础软件
 
-### 检查环境
+在运行本文档示例之前，你的机器上需要已经装好并可用：
 
-**检查 Python 版本。**
-```shell #test id="check-py"
-python --version
-```
+- 可用的 Python 环境
+- 可用的 CANN（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
+- 与 CANN 匹配的 `torch` + `torch_npu`（参考 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch)）
 
-```shell #test-result id="check-py" fuzzy='xxx'
-Python 3.12.xxx
-```
+本文档示例在 Python 3.12、CANN 9.1.0、torch 2.9.0、torch_npu 2.9.0.post2 环境下验证通过。
 
-**检查 NPU 设备可用。** import torch_npu，验证 is_available 和 device_count。
-```shell #test id="check-npu"
-python -c "import torch, torch_npu; print('torch', torch.__version__); print('torch_npu', torch_npu.__version__); print('is_available', torch.npu.is_available()); print('count', torch.npu.device_count())"
-```
+## 加载 CANN 环境
 
-```shell #test-result id="check-npu" fuzzy='xxx'
-torch xxx
-torch_npu xxx
-is_available True
-count 1
+```shell
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 ```
 
 ## 安装 timm
 
-**安装 timm。** PyPI 最新 release，由 uv 统一安装并自动解析依赖。
+从 PyPI 安装最新 release，并确认可以正常导入：
+
 ```shell #test id="install-timm"
-pip install uv >/dev/null 2>&1
-uv pip install timm
+pip install timm
 python -c "import timm; print('timm', timm.__version__)"
 ```
 
-```shell #test-result id="install-timm" fuzzy='xxx'
+输出结果如下，其中 `xxx` 表示实际版本号：
+
+```shell #test-result id="install-timm" fuzzy='...' fuzzy='xxx'
+...
 timm xxx
 ```
 
@@ -61,28 +46,36 @@ timm xxx
 
 timm 的入门示例是 `timm.create_model('resnet18')` 创建模型并前向推理。详见[官方文档](https://timm.fast.ai/#create-a-model)。
 
-**运行推理。** 首次运行自动下载 ResNet-18 预训练权重到默认缓存（`~/.cache/modelscope`，约 45 MB，来源 [timm/resnet18.a1_in1k](https://modelscope.cn/models/timm/resnet18.a1_in1k)），输入随机图像，输出 1000 类 logits。
-```shell #test id="inference"
-python -c "
+首次运行自动从 ModelScope 下载 ResNet-18 预训练权重（来源 [timm/resnet18.a1_in1k](https://modelscope.cn/models/timm/resnet18.a1_in1k)），输入随机图像，输出 1000 类 logits，运行下面的 Python 脚本：
+
+```python #test id="inference"
 import os
-import torch, torch_npu, timm
+
 import safetensors.torch
+import timm
+import torch
+import torch_npu
 
 try:
     from modelscope.hub.snapshot_download import snapshot_download
-    model_dir = snapshot_download('timm/resnet18.a1_in1k')
-    model = timm.create_model('resnet18')
-    model.load_state_dict(safetensors.torch.load_file(os.path.join(model_dir, 'model.safetensors')))
+
+    model_dir = snapshot_download("timm/resnet18.a1_in1k")
+    model = timm.create_model("resnet18")
+    model.load_state_dict(
+        safetensors.torch.load_file(os.path.join(model_dir, "model.safetensors"))
+    )
 except Exception:
-    os.environ.setdefault('HF_ENDPOINT', 'https://hf-mirror.com')
-    model = timm.create_model('resnet18', pretrained=True)
-model = model.to('npu:0').eval()
-x = torch.randn(1, 3, 224, 224, device='npu:0')
+    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+    model = timm.create_model("resnet18", pretrained=True)
+
+model = model.to("npu:0").eval()
+x = torch.randn(1, 3, 224, 224, device="npu:0")
 with torch.no_grad():
     out = model(x)
-print('out_shape', tuple(out.shape))
-"
+print("out_shape", tuple(out.shape))
 ```
+
+输出结果如下：
 
 ```shell #test-result id="inference"
 out_shape (1, 1000)
@@ -92,31 +85,40 @@ out_shape (1, 1000)
 
 timm 的 `features_only=True` 可将任意模型转为多尺度特征提取器，输出各层 feature map。详见[Feature Extraction 文档](https://huggingface.co/docs/timm/en/feature_extraction)。
 
-**提取特征图。** 加载预训练 ResNet-18，输出 stride 2/4/8/16/32 共 5 层 feature map，打印每层形状和通道数。权重已由示例 1 下载到默认缓存，无需再次下载。
-```shell #test id="features"
-python -c "
+加载预训练 ResNet-18，输出 stride 2/4/8/16/32 共 5 层 feature map，打印每层形状和通道数，运行下面的 Python 脚本：
+
+```python #test id="features"
 import os
-import torch, torch_npu, timm
+
 import safetensors.torch
+import timm
+import torch
+import torch_npu
 
 try:
     from modelscope.hub.snapshot_download import snapshot_download
-    model_dir = snapshot_download('timm/resnet18.a1_in1k')
-    model = timm.create_model('resnet18', features_only=True)
-    model.load_state_dict(safetensors.torch.load_file(os.path.join(model_dir, 'model.safetensors')), strict=False)
+
+    model_dir = snapshot_download("timm/resnet18.a1_in1k")
+    model = timm.create_model("resnet18", features_only=True)
+    model.load_state_dict(
+        safetensors.torch.load_file(os.path.join(model_dir, "model.safetensors")),
+        strict=False,
+    )
 except Exception:
-    os.environ.setdefault('HF_ENDPOINT', 'https://hf-mirror.com')
-    model = timm.create_model('resnet18', features_only=True, pretrained=True)
-model = model.to('npu:0').eval()
-x = torch.randn(1, 3, 224, 224, device='npu:0')
+    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+    model = timm.create_model("resnet18", features_only=True, pretrained=True)
+
+model = model.to("npu:0").eval()
+x = torch.randn(1, 3, 224, 224, device="npu:0")
 with torch.no_grad():
     outs = model(x)
-print('num_features', len(outs))
-print('channels', model.feature_info.channels())
+print("num_features", len(outs))
+print("channels", model.feature_info.channels())
 for i, o in enumerate(outs):
     print(i, tuple(o.shape))
-"
 ```
+
+输出结果如下：
 
 ```shell #test-result id="features"
 num_features 5

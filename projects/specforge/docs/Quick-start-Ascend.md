@@ -285,7 +285,11 @@ PY
 
 ### 打补丁 + apt 依赖
 
-SGLang 需要打 spec-capture 补丁才能在推理时导出训练所需的 hidden states。SpecForge 仓库自带补丁和 apply 脚本，对镜像里的 sglang 0.5.18 直接执行；脚本处理不了的部分（Ascend 挂载段改写、个别字段兜底插入）由下方命令块内的 Python 段完成，均已验证过幂等可重跑。
+SGLang 需要打 spec-capture 补丁才能在推理时导出训练所需的 hidden states。SpecForge 仓库自带补丁和 apply 脚本，对镜像里的 sglang 0.5.18 直接执行。
+
+> 2026-09-28 起此块只保留官方 patch 流程。原先还有两段本仓 Python 改写，均已删除：
+> ① mooncake 挂载段改写（`segment_to_mount` / `allocate_and_mount_segment`，即上游 `spec-capture-ascend-mount.patch` 的锚点重实现）——它是给 8 月底清华源**非 NPU 版** `mooncake-transfer-engine==0.3.13` 准备的（该构建在 Ascend 上注册不了 wildcard segment），换 `mooncake-transfer-engine-npu==0.3.13.post1` 后从未 ablate；examples 的 online 腿在同 runner/镜像/wheel、同样 `MOONCAKE_GLOBAL_SEGMENT_SIZE=32<<30` 下不打改写一直绿，证明当前 stack 走官方 patch 的 wildcard 注册即可。若后续 smoke 在 mooncake setup 阶段报 wildcard segment 注册失败，说明存在 examples 未覆盖的场景，届时从上游取现行版 `spec-capture-ascend-mount.patch` 重加。
+> ② `server_args.py` 三字段兜底插入——只防 git apply 假成功（run 33493594121 复现过一次）；上游 apply 脚本现已用 `GIT_CEILING_DIRECTORIES` 修复非 git 安装路径静默 skip 的根因，且下方 sink 存在性检查（`class SpecCaptureSink` grep + git apply 重放）仍保留为假成功的显式护栏。
 
 ```shell #test id="smoke-apply-patches"
 set -euo pipefail
@@ -327,149 +331,8 @@ if [[ ! -f "$SINK_FILE" ]] || ! grep -q 'class SpecCaptureSink' "$SINK_FILE"; th
     echo "smoke: spec-capture re-apply OK (12 files)" >&2
 fi
 
-SGLANG_DIR=$(python -c "import importlib.util, os; print(os.path.dirname(os.path.dirname(importlib.util.find_spec('sglang').origin)))")
-SINK_FILE="$SGLANG_DIR/sglang/srt/spec_capture_sink.py"
-if [[ -f "$SINK_FILE" ]] && ! grep -q 'segment_to_mount' "$SINK_FILE"; then
-    if ! python - "$SINK_FILE" <<'PY' >/tmp/smoke-ascend.log 2>&1
-import sys
-path = sys.argv[1]
-with open(path) as f:
-    src = f.read()
-
-old_anchor = (
-    '            store = MooncakeDistributedStore()\n'
-    '            rc = store.setup(\n'
-)
-new_anchor = (
-    '            store = MooncakeDistributedStore()\n'
-    '            global_segment_size = int(\n'
-    '                os.environ.get("MOONCAKE_GLOBAL_SEGMENT_SIZE", 1 << 30)\n'
-    '            )\n'
-    '            local_buffer_size = int(\n'
-    '                os.environ.get("MOONCAKE_LOCAL_BUFFER_SIZE", 1 << 30)\n'
-    '            )\n'
-    '            protocol = os.environ.get("MOONCAKE_PROTOCOL", "tcp")\n'
-    '            ascend_host = bool(os.environ.get("ASCEND_RT_VISIBLE_DEVICES"))\n'
-    '            segment_to_mount = global_segment_size if ascend_host else 0\n'
-    '            if ascend_host:\n'
-    '                global_segment_size = 0\n'
-    '                local_buffer_size = 0\n'
-    '            rc = store.setup(\n'
-)
-assert old_anchor in src, "store.setup anchor not found"
-src = src.replace(old_anchor, new_anchor, 1)
-
-old_args = (
-    '                global_segment_size=int(\n'
-    '                    os.environ.get("MOONCAKE_GLOBAL_SEGMENT_SIZE", 1 << 30)\n'
-    '                ),\n'
-    '                local_buffer_size=int(\n'
-    '                    os.environ.get("MOONCAKE_LOCAL_BUFFER_SIZE", 1 << 30)\n'
-    '                ),\n'
-    '                protocol=os.environ.get("MOONCAKE_PROTOCOL", "tcp"),\n'
-)
-new_args = (
-    '                global_segment_size=global_segment_size,\n'
-    '                local_buffer_size=local_buffer_size,\n'
-    '                protocol=protocol,\n'
-)
-assert old_args in src, "setup() args anchor not found"
-src = src.replace(old_args, new_args, 1)
-
-old_post_setup = (
-    '                raise RuntimeError(f"spec-capture mooncake setup failed (status {rc})")\n'
-)
-new_post_setup = (
-    '                raise RuntimeError(f"spec-capture mooncake setup failed (status {rc})")\n'
-    '            if segment_to_mount:\n'
-    '                mount = getattr(store, "allocate_and_mount_segment", None)\n'
-    '                if mount is None:\n'
-    '                    raise RuntimeError(\n'
-    '                        "Mooncake build on this Ascend host cannot register a "\n'
-    '                        "wildcard segment and has no allocate_and_mount_segment; "\n'
-    '                        "upgrade mooncake-transfer-engine"\n'
-    '                    )\n'
-    '                result = mount(segment_to_mount, protocol, "cpu")\n'
-    '                mrc = result.get("ret", -1) if isinstance(result, dict) else result\n'
-    '                if mrc is not None and int(mrc) != 0:\n'
-    '                    raise RuntimeError(\n'
-    '                        f"spec-capture mooncake mount segment failed (status {mrc})"\n'
-    '                    )\n'
-    '                logger.info(\n'
-    '                    "spec-capture mooncake segment mounted with location=cpu "\n'
-    '                    "(%d bytes)",\n'
-    '                    segment_to_mount,\n'
-    '                )\n'
-)
-assert old_post_setup in src, "raise RuntimeError after setup() not found"
-src = src.replace(old_post_setup, new_post_setup, 1)
-
-with open(path, 'w') as f:
-    f.write(src)
-PY
-    then
-        echo "smoke: FAILED - ascend companion python failed" >&2
-        tail -30 /tmp/smoke-ascend.log >&2
-        exit 1
-    fi
-fi
 popd >/dev/null
 
-# 防御性 verify：base patch 必须在 server_args.py 引入 enable_spec_capture /
-# spec_capture_aux_layer_ids / spec_capture_method 三个字段（run 33493594121 复现
-# 过 apply 脚本 stdout 说成功但 server_args.py 没落盘——可能是 git apply 在非 git
-# 装路径下静默 skip）。不在则用 Python 直接插入。
-SGLANG_DIR=$(python -c "import importlib.util, os; print(os.path.dirname(os.path.dirname(importlib.util.find_spec('sglang').origin)))")
-SERVER_ARGS="$SGLANG_DIR/sglang/srt/server_args.py"
-if ! grep -q 'enable_spec_capture: A\[' "$SERVER_ARGS" \
-   || ! grep -q 'spec_capture_aux_layer_ids: A\[' "$SERVER_ARGS" \
-   || ! grep -q 'spec_capture_method: A\[' "$SERVER_ARGS"; then
-    echo "smoke: last-resort: apply server_args.py hunk directly via Python" >&2
-    python - "$SERVER_ARGS" >/tmp/smoke-py-patch.out 2>/tmp/smoke-py-patch.err <<'PY'
-import sys, ast
-path = sys.argv[1]
-with open(path) as f:
-    src = f.read()
-# 锚点 'enable_return_routed_experts: A[' 是 spec-capture.patch 已有的邻近 field，
-# 不受 sglang minor version 行号漂移影响；insert BEFORE 避开 closing '] = ...' 偏移。
-fields_to_add = """    enable_spec_capture: A[
-        bool,
-        "Enable server-side speculative-training capture (SpecForge DataFlow layout).",
-        NS("exec.features"),
-    ] = False
-    spec_capture_aux_layer_ids: A[
-        Optional[List[int]],
-        "Target layer ids whose hidden states are captured for spec-capture requests.",
-        NS("exec.features"),
-    ] = None
-    spec_capture_method: A[
-        str,
-        "Capture method for --enable-spec-capture: 'eagle3', 'dflash', or 'dspark'.",
-        NS("exec.features"),
-    ] = "eagle3"
-"""
-anchor = 'enable_return_routed_experts: A['
-if anchor not in src:
-    sys.exit("anchor 'enable_return_routed_experts: A[' not found in server_args.py")
-if 'enable_spec_capture: A[' in src:
-    sys.exit(0)
-idx = src.index(anchor)
-insert_pos = src.rfind('\n', 0, idx) + 1
-new_src = src[:insert_pos] + fields_to_add + src[insert_pos:]
-try:
-    ast.parse(new_src)
-except SyntaxError as e:
-    sys.exit(f"smoke: FAILED - inserted code creates SyntaxError at line {e.lineno}: {e.msg}")
-with open(path, 'w') as f:
-    f.write(new_src)
-print('smoke: server_args.py patched in-place via python (added 3 fields)')
-PY
-    if ! grep -q 'enable_spec_capture: A\[' "$SERVER_ARGS"; then
-        echo "smoke: FAILED - even direct python patch did not land enable_spec_capture" >&2
-        tail -30 /tmp/smoke-py-patch.err >&2 || true
-        exit 1
-    fi
-fi
 echo "smoke: patches + apt deps applied"
 ```
 

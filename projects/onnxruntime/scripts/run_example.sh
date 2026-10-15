@@ -12,7 +12,22 @@ fi
 EXAMPLE_REL="$1"
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
 CI_OUTPUT_DIR="${CI_OUTPUT_DIR:?CI_OUTPUT_DIR is required}"
-PROFILE="${PROFILE:?PROFILE is required}"
+
+# The engine's run step passes no PROFILE env (only setup gets it);
+# derive the stdout-guard kind from the example path, like
+# bitsandbytes' run_example.sh.
+case "$EXAMPLE_REL" in
+  python/api/getting_started.py)
+    KIND=cpu-python
+    ;;
+  quantization/image_classification/cpu/run.py)
+    KIND=quant-cpu
+    ;;
+  *)
+    echo "unsupported onnxruntime guard path: $EXAMPLE_REL" >&2
+    exit 1
+    ;;
+esac
 
 EXAMPLE_PATH="$TARGET_ROOT/$EXAMPLE_REL"
 
@@ -101,8 +116,8 @@ EXAMPLE_DIR=$(dirname "$EXAMPLE_PATH")
 cd "$EXAMPLE_DIR"
 "$PYTHON" "$(basename "$EXAMPLE_PATH")" "${EXTRA_ARGS[@]}" 2>&1 | tee "$RUN_LOG"
 
-if ! declare -F "assert_${PROFILE}" >/dev/null 2>&1; then
-  echo "no stdout guard for profile: ${PROFILE}" >&2
+if ! declare -F "assert_${KIND}" >/dev/null 2>&1; then
+  echo "no stdout guard for example: ${EXAMPLE_REL} (kind: ${KIND})" >&2
   exit 1
 fi
-"assert_${PROFILE}"
+"assert_${KIND}"

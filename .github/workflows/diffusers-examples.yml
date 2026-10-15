@@ -18,11 +18,9 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # Bring-up phase: keep the schedule disabled until a few manual
-  # rounds are green (same policy as accelerate-examples.yml /
-  # peft-examples.yml). Re-enable:
-  # schedule:
-  #   - cron: '30 */6 * * *'
+
+  schedule:
+    - cron: '30 */6 * * *'
   workflow_dispatch:
     inputs:
       target_ref:
@@ -46,4 +44,4 @@ jobs:
       project: diffusers
       upstream_repo: huggingface/diffusers
       target_ref: ${{ inputs.target_ref }}
-      max_parallel: 4
+      max_parallel: 8

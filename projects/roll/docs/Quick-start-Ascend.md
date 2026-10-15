@@ -1,114 +1,25 @@
-# Quick Start: ROLL on Ascend NPU
+# ROLL
 
 在昇腾 NPU 上安装 ROLL，并用 FrozenLake agentic 强化学习跑通一次完整的训练闭环。
 
 ## 前置条件
 
 - **硬件**：Atlas 900 A2 PODc / Ascend 910B 训练系列，单卡。
-- **软件**：已装好 CANN，Python 版本不低于 3.10。参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)。
+- **软件**：已装好 CANN（toolkit 与驱动），并能 `source set_env.sh`，Python 版本不低于 3.10。参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)。
 
-**本文档示例版本：**
+本文档示例在 Python 3.12、CANN 9.1.0 环境下验证通过。
 
-| 组件 | 版本 | 来源 |
-|---|---|---|
-| Python | 3.12 | - |
-| CANN | 9.1.0 | 昇腾官方 |
-| torch | 2.10.0 | PyPI（CPU 版本） |
-| torch_npu | 2.10.0.post4 | PyPI |
-| torchvision / torchaudio | 0.25.0 / 2.10.0 | PyPI |
-| vLLM | 0.23.0 | 华为 PyPI 镜像 |
-| vLLM-Ascend | 0.23.0rc1 | 华为 PyPI 镜像 |
-| triton-ascend | 3.2.1 | 华为 Ascend PyPI |
-| ROLL | main | GitHub 源码 |
+本文档配套镜像：`swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12`。
 
-torch、torch_npu、vLLM、vLLM-Ascend 与 triton-ascend 版本严格配套，参考 [ROLL 昇腾安装文档](https://alibaba.github.io/ROLL/docs/User%20Guides/Hardware%20Support/ascend_usage/)。PyPI 上的 roll 包名与本项目无关，ROLL 需源码安装。
+## 加载 CANN 环境
 
-### 检查环境
-
-**检查 Python 版本。**
-
-```shell #test id="check-py"
-python --version
-```
-
-```shell #test-result id="check-py" fuzzy='xxx'
-Python 3.xxx
-```
-
-## 安装 torch NPU 栈
-
-**安装 torch 与 torch_npu。** 使用严格配套的版本安装 NPU 运行时。
-
-```shell #test-setup id="install-torch"
-pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 "numpy==1.26.4"
-pip install --no-deps torch-npu==2.10.0.post4
-```
-
-**校验 torch 版本和 NPU 可用性。**
-
-```shell #test id="verify-torch"
-python -c "import torch, torch_npu; print('torch', torch.__version__); print('torch_npu', torch_npu.__version__); print('is_available', torch.npu.is_available()); print('count', torch.npu.device_count())"
-```
-
-```shell #test-result id="verify-torch" fuzzy='xxx'
-torch xxx
-torch_npu xxx
-is_available True
-count 1
-```
-
-## 安装 vLLM-Ascend
-
-**从华为 PyPI 镜像安装 vLLM。** 使用预编译 ARM64 wheel 安装 rollout 引擎。
-
-```shell #test-setup id="install-vllm"
-pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple vllm==0.23.0
-```
-
-**安装 ARM64 版 Triton。** 清理已有版本，再从华为 PyPI 镜像安装配套版本。
-
-```shell #test-setup id="install-triton"
-pip uninstall -y triton triton-ascend
-pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple triton==3.5.0
-```
-
-**安装 triton-ascend。** 从 Ascend 仓库安装昇腾实现。
-
-```shell #test-setup id="install-triton-ascend"
-pip install --no-deps --index-url https://repo.huaweicloud.com/ascend/repos/pypi triton-ascend==3.2.1
-```
-
-**从华为 PyPI 镜像安装 vLLM-Ascend。** 插件为 vLLM 提供昇腾 NPU 后端。
-
-```shell #test-setup id="install-vllm-ascend"
-pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple vllm-ascend==0.23.0rc1
-```
-
-**恢复 ROLL 配套的 torch NPU 栈。** vLLM 安装完成后重新固定官方版本组合。
-
-```shell #test-setup id="restore-torch-stack"
-pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0
-pip install --no-deps torch-npu==2.10.0.post4
-```
-
-**校验版本、导入链和 NPU 可用性。**
-
-```shell #test id="verify-vllm"
-python -c "import torch, torch_npu, vllm, vllm_ascend, triton; print('torch', torch.__version__); print('torch_npu', torch_npu.__version__); print('vllm', vllm.__version__); print('vllm_ascend ok'); print('triton', triton.__version__); print('is_available', torch.npu.is_available())"
-```
-
-```shell #test-result id="verify-vllm" fuzzy='xxx'
-torch 2.10.xxx
-torch_npu 2.10.xxx
-vllm xxx
-vllm_ascend ok
-triton xxx
-is_available True
+```shell
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 ```
 
 ## 安装 ROLL
 
-**克隆仓库并安装依赖。** 使用最新正式 release 版本克隆 ROLL 源码，并按昇腾镜像的依赖清单安装 agentic 示例所需组件。
+**使用源码安装 ROLL** ：以下命令均在打开终端时所在的工作目录执行，`ROLL` 将克隆到该目录下。
 
 <!--
 ```shell #test-setup store="upstream_ref"
@@ -116,44 +27,113 @@ echo "${UPSTREAM_REF}"
 ```
 -->
 
-```shell #test-setup id="install-roll" load="upstream_ref>>ref"
-set -e
+```shell #test id="install-roll" load="upstream_ref>>ref"
 git clone --branch <ref> https://github.com/alibaba/ROLL.git
-cd ROLL
-grep -v '^gem-llm' requirements_common.txt > requirements_npu.txt
-sed -i 's/^decord /decord2 /' requirements_vision.txt
-pip install -r requirements_npu.txt
-pip install --ignore-requires-python gem-llm==0.0.4
-pip install "numpy==1.26.4"
-pip install "transformers==4.57.6" "tensorboard==2.20.0" "antlr4-python3-runtime==4.9.3"
-pip install -e .
-rm requirements_npu.txt
-cd ..
+echo "ROLL $(git -C ROLL describe --tags --exact-match HEAD)"
+pip install -e ROLL
 ```
 
-`<ref>` 为最新正式 release tag。
-
-**校验 ROLL 的 agentic 环境管理模块可导入。**
-
-```shell #test id="verify-roll"
-python -c "import roll.pipeline.agentic.env_manager.traj_env_manager; print('roll ok')"
+```{admonition} Note
+:class: note
+`<ref>` 为最新正式 release 的 tag
 ```
 
-```shell #test-result id="verify-roll"
-...
-roll ok
+输出结果如下：
+
+```shell #test-result id="install-roll" fuzzy='xxx'
+ROLL xxx
+```
+
+```{admonition} Note
+:class: note
+输出中的 `xxx` 为实际安装到的 release 版本号
 ```
 
 ## 运行示例：FrozenLake agentic 强化学习
 
-FrozenLake 是 ROLL 官方快速入门的示例：Qwen2.5-0.5B-Instruct 作为策略模型，在 4×4 冰面网格中逐轮输出移动方向，绕开冰洞到达终点，环境按结果返回奖励。ROLL 用 Ray 把角色编排为独立 worker 集群：actor_train 用 FSDP2 策略更新权重，actor_infer 用 vLLM 生成动作，reference 用 HF 推理计算参考概率，三个角色共享同一张 NPU，GRPO 用组内采样基线替代 critic。模型权重首次运行自动下载到默认缓存 ~/.cache/modelscope。
+FrozenLake 是 ROLL 官方快速入门的示例：Qwen2.5-0.5B-Instruct 作为策略模型，在 4×4 冰面网格中逐轮输出移动方向，绕开冰洞到达终点，环境按结果返回奖励。
 
-**写入示例配置。** 单卡昇腾版配置使用 fsdp2_train 训练、vLLM rollout 和 HF 参考模型，设备映射只留卡 0，批量收缩，只跑 1 步。
+**安装 vLLM 与 triton。** 安装 `vllm-ascend` 时，配套的 `torch`、`torch_npu`、`torchvision` 和 `torchaudio` 会作为依赖自动安装，无需单独安装 PyTorch 软件栈。
 
-```python #test-setup id="write-config"
+```shell #test-setup id="install-npu-runtime"
+pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple vllm==0.23.0
+pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi vllm-ascend==0.23.0
+pip install --index-url https://repo.huaweicloud.com/repository/pypi/simple --extra-index-url https://repo.huaweicloud.com/ascend/repos/pypi triton-ascend==3.2.2
+```
+
+核对安装的 vLLM 与 triton 版本，下面代码用python执行：
+
+```python #test id="verify-vllm-triton"
+from importlib.metadata import version
+
+expected = {
+    "vllm": "0.23.0",
+    "vllm-ascend": "0.23.0",
+    "triton-ascend": "3.2.2",
+}
+for package, required in expected.items():
+    actual = version(package)
+    assert actual == required, f"{package}: expected {required}, got {actual}"
+    print(f"{package} {actual}")
+```
+
+输出结果如下：
+
+```shell #test-result id="verify-vllm-triton"
+vllm 0.23.0
+vllm-ascend 0.23.0
+triton-ascend 3.2.2
+```
+
+**安装示例依赖。** 按昇腾镜像的依赖清单安装 agentic 示例所需组件：
+
+```shell #test-setup id="install-example-deps"
+grep -v '^gem-llm' ROLL/requirements_common.txt | sed 's#^\./mcore_adapter$#ROLL/mcore_adapter#' > ROLL/requirements_npu.txt
+sed -i 's/^decord /decord2 /' ROLL/requirements_vision.txt
+pip install -r ROLL/requirements_npu.txt
+pip install --ignore-requires-python gem-llm==0.0.4
+pip install "numpy==1.26.4"
+pip install "transformers==4.57.6" "tensorboard==2.20.0" "antlr4-python3-runtime==4.9.3"
+rm ROLL/requirements_npu.txt
+```
+
+核对示例依赖的版本，下面代码用python执行：
+
+```python #test id="verify-example-deps"
+from importlib.metadata import version
+
+expected = {
+    "gem-llm": "0.0.4",
+    "numpy": "1.26.4",
+    "transformers": "4.57.6",
+    "tensorboard": "2.20.0",
+    "antlr4-python3-runtime": "4.9.3",
+}
+for package, required in expected.items():
+    actual = version(package)
+    assert actual == required, f"{package}: expected {required}, got {actual}"
+    print(f"{package} {actual}")
+```
+
+输出结果如下：
+
+```shell #test-result id="verify-example-deps"
+gem-llm 0.0.4
+numpy 1.26.4
+transformers 4.57.6
+tensorboard 2.20.0
+antlr4-python3-runtime 4.9.3
+```
+
+**写入示例配置。** 配置基于官方 agentic demo，修改参数完成 NPU 适配， 将配置文件保存到 ROLL/examples/agentic_frozen_lake_npu/quick_start_npu.yaml。用 Python 执行下面的代码：
+
+```python #test id="write-config"
 from pathlib import Path
 
 config = """
+defaults:
+  - ../config/traj_envs@_here_
+
 hydra:
   run:
     dir: .
@@ -163,9 +143,13 @@ exp_name: "roll-quick-start-npu"
 seed: 42
 logging_dir: ./output/logs
 output_dir: ./output
+render_save_dir: ./output/render
 system_envs:
   USE_MODELSCOPE: '1'
+  # RL 权重刷新场景需禁用 FRACTAL_NZ。
   VLLM_ASCEND_ENABLE_NZ: '0'
+  # 允许同卡多进程由 HCCL 自动分配 device 侧端口。
+  HCCL_NPU_SOCKET_PORT_RANGE: auto
 
 track_with: tensorboard
 tracker_kwargs:
@@ -173,6 +157,11 @@ tracker_kwargs:
 
 num_gpus_per_node: 1
 
+# 禁用 TransferQueue 远程传输，数据直接走 Ray 传递。
+transfer_backend:
+  backend_name: null
+
+# 单卡快速跑通：只训练 1 步，批量收缩。
 max_steps: 1
 save_steps: 1000
 logging_steps: 1
@@ -195,6 +184,7 @@ reward_pretrain: Qwen/Qwen2.5-0.5B-Instruct
 
 actor_train:
   model_args:
+    # NPU 通过 transformers 使用 fa2，不能使用 flash_attn 包。
     attn_implementation: fa2
     disable_gradient_checkpointing: false
     dtype: bf16
@@ -206,6 +196,7 @@ actor_train:
   data_args:
     template: qwen2_5
   strategy_args:
+    # NPU 不支持 Megatron，训练策略使用 FSDP2。
     strategy_name: fsdp2_train
     strategy_config:
       fsdp_size: 1
@@ -213,6 +204,7 @@ actor_train:
       reduce_dtype: bf16
       reshard_after_forward: true
       offload_policy: false
+      use_batched_model_update: false
   device_mapping: list(range(0,1))
   infer_batch_size: 1
 
@@ -265,27 +257,7 @@ val_env_manager:
 
 custom_envs:
   FrozenLake:
-    env_type: frozen_lake
-    max_steps: 10
-    max_tokens_per_step: 128
-    env_manager_cls: roll.pipeline.agentic.env_manager.traj_env_manager.TrajEnvManager
-    agent_runner_cls: null
-    use_thread_lock: true
-    agent_system_template: You're a helpful assistant. You are a good game player. You are aiming to get high reward in the game.
-    agent_template: |
-      Turn {turn_idx}:
-      Observation:
-      {observation}
-      Strictly follow this format:
-      1. output format is '<answer> [your answer] </answer>' with no extra text.
-      2. You have {actions_left} actions left.
-      3. Max response length: {max_response_length} words (tokens).
-      Decide the next action:
-    env_config:
-      action_pattern: <answer>(.*?)</answer>
-      max_steps: 10
-      format_penalty: -0.01
-      is_slippery: false
+    ${custom_env.FrozenLake}
 """
 
 path = Path("ROLL/examples/agentic_frozen_lake_npu/quick_start_npu.yaml")
@@ -294,31 +266,54 @@ path.write_text(config.lstrip("\n"), encoding="utf-8")
 print("config written", path)
 ```
 
-**启动训练。** 从仓库根目录运行 agentic pipeline 入口脚本，ROLL 自动拉起 Ray 集群，训练日志实时输出到终端。校验训练正常收尾。
+输出结果如下：
 
-```shell #test id="run-agentic"
-cd ROLL
-python examples/start_agentic_pipeline.py --config_path agentic_frozen_lake_npu --config_name quick_start_npu
+```shell #test-result id="write-config"
+config written ROLL/examples/agentic_frozen_lake_npu/quick_start_npu.yaml
 ```
 
-```shell #test-result id="run-agentic"
-...pipeline complete!...
+**启动训练。** 在当前工作目录运行 agentic pipeline 入口脚本，ROLL 自动拉起 Ray 集群。
+
+```shell #test-setup id="run-agentic"
+python ROLL/examples/start_agentic_pipeline.py --config_path agentic_frozen_lake_npu --config_name quick_start_npu
 ```
 
-**校验训练产物。** 训练指标写入 output/tensorboard，校验当前实验的事件文件已生成且非空。
+**查看训练产物。** 训练完成后，TensorBoard 指标保存在当前工作目录的 `output/tensorboard/roll-quick-start-npu` 下。用 Python 执行下面的代码，查看训练结果指标：
 
 ```python #test id="verify-output"
 from pathlib import Path
 
-events = list(Path("ROLL/output/tensorboard/roll-quick-start-npu").glob("*/events.out.tfevents.*"))
-assert events and events[0].stat().st_size > 0
-print("tensorboard event ok")
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
+tensorboard_dir = Path("output/tensorboard/roll-quick-start-npu")
+event_files = sorted(tensorboard_dir.glob("*/events.out.tfevents.*"))
+assert event_files, f"no tensorboard event file under {tensorboard_dir}"
+metrics = EventAccumulator(str(event_files[-1]))
+metrics.Reload()
+
+print("训练产物已生成")
+print(f"训练指标路径：{tensorboard_dir}")
+print(f"训练步数：{len(metrics.Scalars('time/step_total'))}")
+print(f"训练样本数：{int(metrics.Scalars('system/samples')[-1].value)}")
+print(f"FrozenLake 平均得分：{metrics.Scalars('critic/score/mean')[-1].value:.3f}")
 ```
 
-```shell #test-result id="verify-output"
-tensorboard event ok
+输出结果如下：
+
+```shell #test-result id="verify-output" fuzzy='xxx'
+训练产物已生成
+训练指标路径：output/tensorboard/roll-quick-start-npu
+训练步数：1
+训练样本数：8
+FrozenLake 平均得分：xxx
 ```
 
-## 更多用法
+```{admonition} Note
+:class: note
+输出中的 `xxx` 为本次训练实际得到的平均得分，随训练随机性变化
+```
 
-多卡并行、vLLM 高吞吐 rollout、Megatron 后端与 SFT/DPO 等其他 pipeline 见官方文档：https://alibaba.github.io/ROLL/docs/QuickStart/single_node_quick_start
+## 外部链接
+
+- GitHub：[alibaba/ROLL](https://github.com/alibaba/ROLL)
+- 文档中心：[ROLL Docs](https://alibaba.github.io/ROLL/zh-Hans/)

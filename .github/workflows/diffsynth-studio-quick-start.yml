@@ -354,7 +354,7 @@ jobs:
             echo "result.json is empty; skipping schema validation"
             exit 0
           fi
-          python3 -m pip install -q check-jsonschema
+          python3 -m pip install -q "check-jsonschema==0.38.0"
           check-jsonschema \
             --schemafile workflows/schemas/result.schema.json output/result.json
 

@@ -4,54 +4,74 @@
 
 ## 前置条件
 
-- **硬件**：Atlas 800T / 900 A2 训练服务器，搭载 Ascend 910B NPU。本文先单卡训练，再双卡分布式（需要 2 张卡）。
-- **软件**：已装好 CANN，以及与 CANN 匹配的 `torch` + `torch_npu`（`torch.npu.is_available() == True`）。参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)与 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch)。
-- **示例版本**：Python 3.12 · CANN 9.1.0 · torch 2.9.x · torch_npu 2.9.x · torchvision 0.24.x · deepspeed 0.19.x。
+### 硬件
+
+Atlas 800T / 900 A2 训练服务器（Ascend 910B），并按需完成物理机或容器内的设备挂载。本文先单卡训练，再双卡分布式（需要 2 张卡）。
+
+### 基础软件
+
+在运行本文档示例之前，你的机器上已经装好并可用：
+
+- 可用的 Python 环境
+- 可用的 CANN（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
+- 与 CANN 匹配的 `torch` + `torch_npu`（参考 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch)）
+
+本文档示例在 Python 3.12、CANN 9.1.0、torch 2.9.0、torch_npu 2.9.0.post2 环境下验证通过。
 
 ## 安装 DeepSpeed
 
-**安装 DeepSpeed。** 通过 pip 安装。
+通过 pip 安装 DeepSpeed，并确认可以正常导入：
 
 ```shell #test id="install-deepspeed"
 pip install deepspeed
-python -c "import deepspeed; print('DeepSpeed', deepspeed.__version__)"
+python -c "import deepspeed; print('deepspeed', deepspeed.__version__)"
 ```
+
+输出结果如下，其中 `xxx` 表示实际版本号：
 
 ```shell #test-result id="install-deepspeed" fuzzy='...' fuzzy='xxx'
 ...
-DeepSpeed xxx
+deepspeed xxx
 ```
 
-**验证 DeepSpeed 已识别昇腾 NPU 加速器。** 输出 accelerator: npu 即接入成功。
+确认 DeepSpeed 已识别昇腾 NPU 加速器（输出 `accelerator: npu` 即接入成功）：
 
 ```shell #test id="verify-accelerator"
 python -c "from deepspeed.accelerator import get_accelerator; print('accelerator:', get_accelerator()._name)"
 ```
 
+输出结果如下：
+
 ```shell #test-result id="verify-accelerator"
 accelerator: npu
 ```
 
-## 安装 torchvision
+## 运行示例
 
-CIFAR10 数据集的加载依赖 torchvision。torchvision 与 torch 版本严格配套，固定版本以避免 pip 连带升级 torch。
+### 安装 torchvision
+
+CIFAR10 数据集的加载依赖 torchvision。torchvision 与 torch 版本严格配套，固定版本以避免 pip 连带升级 torch：
 
 ```shell #test id="install-torchvision"
 pip install "torchvision==0.24.*"
 python -c "import torchvision; print('torchvision', torchvision.__version__)"
 ```
 
+输出结果如下，其中 `xxx` 表示实际版本号：
+
 ```shell #test-result id="install-torchvision" fuzzy='...' fuzzy='xxx'
 ...
 torchvision xxx
 ```
 
-## 编写训练脚本
+### 编写训练脚本
 
-下面这段 CIFAR10 训练脚本分 4 个模块，展示了 DeepSpeed 的完整工作流程。先把脚本写入 train_cifar10.py（deepspeed 启动器需要脚本文件路径），CIFAR10 数据集会在首次运行时自动下载。
+下面这段 CIFAR10 训练脚本分 4 个模块，展示了 DeepSpeed 的完整工作流程。先把脚本写入 `train_cifar10.py`：
 
-```shell #test-setup id="write-script"
-cat > train_cifar10.py <<'PY'
+```python #test-setup id="write-script"
+from pathlib import Path
+
+script = """
 import os
 import urllib.request
 import zipfile
@@ -127,40 +147,50 @@ model_engine, optimizer, _, _ = deepspeed.initialize(
 # 多卡时仅 rank 0 打印，避免输出交错。
 criterion = nn.CrossEntropyLoss()
 for epoch in range(1):
-    running_loss = 0.0
+    epoch_loss = 0.0   # 整轮累计，用于末尾报告平均 loss
+    running_loss = 0.0  # 最近 100 步累计，用于过程打印
+    steps = 0
     for i, data in enumerate(trainloader):
         inputs, labels = data[0].to(model_engine.device), data[1].to(model_engine.device)
         outputs = model_engine(inputs)
         loss = criterion(outputs, labels)
         model_engine.backward(loss)
         model_engine.step()
+        epoch_loss += loss.item()
         running_loss += loss.item()
+        steps += 1
         if i % 100 == 99:
             if model_engine.global_rank == 0:
                 print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 100:.3f}')
             running_loss = 0.0
 if model_engine.global_rank == 0:
+    print(f'epoch {epoch + 1} avg loss: {epoch_loss / steps:.3f}')
     print('Finished Training')
-PY
+"""
+
+Path("train_cifar10.py").write_text(script.lstrip("\n"), encoding="utf-8")
 ```
 
-## 单卡训练
+脚本已写入 `train_cifar10.py`。
 
-**启动训练。** deepspeed 启动器拉起 1 个训练进程。
+### 单卡训练
+
+用 deepspeed 启动器拉起 1 个训练进程：
 
 ```shell #test id="run-train"
 deepspeed --num_gpus 1 train_cifar10.py
 ```
 
-**验证训练结果。** 末尾输出包含 Finished Training 即训练成功。
+输出结果如下（训练日志较长，此处仅保留末尾几行；`xxx` 表示实际 loss）：
 
-```shell #test-result id="run-train" fuzzy='...'
+```shell #test-result id="run-train" fuzzy='...' fuzzy='xxx'
 ...
+epoch 1 avg loss: xxx
 Finished Training
 ...
 ```
 
-## 多卡分布式训练
+### 多卡分布式训练
 
 DeepSpeed 的核心价值在分布式：同一份脚本不改一行代码，只把 `--num_gpus` 改成 2。DeepSpeed 会自动：
 
@@ -172,10 +202,11 @@ DeepSpeed 的核心价值在分布式：同一份脚本不改一行代码，只�
 deepspeed --num_gpus 2 train_cifar10.py
 ```
 
-**验证训练结果。** 数据集已在单卡阶段下载完毕，两个 rank 直接开始训练，输出经 rank 0 打印。
+输出结果如下（`xxx` 表示实际 loss）：
 
-```shell #test-result id="run-train-2card" fuzzy='...'
+```shell #test-result id="run-train-2card" fuzzy='...' fuzzy='xxx'
 ...
+epoch 1 avg loss: xxx
 Finished Training
 ...
 ```

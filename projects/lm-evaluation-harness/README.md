@@ -4,9 +4,9 @@
 
 ## 看护范围
 
-- **Quick-start 文档测试**：[`docs/Quick-start-Ascend.md`](docs/Quick-start-Ascend.md) 遵循 [`docs/markdown_doc_test_label.md`](../../docs/markdown_doc_test_label.md) 标签契约（`#test` / `#test-result` 配对、id 唯一），覆盖单卡昇腾 NPU 完整流程：环境检查、`uv pip install "lm_eval[hf]"` 安装、经 ModelScope 自动下载 Qwen/Qwen2.5-0.5B-Instruct 与两个 benchmark 仓库（`modelscope/ai2_arc` 脚本型 + `allenai/winogrande` parquet 镜像），用 HuggingFace 后端在 `--device npu:0` 跑通官方 `arc_easy`（0-shot）与 `winogrande`（5-shot）各 `--limit 10` 冒烟，最后校验两个任务的 `acc` 落在 [0,1]。文档中两个任务 YAML 直接复制安装好的官方定义，只把 `dataset_path` 指向 ModelScope 本地目录。
+- **Quick-start 文档测试**：[`docs/Quick-start-Ascend.md`](docs/Quick-start-Ascend.md) 遵循 [`docs/markdown_doc_test_label.md`](../../docs/markdown_doc_test_label.md) 标签契约（`#test` / `#test-result` 配对、id 唯一），覆盖单卡昇腾 NPU 完整流程：`pip install "lm_eval[hf]"` 安装 lm-eval（模型后端以 extras 单独安装），再安装示例依赖 ModelScope；经 ModelScope 自动下载 Qwen/Qwen2.5-0.5B-Instruct 与两个 benchmark 仓库（`allenai/ai2_arc` parquet 镜像 + `allenai/winogrande` parquet 镜像），用 HuggingFace 后端在 `--device npu:0` 跑通官方 `arc_easy`（0-shot）与 `winogrande`（5-shot）各 `--limit 10` 冒烟。文档中两个任务 YAML 直接复制安装好的官方定义，只把 `dataset_path` 指向 ModelScope 本地目录。
 - **版本矩阵**：CANN 9.1.0 / Python 3.12 / torch 2.9.0+cpu / torch_npu 2.9.0.post2 / lm-eval 0.4.13 / transformers `<5.0` / modelscope 1.37.0，与 watch 镜像 `swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12` 对齐。
-- **测试类**：`tests/test_quick_start_ascend.py` 基于 `src/workflows/markdown_doc_test_base.py` 端到端执行文档；`prepare_environment` 承载 CANN env source、CUDA 排除清单、`ASCEND_RT_VISIBLE_DEVICES=0` 卡号 pin、uv 安装、torch 栈 2.9.0 探针、safetensors 与 ModelScope 缓存清理。
+- **测试类**：`tests/test_quick_start_ascend.py` 基于 `src/workflows/markdown_doc_test_base.py` 端到端执行文档；`prepare_environment` 承载 CANN env source、CUDA 排除清单、`ASCEND_RT_VISIBLE_DEVICES=0` 卡号 pin、torch 栈 2.9.0 探针、safetensors 与 ModelScope 缓存清理。文档只打印两个任务的 acc，acc 的存在性与 [0,1] 区间校验下沉在测试类的 `_verify_eval_results` 钩子（`run-eval` 之后触发）。
 
 ## 触发方式
 

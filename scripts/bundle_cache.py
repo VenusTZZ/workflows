@@ -5,7 +5,8 @@ hub cache 的内部 dedup 目录，snapshots/ 下的 symlink 引用它们，我�
 stage 解析后的内容就够了），逐文件：
 
   - 算 sha256（流式，内存峰值 ≈ 95MB）
-  - > 95MB：split 成 .part-aa/ab/...，不写主文件
+  - > 95MB：split 成 .part-0000/0001/...（定宽零填充，见 _part_suffix），
+    不写主文件
   - ≤ 95MB：原样写主文件
 
 manifest.yaml 的 path 字段是 <prefix>/<rel_path_from_src>，落到
@@ -33,22 +34,20 @@ SKIP_DIRS = {"blobs"}  # HF hub cache internal dedup dir
 
 
 def _part_suffix(i: int) -> str:
-    """aa, ab, ..., az, ba, bb, ... 闭区间无限。"""
-    chars = "abcdefghijklmnopqrstuvwxyz"
-    n = len(chars)
-    s = ""
-    while True:
-        s = chars[i % n] + s
-        i //= n
-        if i == 0:
-            return s
-        i -= 1
+    """Fixed-width zero-padded decimal (0000, 0001, ...).
+
+    必须定宽零填充：投递侧 cache_seed.py 用 sorted(glob("*.part-*")) 按
+    字典序拼回分片。旧实现生成变长后缀（a..z 后 aa..az..），>26 片时
+    字典序 != 写入序（"aa" < "b"），拼回后 sha256 校验必失败——4.14GB
+    model.safetensors 分 42 片即触发。定宽零填充保证字典序 == 写入序。
+    """
+    return f"{i:04d}"
 
 
 def stage_file(src: Path, target: Path) -> tuple[str, int]:
     """Stream src → target. Returns (sha256, size).
 
-    文件 > 95MB 时按 .part-aa/ab/... 切分；≤ 95MB 直接写到 target。
+    文件 > 95MB 时按 .part-0000/0001/... 切分；≤ 95MB 直接写到 target。
     不读全文件到内存（峰值 ≈ PART_SIZE）。
     """
     target.parent.mkdir(parents=True, exist_ok=True)

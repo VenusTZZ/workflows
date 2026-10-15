@@ -113,13 +113,10 @@ setup_xtuner-llm() {
   #   xtuner 0.2.0 + transformers 4.48.0 + peft>=0.14.0 + datasets 3.x
   #   + scikit-image (libgl1 system dep) + torchvision 0.26.0+cpu
   # PIP_CONSTRAINT keeps CUDA metapackages out (see constraints-npu.txt).
-  echo "installing xtuner from $TARGET_ROOT"
-  python -m pip install --index-url "$ALIYUN_PIP_INDEX" --no-deps \
-      "$(python -c 'import sys; sys.path.insert(0, "'"$TARGET_ROOT"'"); from xtuner.version import __version__; print("xtuner=="+__version__)')" \
-      2>&1 | tail -3 || true
-  # Some images already have xtuner installed by a previous run; in
-  # that case reinstall from the guarded checkout so the code under
-  # test is exactly what the release tag ships.
+  # Install from the guarded release checkout (`-e` always re-links
+  # site-packages/xtuner to TARGET_ROOT/xtuner, so this overrides any
+  # xtuner already in the image from a previous run; the code under
+  # test is exactly what the release tag ships).
   python -m pip install --no-deps -e "$TARGET_ROOT" 2>&1 | tail -3
   # runtime deps — verbatim from Quick-start-Ascend.md `xtuner-install-binary`
   # block (applies on top of xtuner==0.2.0 too; matches verified stack).

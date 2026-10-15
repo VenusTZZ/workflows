@@ -14,27 +14,110 @@ supported:
       - --batch_size=2
       - --block_size=16384
     timeout_minutes: 120
+  - path: mooncake-transfer-engine/example/http-metadata-server-python/bootstrap_server.py
+    profile: ascend-direct-http
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: build/mooncake-transfer-engine/example/transfer_engine_ascend_direct_perf
+    overlay_args:
+      - --block_iteration=1
+      - --batch_size=2
+      - --block_size=16384
+    timeout_minutes: 120
+  - path: mooncake-transfer-engine/example/transfer_engine_validator.cpp
+    profile: host-tcp
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: build/mooncake-transfer-engine/example/transfer_engine_validator
+    overlay_args:
+      - --protocol=tcp
+      - --duration=5
+      - --threads=2
+      - --batch_size=8
+      - --block_size=65536
+      - --buffer_size=134217728
+    timeout_minutes: 60
+  - path: mooncake-transfer-engine/example/transfer_engine_bench.cpp
+    profile: host-tcp
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: build/mooncake-transfer-engine/example/transfer_engine_bench
+    overlay_args:
+      - --protocol=tcp
+      - --operation=write
+      - --duration=5
+      - --threads=2
+      - --batch_size=8
+      - --block_size=65536
+      - --buffer_size=134217728
+    timeout_minutes: 60
+  - path: mooncake-transfer-engine/example/transfer_engine_bench_with_notify.cpp
+    profile: host-tcp
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: build/mooncake-transfer-engine/example/transfer_engine_bench_with_notify
+    overlay_args:
+      - --protocol=tcp
+      - --operation=write
+      - --duration=5
+      - --threads=2
+      - --batch_size=8
+      - --block_size=65536
+      - --buffer_size=134217728
+    timeout_minutes: 60
+  - path: mooncake-transfer-engine/example/show_link.cpp
+    profile: host-oneshot
+    runner: linux-aarch64-a2-2
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: build/mooncake-transfer-engine/example/show_link
+    overlay_args:
+      - --discover_only=true
+      - --json=true
+    timeout_minutes: 30
+  - path: mooncake-transfer-engine/example/transfer_engine_ascend_one_sided.cpp
+    profile: ascend-hccl
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: build-ascend-hccl/mooncake-transfer-engine/example/transfer_engine_ascend_one_sided
+    overlay_args:
+      - --batch_size=2
+      - --block_size=2097152
+    timeout_minutes: 120
+  - path: mooncake-transfer-engine/example/transfer_engine_ascend_perf.cpp
+    profile: ascend-hccl
+    runner: linux-aarch64-a2-2
+    npu_devices: '0,1'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    exec: build-ascend-hccl/mooncake-transfer-engine/example/transfer_engine_ascend_perf
+    overlay_args:
+      - --block_iteration=1
+      - --batch_size=2
+      - --block_size=2097152
+    timeout_minutes: 120
 unsupported:
-  # Deprecated HCCL Ascend transport (USE_ASCEND). Docs point to Ascend Direct.
-  - mooncake-transfer-engine/example/transfer_engine_ascend_one_sided.cpp
-  - mooncake-transfer-engine/example/transfer_engine_ascend_perf.cpp
   # Heterogeneous path: 910B initiator plus a GPU target.
   - mooncake-transfer-engine/example/transfer_engine_heterogeneous_ascend_perf_initiator.cpp
-  # Generic Transfer Engine benches. Default protocol is RDMA/TCP, not Ascend Direct.
-  - mooncake-transfer-engine/example/transfer_engine_bench.cpp
-  - mooncake-transfer-engine/example/transfer_engine_bench_with_notify.cpp
+  # CMakeLists.txt never registers this target, so no configuration compiles it.
   - mooncake-transfer-engine/example/transfer_engine_bench_with_retry.cpp
-  - mooncake-transfer-engine/example/transfer_engine_validator.cpp
+  # Target-only RDMA loop: installTransport("rdma") is hardcoded, the process
+  # sleeps forever, and there is no initiator or success line.
   - mooncake-transfer-engine/example/memory_pool.cpp
-  - mooncake-transfer-engine/example/show_link.cpp
   # CUDA / NCCL.
   - mooncake-transfer-engine/example/device_transport_example.cu
   - mooncake-transfer-engine/example/nccl_device_transport_example.cu
   - mooncake-transfer-engine/example/nccl_host_transport_example.cpp
-  # AWS EFA.
+  # AWS EFA hardware, or a two-host SSH layout.
   - mooncake-transfer-engine/example/efa_first_submit_probe.cpp
   - mooncake-transfer-engine/example/efa_per_transfer_latency_bench.py
+  # --protocol defaults to efa but can be changed. The Python binding needs a
+  # mooncake wheel, which this setup does not build. The Python side also does
+  # not set an ACL device, so protocol=ascend fails in Ascend transport init.
+  # Only a TCP host path would remain, and that is not worth a job.
   - mooncake-transfer-engine/example/batch_register_bench.py
   - mooncake-transfer-engine/example/kvcache_prefix_bench.py
-  # Host metadata helper. No NPU.
-  - mooncake-transfer-engine/example/http-metadata-server-python/bootstrap_server.py

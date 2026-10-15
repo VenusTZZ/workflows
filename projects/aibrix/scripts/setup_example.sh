@@ -40,8 +40,20 @@ setup_local_gateway() {
   set +u
   # shellcheck disable=SC1091
   source /usr/local/Ascend/ascend-toolkit/set_env.sh
-  # shellcheck disable=SC1091
-  source /usr/local/Ascend/nnal/atb/latest/atb/set_env.sh
+  # ATB env: the legacy workflow bind-mounted /usr/local/Ascend/nnal
+  # with an atb/latest/atb layout; the CANN image ships atb directly
+  # (same layout as the other engine-backed projects - opencv / slime /
+  # speculators / roll source /usr/local/Ascend/nnal/atb/set_env.sh).
+  # Accept both layouts, fail loudly when neither exists (vllm-ascend
+  # needs the atb libs at runtime).
+  if [[ -f /usr/local/Ascend/nnal/atb/latest/atb/set_env.sh ]]; then
+    source /usr/local/Ascend/nnal/atb/latest/atb/set_env.sh
+  elif [[ -f /usr/local/Ascend/nnal/atb/set_env.sh ]]; then
+    source /usr/local/Ascend/nnal/atb/set_env.sh
+  else
+    echo "ATB env script not found under /usr/local/Ascend/nnal" >&2
+    exit 1
+  fi
   set -euo pipefail
 
   if ! command -v ss >/dev/null 2>&1; then
@@ -51,8 +63,18 @@ setup_local_gateway() {
   command -v setsid >/dev/null
   command -v ss >/dev/null
 
-  TOOLS="${AIBRIX_TOOLS_DIR:-/root/.cache/cosdt-ci-test/aibrix/tools}"
-  mkdir -p "${TOOLS}/toolchain" "${TOOLS}/bin" "${TOOLS}/src"
+  # Tools live on the shared persistent runner cache (the pool mounts
+  # one volume at ~/.cache/huggingface; see docs/examples-guard-engine.md).
+  # The legacy default /root/.cache/cosdt-ci-test/aibrix existed only via
+  # a container bind-mount the engine does not provide. First engine run
+  # pays the Go/Envoy/vllm downloads + builds; later runs hit the warm
+  # cache. MODELSCOPE_CACHE lands vllm's model download (VLLM_USE_MODEL-
+  # SCOPE=True in run_example.sh) on the same volume - same pattern as
+  # projects/bitsandbytes.
+  SHARED_CACHE_ROOT="${HF_HOME:-${HOME}/.cache/huggingface}"
+  TOOLS="${AIBRIX_TOOLS_DIR:-${SHARED_CACHE_ROOT}/aibrix/tools}"
+  export MODELSCOPE_CACHE="${MODELSCOPE_CACHE:-${SHARED_CACHE_ROOT}/modelscope}"
+  mkdir -p "${TOOLS}/toolchain" "${TOOLS}/bin" "${TOOLS}/src" "${MODELSCOPE_CACHE}"
   GH_PROXY=https://gh-proxy.test.osinfra.cn
   if [[ ! -x "${TOOLS}/toolchain/go/bin/go" ]]; then
     curl -fL --connect-timeout 20 --retry 5 --retry-delay 3 --max-time 180 \
@@ -93,6 +115,7 @@ setup_local_gateway() {
       echo "GOPATH=${GOPATH}"
       echo "GOCACHE=${GOCACHE}"
       echo "AIBRIX_TOOLS_DIR=${TOOLS}"
+      echo "MODELSCOPE_CACHE=${MODELSCOPE_CACHE}"
     } >> "${GITHUB_ENV}"
   fi
 

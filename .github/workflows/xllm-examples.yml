@@ -1,448 +1,50 @@
-# Replace xllm and xLLM-AI/xllm. Scheduling fields (runner,
-# npu_devices, image, timeout, profile) come from each supported entry in
-# projects/xllm/examples_manifest.yaml. Contract: docs/guarding-examples.md.
+# xllm examples guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/examples-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, upstream repo, dispatch input forwarding, and matrix
+# parallelism. The guard loop (release-only monitor / manifest-check /
+# run-example matrix / validate-results / save-monitor-state) lives in
+# the engine. See docs/examples-guard-engine.md for the design.
+
 name: xllm-examples
 
-on:
-#  schedule:
-#    - cron: '30 */6 * * *'
-  workflow_dispatch:
-    inputs:
-      target_repo:
-        description: Target repository to checkout and run
-        required: true
-        default: xLLM-AI/xllm
-        type: string
-      target_ref:
-        description: Branch, tag, or SHA in the target repository
-        required: true
-        default: main
-        type: string
-
 concurrency:
-  group: xllm-examples
+  # schedule runs serialize; each manual run gets its own group so a
+  # dispatch is never blocked behind a scheduled run.
+  group: ${{ github.event_name == 'schedule' && 'xllm-examples-schedule' || format('manual-{0}', github.run_id) }}
+  # false: a run cancelled mid-way loses its outcome writeback, and the
+  # outcome is what drives the next cycle's retry.
   cancel-in-progress: false
 
+on:
+  # Bring-up phase: keep the schedule disabled until a few manual
+  # rounds are green (same policy as torchtune / speculators).
+  # Re-enable:
+  # schedule:
+  #   - cron: '30 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Branch, tag, or SHA to test (empty = latest upstream release; falls back to main on API failure)
+        required: false
+        default: ''
+        type: string
+
+# Engine jobs query the GitHub Job API (validate-results); called
+# workflows run with the caller's GITHUB_TOKEN permissions.
 permissions:
   actions: read
   contents: read
 
-env:
-  UPSTREAM_REPO: xLLM-AI/xllm
-  GH_API: https://api.github.com
-
 jobs:
-  monitor:
-    runs-on: ubuntu-latest
-    outputs:
-      changed: ${{ steps.decide.outputs.changed }}
-      trigger: ${{ steps.decide.outputs.trigger }}
-      reason: ${{ steps.decide.outputs.reason }}
-      target_repo: ${{ steps.decide.outputs.target_repo }}
-      target_ref: ${{ steps.decide.outputs.target_ref }}
-    steps:
-      - name: Restore monitor state
-        id: cache-restore
-        if: github.event_name == 'schedule'
-        uses: actions/cache/restore@v4
-        with:
-          path: .monitor-state
-          # Per-run key misses; restore-keys picks the latest save.
-          # Must not prefix-collide with xllm-quick-start's keys.
-          key: xllm-examples-monitor-state-${{ github.run_id }}
-          restore-keys: |
-            xllm-examples-monitor-state-
-
-      # path=examples must match scan.root in the project manifest.
-      - name: Monitor upstream examples tree
-        id: monitor-examples
-        if: github.event_name == 'schedule'
-        run: |
-          set -euo pipefail
-          STATE_DIR=".monitor-state"
-          mkdir -p "$STATE_DIR"
-          SHA=$(curl -fsSL --retry 3 \
-            "$GH_API/repos/$UPSTREAM_REPO/commits?sha=main&path=examples&per_page=1" \
-            | jq -r '.[0].sha // empty')
-          OLD=$(cat "$STATE_DIR/.examples_head" 2>/dev/null || echo "")
-          OUTCOME=$(cat "$STATE_DIR/.examples_outcome" 2>/dev/null || echo "")
-          if [ -n "$SHA" ] && [ "$OLD" != "$SHA" ]; then
-            echo "$SHA" > "$STATE_DIR/.examples_head"
-            echo "success" > "$STATE_DIR/.examples_outcome"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "ref=$SHA" >> "$GITHUB_OUTPUT"
-            echo "reason=examples" >> "$GITHUB_OUTPUT"
-          elif [ "$OUTCOME" = "failure" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "ref=$SHA" >> "$GITHUB_OUTPUT"
-            echo "reason=examples-retry" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "examples_head=$SHA outcome=$OUTCOME"
-
-      - name: Monitor upstream latest release tag
-        id: monitor-release
-        if: github.event_name == 'schedule'
-        run: |
-          set -euo pipefail
-          STATE_DIR=".monitor-state"
-          mkdir -p "$STATE_DIR"
-          TAG=$(curl -fsSL --retry 3 \
-            "$GH_API/repos/$UPSTREAM_REPO/releases/latest" | jq -r '.tag_name // empty')
-          OLD=$(cat "$STATE_DIR/.last_release_tag" 2>/dev/null || echo "")
-          OUTCOME=$(cat "$STATE_DIR/.release_outcome" 2>/dev/null || echo "")
-          if [ -n "$TAG" ] && [ "$OLD" != "$TAG" ]; then
-            echo "$TAG" > "$STATE_DIR/.last_release_tag"
-            echo "success" > "$STATE_DIR/.release_outcome"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "ref=$TAG" >> "$GITHUB_OUTPUT"
-            echo "reason=release" >> "$GITHUB_OUTPUT"
-          elif [ "$OUTCOME" = "failure" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "ref=$TAG" >> "$GITHUB_OUTPUT"
-            echo "reason=release-retry" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "release_tag=$TAG outcome=$OUTCOME"
-
-      - name: Monitor upstream main HEAD
-        id: monitor-commit
-        if: github.event_name == 'schedule'
-        run: |
-          set -euo pipefail
-          STATE_DIR=".monitor-state"
-          mkdir -p "$STATE_DIR"
-          SHA=$(curl -fsSL --retry 3 \
-            "$GH_API/repos/$UPSTREAM_REPO/commits/main" | jq -r '.sha // empty')
-          OLD=$(cat "$STATE_DIR/.last_tested_sha" 2>/dev/null || echo "")
-          OUTCOME=$(cat "$STATE_DIR/.commit_outcome" 2>/dev/null || echo "")
-          if [ -n "$SHA" ] && [ "$OLD" != "$SHA" ]; then
-            echo "$SHA" > "$STATE_DIR/.last_tested_sha"
-            echo "success" > "$STATE_DIR/.commit_outcome"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "ref=$SHA" >> "$GITHUB_OUTPUT"
-            echo "reason=commit" >> "$GITHUB_OUTPUT"
-          elif [ "$OUTCOME" = "failure" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "ref=$SHA" >> "$GITHUB_OUTPUT"
-            echo "reason=commit-retry" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "main_sha=$SHA outcome=$OUTCOME"
-
-      - name: Persist monitor state
-        if: github.event_name == 'schedule' && always()
-        uses: actions/cache/save@v4
-        with:
-          path: .monitor-state
-          key: xllm-examples-monitor-state-${{ github.run_id }}
-
-      - name: Decide target
-        id: decide
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          INPUT_REPO: ${{ inputs.target_repo }}
-          INPUT_REF: ${{ inputs.target_ref }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "trigger=workflow_dispatch" >> "$GITHUB_OUTPUT"
-            echo "reason=manual" >> "$GITHUB_OUTPUT"
-            echo "target_repo=${INPUT_REPO:-$UPSTREAM_REPO}" >> "$GITHUB_OUTPUT"
-            echo "target_ref=${INPUT_REF:-main}" >> "$GITHUB_OUTPUT"
-            echo "resolved repo=${INPUT_REPO:-$UPSTREAM_REPO} ref=${INPUT_REF:-main} (manual)"
-            exit 0
-          fi
-          CHANGED="false"
-          REASON=""
-          REF=""
-          if [ "${{ steps.monitor-examples.outputs.changed }}" = "true" ]; then
-            CHANGED="true"
-            REASON="${{ steps.monitor-examples.outputs.reason }}"
-            REF="${{ steps.monitor-examples.outputs.ref }}"
-          elif [ "${{ steps.monitor-release.outputs.changed }}" = "true" ]; then
-            CHANGED="true"
-            REASON="${{ steps.monitor-release.outputs.reason }}"
-            REF="${{ steps.monitor-release.outputs.ref }}"
-          elif [ "${{ steps.monitor-commit.outputs.changed }}" = "true" ]; then
-            CHANGED="true"
-            REASON="${{ steps.monitor-commit.outputs.reason }}"
-            REF="${{ steps.monitor-commit.outputs.ref }}"
-          fi
-          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
-          echo "trigger=schedule" >> "$GITHUB_OUTPUT"
-          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
-          echo "target_repo=$UPSTREAM_REPO" >> "$GITHUB_OUTPUT"
-          echo "target_ref=$REF" >> "$GITHUB_OUTPUT"
-          if [ "$CHANGED" = "true" ]; then
-            echo "resolved repo=$UPSTREAM_REPO ref=$REF reason=$REASON"
-          else
-            echo "No upstream changes - skipping manifest check and examples"
-          fi
-
-  manifest-check:
-    needs: monitor
-    if: needs.monitor.outputs.changed == 'true'
-    runs-on: ubuntu-latest
-    outputs:
-      supported_matrix: ${{ steps.check.outputs.supported_matrix }}
-      has_supported: ${{ steps.check.outputs.has_supported }}
-    steps:
-      - name: Checkout workflows
-        uses: actions/checkout@v4
-        with:
-          path: workflows
-
-      - name: Checkout target
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ needs.monitor.outputs.target_repo }}
-          ref: ${{ needs.monitor.outputs.target_ref }}
-          path: target
-
-      - name: Check examples manifest
-        id: check
-        env:
-          TARGET_REPO: ${{ needs.monitor.outputs.target_repo }}
-          TARGET_REF: ${{ needs.monitor.outputs.target_ref }}
-          TRIGGER: ${{ needs.monitor.outputs.trigger }}
-        run: |
-          python3 -m pip install -q pyyaml
-          python3 workflows/scripts/check_examples_manifest.py \
-            --target-root target \
-            --manifest workflows/projects/xllm/examples_manifest.yaml \
-            --result-json manifest_check_result.json \
-            --target-repo "$TARGET_REPO" \
-            --target-ref "$TARGET_REF" \
-            --trigger "$TRIGGER"
-
-      - name: Validate manifest check result
-        run: |
-          python3 -m pip install -q check-jsonschema
-          check-jsonschema --schemafile workflows/schemas/manifest_check_result.schema.json \
-            manifest_check_result.json
-
-      - name: Upload manifest check result
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: xllm-manifest-check
-          if-no-files-found: ignore
-          path: manifest_check_result.json
-
-  # Build xllm ONCE, then run all supported examples sequentially in a single
-  # container on one NPU. Each example is isolated with `timeout` and a failure
-  # does not abort the remaining examples (continue-on-error semantics). One
-  # result JSON is written per example and uploaded for downstream validation.
-  run-examples:
-    name: run-examples (single container)
-    needs: [monitor, manifest-check]
-    if: needs.manifest-check.outputs.has_supported == 'true'
-    runs-on: linux-aarch64-a2-1
-    timeout-minutes: 90
-    defaults:
-      run:
-        shell: bash
-    env:
-      ASCEND_RT_VISIBLE_DEVICES: '0'
-      PROJECT_ROOT: ${{ github.workspace }}/workflows/projects/xllm
-      TARGET_ROOT: ${{ github.workspace }}/target
-      FIXTURE_DIR: ${{ github.workspace }}/workflows/projects/xllm/fixtures
-      PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
-      PIP_TIMEOUT: "120"
-      SUPPORTED_MATRIX: ${{ needs.manifest-check.outputs.supported_matrix }}
-      TRIGGER: ${{ needs.monitor.outputs.trigger }}
-      TARGET_REPO: ${{ needs.monitor.outputs.target_repo }}
-      TARGET_REF: ${{ needs.monitor.outputs.target_ref }}
-      IMAGE: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-0.10.0-release-hb-rc2-arm
-    container:
-      image: swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/xllm-ai/xllm-ai:xllm-0.10.0-release-hb-rc2-arm
-      options: >-
-        --shm-size=64g
-        --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
-        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
-        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
-        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
-        --volume=/data/ci-cache/modelscope/xllm:/root/.cache/modelscope
-    steps:
-      - name: Checkout workflows
-        uses: actions/checkout@v4
-        with:
-          path: workflows
-
-      - name: Checkout target (with submodules)
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ needs.monitor.outputs.target_repo }}
-          ref: ${{ needs.monitor.outputs.target_ref }}
-          submodules: recursive
-          path: target
-
-      - name: Source CANN and check NPU
-        run: |
-          export PATH="/usr/local/sbin:$PATH"
-          source /usr/local/Ascend/ascend-toolkit/set_env.sh
-          npu-smi info
-          python -c "import torch, torch_npu; print('torch:', torch.__version__, 'torch_npu:', torch_npu.__version__, 'npu_count:', torch.npu.device_count())"
-
-      - name: Verify xllm import
-        run: python -c "import xllm; print('xllm import ok:', xllm.__file__)"
-
-      # Run every supported example sequentially; isolate each with `timeout`
-      # and keep going on failure. Writes one result JSON per example.
-      - name: Run all examples (continue on failure)
-        run: |
-          set -uo pipefail
-          source /usr/local/Ascend/ascend-toolkit/set_env.sh
-          mkdir -p "$GITHUB_WORKSPACE/output/results"
-          python3 - "$PROJECT_ROOT" "$TARGET_ROOT" "$GITHUB_WORKSPACE" <<'PY'
-          import json, os, subprocess, sys
-          project_root, target_root, workspace = sys.argv[1], sys.argv[2], sys.argv[3]
-          matrix = json.loads(os.environ['SUPPORTED_MATRIX'])
-          cann = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
-          out_dir = os.path.join(workspace, 'output', 'results')
-          os.makedirs(out_dir, exist_ok=True)
-          per_example_timeout = int(os.environ.get('EXAMPLE_TIMEOUT', '1800'))
-          any_failed = False
-          for i, ex in enumerate(matrix):
-              path = ex['path']
-              print(f'=== example {i}: {path} ===', flush=True)
-              env = dict(os.environ)
-              env['EXAMPLE_PATH'] = path
-              env['EXEC'] = ex.get('exec', '')
-              env['OVERLAY_ARGS'] = json.dumps(ex.get('overlay_args', []))
-              env['ASCEND_RT_VISIBLE_DEVICES'] = ex.get('npu_devices', '0')
-              env['CI_OUTPUT_DIR'] = os.path.join(workspace, 'output')
-              env['FIXTURE_DIR'] = os.environ['FIXTURE_DIR']
-              env['TARGET_ROOT'] = target_root
-              cmd = f'source {cann} && bash "{project_root}/scripts/run_example.sh" "{path}"'
-              try:
-                  rc = subprocess.run(
-                      ['bash', '-c', cmd], env=env, cwd=target_root,
-                      timeout=per_example_timeout).returncode
-              except subprocess.TimeoutExpired:
-                  rc = 124
-              status = 'success' if rc == 0 else 'failure'
-              any_failed = any_failed or (rc != 0)
-              result = {
-                  'trigger': os.environ['TRIGGER'],
-                  'target_repo': os.environ['TARGET_REPO'],
-                  'target_ref': os.environ['TARGET_REF'],
-                  'path': path,
-                  'image': os.environ['IMAGE'],
-                  'job_status': status,
-              }
-              with open(os.path.join(out_dir, f'{i}.json'), 'w', encoding='utf-8') as f:
-                  json.dump(result, f, ensure_ascii=False, indent=2)
-              print(f'example {path} -> {status} (rc={rc})', flush=True)
-          sys.exit(1 if any_failed else 0)
-          PY
-
-      # Upload per-example results regardless of individual pass/fail.
-      - name: Upload per-example results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: xllm-examples-results-${{ github.run_id }}
-          if-no-files-found: error
-          path: ${{ github.workspace }}/output/results
-
-  validate-results:
-    name: publish-result
-    needs: [monitor, manifest-check, run-examples]
-    if: always() && needs.manifest-check.outputs.has_supported == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout workflows
-        uses: actions/checkout@v4
-        with:
-          path: workflows
-
-      - name: Download per-example results
-        uses: actions/download-artifact@v4
-        with:
-          name: xllm-examples-results-${{ github.run_id }}
-          path: results
-
-      - name: Validate and republish each result
-        run: |
-          set -euo pipefail
-          python3 -m pip install -q check-jsonschema
-          shopt -s nullglob
-          count=0
-          for f in results/*.json; do
-            echo "validating $f"
-            check-jsonschema --schemafile workflows/schemas/result.schema.json "$f"
-            count=$((count+1))
-          done
-          echo "validated $count result file(s)"
-          # Re-publish under the historic per-run artifact name so any external
-          # collector keyed on xllm-examples-<run_id> still finds them.
-          mkdir -p "$GITHUB_WORKSPACE/output"
-          cp -r results "$GITHUB_WORKSPACE/output/xllm-examples-${{ github.run_id }}"
-
-      - name: Upload aggregated results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: xllm-examples-${{ github.run_id }}
-          if-no-files-found: error
-          path: ${{ github.workspace }}/output/xllm-examples-${{ github.run_id }}
-
-  record-outcome:
-    needs: [monitor, manifest-check, run-examples]
-    if: |
-      always() &&
-      github.event_name == 'schedule' &&
-      needs.monitor.outputs.changed == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Restore monitor state
-        uses: actions/cache/restore@v4
-        with:
-          path: .monitor-state
-          key: xllm-examples-monitor-state-${{ github.run_id }}-post
-          restore-keys: |
-            xllm-examples-monitor-state-
-
-      - name: Record outcome
-        env:
-          REASON: ${{ needs.monitor.outputs.reason }}
-          RUN_RESULT: ${{ needs.run-examples.result }}
-          MANIFEST_RESULT: ${{ needs.manifest-check.result }}
-          HAS_SUPPORTED: ${{ needs.manifest-check.outputs.has_supported }}
-        run: |
-          set -euo pipefail
-          STATE_DIR=".monitor-state"
-          mkdir -p "$STATE_DIR"
-          # Strip the "-retry" suffix to map back to the base monitor.
-          BASE="${REASON%-retry}"
-          # Skipped run-examples is fine when there is no supported entry.
-          if [ "$RUN_RESULT" = "success" ]; then
-            OUT="success"
-            REASON_TEXT=""
-          elif [ "$RUN_RESULT" = "skipped" ] && [ "$MANIFEST_RESULT" = "success" ] \
-            && [ "$HAS_SUPPORTED" = "false" ]; then
-            OUT="success"
-            REASON_TEXT=""
-          else
-            OUT="failure"
-            REASON_TEXT="run-examples: ${RUN_RESULT}, manifest-check: ${MANIFEST_RESULT}"
-          fi
-          echo "${OUT}" > "${STATE_DIR}/.${BASE}_outcome"
-          if [ -n "$REASON_TEXT" ]; then
-            echo "${REASON_TEXT}" > "${STATE_DIR}/.${BASE}_failure_reason"
-          else
-            : > "${STATE_DIR}/.${BASE}_failure_reason"
-          fi
-          echo "outcome for ${BASE}: ${OUT} (${REASON_TEXT:-ok})"
-
-      - name: Persist monitor state
-        uses: actions/cache/save@v4
-        with:
-          path: .monitor-state
-          key: xllm-examples-monitor-state-${{ github.run_id }}-post
+  xllm-examples:
+    uses: ./.github/workflows/examples-template.yml
+    with:
+      # Namespaces cache keys (examples-monitor-state-xllm_*),
+      # artifact names and the scheduling paths under
+      # projects/xllm.
+      project: xllm
+      upstream_repo: xLLM-AI/xllm
+      target_ref: ${{ inputs.target_ref }}
+      max_parallel: 4

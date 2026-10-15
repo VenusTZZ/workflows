@@ -55,22 +55,46 @@ def load_spec(project_dir: Path) -> list[dict]:
 
 
 def fetch_sha(hf_id: str, kind: str) -> str:
+    import time
+
     import requests
+
     url = f"{HF_API_BASE}/{kind}s/{hf_id}"
-    r = requests.get(url, timeout=30)
-    r.raise_for_status()
-    return r.json().get("sha") or r.json().get("oid")
+    # The first connection out of a fresh seed container to hf-mirror is often
+    # slow (cold DNS/TLS): a single request with timeout=30 times out even
+    # though later requests in the same run succeed (observed on the areal
+    # seed: entry #1 timed out, entries #2-7 went through seconds later).
+    # Retry with backoff.
+    last: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            r = requests.get(url, timeout=30)
+            r.raise_for_status()
+            return r.json().get("sha") or r.json().get("oid")
+        except Exception as exc:  # noqa: BLE001 - retry, then report
+            last = exc
+            print(f"retry {attempt}/3 {url}: {type(exc).__name__}: {exc}",
+                  flush=True)
+            time.sleep(5 * attempt)
+    raise last
 
 
 def plant(ms_id: str, hf_id: str, kind: str, root: Path,
           allow_patterns: list[str] | None) -> None:
     from modelscope import snapshot_download
 
-    sha = fetch_sha(hf_id, kind)
     repo_kind = "models" if kind == "model" else "datasets"
     repo_dir = root / "hub" / f"{repo_kind}--{hf_id.replace('/', '--')}"
-    snap_dir = repo_dir / "snapshots" / sha
     refs = repo_dir / "refs" / "main"
+    try:
+        sha = fetch_sha(hf_id, kind)
+    except Exception as exc:  # noqa: BLE001 - warm assets must not fail on an API blip
+        if not refs.is_file():
+            raise
+        sha = refs.read_text().strip()
+        print(f"[warn] {hf_id}: HF sha lookup failed ({type(exc).__name__}: {exc}); "
+              f"reusing existing refs/main {sha[:8]}", flush=True)
+    snap_dir = repo_dir / "snapshots" / sha
 
     # Fast path: already seeded at the current upstream sha — skip the
     # modelscope call entirely. Without this, snapshot_download would
@@ -91,6 +115,15 @@ def plant(ms_id: str, hf_id: str, kind: str, root: Path,
 
     model_cache = Path(os.environ.get(
         "MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope")))
+    # CI runner containers start with no /root/.cache/modelscope; the
+    # default cache path returned by os.path.expanduser is not created by
+    # modelscope itself, so snapshot_download fails mid-transfer when the
+    # ._____temp staging dir cannot be opened (FileDownloadError on the
+    # *.safetensors file). Same mkdir-p safeguard as torchtune's old
+    # setup_example.sh; peft/accelerate cold-cache dispatches have not
+    # been observed failing here, but the cost of the no-op on hot
+    # caches (env.sh-exported MODELSCOPE_CACHE path) is zero.
+    model_cache.mkdir(parents=True, exist_ok=True)
     src = Path(snapshot_download(
         ms_id, cache_dir=str(model_cache), repo_type=kind,
         allow_patterns=allow_patterns,

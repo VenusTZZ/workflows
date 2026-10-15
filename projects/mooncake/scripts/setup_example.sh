@@ -10,9 +10,15 @@ if [[ $# -lt 1 ]]; then
 fi
 
 PROFILE="$1"
-SUPPORTED_PROFILES="ascend-direct"
+SUPPORTED_PROFILES="ascend-direct ascend-direct-http host-tcp host-oneshot ascend-hccl"
 
-if [[ "$PROFILE" != "ascend-direct" ]]; then
+profile_ok=0
+for name in $SUPPORTED_PROFILES; do
+  if [[ "$PROFILE" == "$name" ]]; then
+    profile_ok=1
+  fi
+done
+if [[ "$profile_ok" != 1 ]]; then
   echo "unknown profile: $PROFILE (supported: $SUPPORTED_PROFILES)" >&2
   exit 2
 fi
@@ -20,12 +26,30 @@ fi
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
 EXEC_REL="${EXEC:?EXEC is required}"
 
-if [[ ! -f /etc/hccn.conf ]]; then
-  echo "setup: /etc/hccn.conf is missing" >&2
-  echo "Ascend Direct (HIXL) reads device NIC IPs from this file." >&2
-  echo "The NPU driver writes it on the host. In a container, bind-mount the host file." >&2
+case "$PROFILE" in
+  ascend-hccl)
+    BUILD_DIR="build-ascend-hccl"
+    ;;
+  *)
+    BUILD_DIR="build"
+    ;;
+esac
+
+if [[ "$EXEC_REL" != "$BUILD_DIR/"* ]]; then
+  echo "setup: EXEC=$EXEC_REL does not start with $BUILD_DIR/ for profile $PROFILE" >&2
   exit 1
 fi
+
+case "$PROFILE" in
+  ascend-direct|ascend-direct-http|ascend-hccl)
+    if [[ ! -f /etc/hccn.conf ]]; then
+      echo "setup failed: /etc/hccn.conf is missing" >&2
+      echo "HCCL and Ascend Direct read device NIC IPs from this file." >&2
+      echo "The NPU driver writes it on the host. In a container, bind-mount the host file." >&2
+      exit 1
+    fi
+    ;;
+esac
 
 DEPS=(
   build-essential
@@ -41,6 +65,13 @@ DEPS=(
   libssl-dev
   libcurl4-openssl-dev
 )
+
+if [[ "$PROFILE" == "ascend-hccl" ]]; then
+  if dpkg -s libopenmpi-dev >/dev/null 2>&1 || dpkg -s openmpi-bin >/dev/null 2>&1; then
+    echo "setup: openmpi packages are present; upstream Ascend Transport docs warn this conflicts with mpich" >&2
+  fi
+  DEPS+=(mpich libmpich-dev)
+fi
 
 source_cann() {
   export PATH="/usr/local/sbin:/usr/local/bin:$PATH"
@@ -66,7 +97,11 @@ install_debs() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
   # shellcheck disable=SC2086
-  apt-get install -y --no-install-recommends $missing
+  if ! apt-get install -y --no-install-recommends $missing; then
+    echo "setup failed: could not install: $missing" >&2
+    echo "This is a guard setup failure, not an example failure." >&2
+    exit 1
+  fi
 }
 
 init_pybind11() {
@@ -101,20 +136,75 @@ init_pybind11() {
   echo "setup: cloned extern/pybind11 @$got via ghfast.top"
 }
 
+ensure_aiohttp() {
+  if python3 -c 'import aiohttp' >/dev/null 2>&1; then
+    echo "setup: aiohttp already importable"
+    return
+  fi
+  if [[ -z "${PIP_EXTRA_INDEX_URL:-}" ]]; then
+    echo "setup failed: aiohttp is missing and PIP_EXTRA_INDEX_URL is empty" >&2
+    echo "This is a guard setup failure, not an example failure." >&2
+    exit 1
+  fi
+  if ! python3 -m pip install --extra-index-url "$PIP_EXTRA_INDEX_URL" aiohttp; then
+    echo "setup failed: could not install aiohttp" >&2
+    echo "This is a guard setup failure, not an example failure." >&2
+    exit 1
+  fi
+  echo "setup: installed aiohttp"
+}
+
+# CANN 9.1 public include/hccl is not enough for USE_ASCEND. Internal
+# HCCL headers live under aicpu_kfc/pub_inc and pkg_inc. Upstream CMake
+# still points at experiment/hccl, which this toolkit does not ship.
+export_hccl_cpath() {
+  local home cpu pub_inc pkg_inc inc test_src d
+  home=$(readlink -f "${ASCEND_HOME_PATH:-/usr/local/Ascend/ascend-toolkit/latest}")
+  cpu=$(uname -m)
+  pub_inc="$home/${cpu}-linux/asc/impl/adv_api/detail/hccl/cc/src/aicpu_kfc/pub_inc"
+  pkg_inc="$home/${cpu}-linux/pkg_inc"
+  inc="$home/${cpu}-linux/include"
+  test_src="$home/tools/hccl_test/common/src"
+  if [[ ! -f "$pub_inc/adapter_hccp_common.h" ]]; then
+    echo "setup failed: adapter_hccp_common.h not found at $pub_inc" >&2
+    echo "USE_ASCEND needs CANN internal HCCL headers, not only include/hccl." >&2
+    echo "This is a guard setup failure, not an example failure." >&2
+    exit 1
+  fi
+  CPATH="$pub_inc:$pub_inc/new:$pkg_inc:$inc:$test_src"
+  for d in "$pkg_inc"/* "$inc"/experiment/* "$inc"/hccl; do
+    if [[ -d "$d" ]]; then
+      CPATH="$CPATH:$d"
+    fi
+  done
+  export CPATH
+  echo "setup: HCCL CPATH uses $pub_inc"
+}
+
 configure_and_build() {
   source_cann
-  cmake -S "$TARGET_ROOT" -B "$TARGET_ROOT/build" \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DUSE_ASCEND_DIRECT=ON \
-    -DBUILD_EXAMPLES=ON \
-    -DBUILD_UNIT_TESTS=OFF \
-    -DWITH_STORE=OFF \
-    -DWITH_STORE_RUST=OFF \
-    -DWITH_EP=OFF \
-    -DWITH_P2P_STORE=OFF \
-    -DUSE_ETCD=OFF \
+  local cmake_args=(
+    -S "$TARGET_ROOT"
+    -B "$TARGET_ROOT/$BUILD_DIR"
+    -DCMAKE_BUILD_TYPE=Release
+    -DBUILD_EXAMPLES=ON
+    -DBUILD_UNIT_TESTS=OFF
+    -DWITH_STORE=OFF
+    -DWITH_STORE_RUST=OFF
+    -DWITH_EP=OFF
+    -DWITH_P2P_STORE=OFF
+    -DUSE_ETCD=OFF
     -DUSE_REDIS=OFF
-  cmake --build "$TARGET_ROOT/build" \
+  )
+  if [[ "$PROFILE" == "ascend-hccl" ]]; then
+    export_hccl_cpath
+    # CANN 9.1 SalGetBareTgid takes s32*, upstream still casts to uint32_t*.
+    cmake_args+=(-DUSE_ASCEND=ON -DCMAKE_CXX_FLAGS="-fpermissive")
+  else
+    cmake_args+=(-DUSE_ASCEND_DIRECT=ON)
+  fi
+  cmake "${cmake_args[@]}"
+  cmake --build "$TARGET_ROOT/$BUILD_DIR" \
     --target "$(basename "$EXEC_REL")" \
     -j "$(nproc)"
 }
@@ -123,7 +213,7 @@ assert_exec() {
   local path="$TARGET_ROOT/$EXEC_REL"
   if [[ ! -x "$path" ]]; then
     echo "expected executable missing: $path" >&2
-    find "$TARGET_ROOT/build" -name "$(basename "$EXEC_REL")" -print >&2 || true
+    find "$TARGET_ROOT/$BUILD_DIR" -name "$(basename "$EXEC_REL")" -print >&2 || true
     exit 1
   fi
   echo "setup: built $path"
@@ -131,5 +221,8 @@ assert_exec() {
 
 install_debs
 init_pybind11
+if [[ "$PROFILE" == "ascend-direct-http" ]]; then
+  ensure_aiohttp
+fi
 configure_and_build
 assert_exec

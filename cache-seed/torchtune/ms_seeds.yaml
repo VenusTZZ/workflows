@@ -1,0 +1,40 @@
+# torchtune 例程资产的 ModelScope plant spec（由 cache-seed workflow 的
+# scripts/ms_seed.py 执行）。
+#
+# 2026-09-22 之前 setup_example.sh 在 example 跑 jobs 时直接
+# `modelscope.snapshot_download` 落 /root/.cache/modelscope，再把本地路径
+# 注入 TT_MODEL_PATH / TT_TEACHER_PATH（CI 单 leg 上 modelscope 把 1.5B
+# 的 ._____temp 写到一半报 FileDownloadError，run 35721666282 full/lora
+# single-device 两腿全挂在这里）。现统一迁入本 workflow：cache-seed 把
+# ModelScope 内容 plant 到共享 HF hub cache 布局（refs/main = 真实 HF
+# sha），setup 只负责 resolve refs/main 得 ${TT_MODEL_PATH} /
+# ${TT_TEACHER_PATH}。example 跑 jobs 时 `from_pretrained` / `load_dataset`
+# 全程命中本地，不走网络，也不进 /root/.cache/modelscope（那个目录在 CI
+# 容器里干净 path 不存在，mkdir-p 已在 setup_example.sh 里兜过一次）；
+# 这次修把兜底挪到 ms_seed.py（scripts/ms_seed.py 的 plant()）。
+#
+# 与旧 setup plant 的对应关系：
+#   setup_torchtune() 的 Qwen/Qwen2.5-0.5B-Instruct  → ms_id 同名 plant
+#   setup_torchtune() 的 Qwen/Qwen2.5-1.5B-Instruct  → ms_id 同名 plant
+#                                                   （KD teacher）
+version: 1
+seeds:
+  # 单卡主模型：所有 single-device / generate / quantize / eleuther_eval /
+  # ppo_full_finetune_single_device 都用这个 0.5B；distributed 走 FSDP
+  # 但 dp-shard_dim/replicate_dim=1 时也复用同一权重（manifest overlay
+  # checkpointer.checkpoint_dir=${TT_MODEL_PATH}）。
+  - ms_id: Qwen/Qwen2.5-0.5B-Instruct
+    hf_id: Qwen/Qwen2.5-0.5B-Instruct
+    kind: model
+  # KD teacher（recipes/knowledge_distillation_*.py 用：student 0.5B /
+  # teacher 1.5B）。只单档 install + SD v1.5 dreambooth 的 5.5GB 让位，
+  # 这次 2.88GB teacher 跟 0.5B 同 plant 路径。torchtune 配置 yaml 在
+  # overlay 里把 teacher checkpoint_dir 指到 ${TT_TEACHER_PATH}。
+  - ms_id: Qwen/Qwen2.5-1.5B-Instruct
+    hf_id: Qwen/Qwen2.5-1.5B-Instruct
+    kind: model
+  # 2026-09-24 移除 LLM-Research/Llama-3.2-1B-Instruct plant：唯一消费者
+  # qat_lora_finetune_distributed 已移 unsupported（v0.6.1 硬编码
+  # nccl backend，需上游源码修复才能回移）。plant 与 qat 条目的 overlay
+  # 一起留在 git 历史，回移时恢复（见 examples_manifest.yaml unsupported
+  # 段 qat 注释）。

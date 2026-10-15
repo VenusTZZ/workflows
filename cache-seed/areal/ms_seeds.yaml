@@ -1,0 +1,40 @@
+# AReaL 例程资产的 ModelScope plant spec（由 cache-seed workflow 的
+# scripts/ms_seed.py 执行）。每个 profile 的主模型都在这里；setup_example.sh
+# 不再下载，只从共享缓存的 refs/main 解析 ${AREAL_MODEL_PATH}。
+#
+# profile -> model 映射见 projects/areal/scripts/setup_example.sh 的 case：
+#   areal-vlm-grpo / areal-clevr-sft        : Qwen2.5-VL-3B-Instruct
+#   areal-vlm-mt-grpo / areal-vlm-sft       : Qwen3-VL-2B-Instruct
+#   areal-tir-grpo                          : Qwen2.5-Math-1.5B
+#   areal-scaffold-grpo / areal-math-grpo
+#   / areal-math-aime / areal-countdown-grpo
+#   / areal-align                           : Qwen2.5-1.5B-Instruct
+#   areal-agents-grpo                       : Qwen2-1.5B-Instruct
+#   areal-math-sft                          : Qwen3-1.7B
+#   areal-math-boba                         : DeepSeek-R1-Distill-Qwen-1.5B
+# 2026-09-28：7 条全部确认已在共享卷（6 条由 seed plant；Qwen2.5-1.5B-Instruct
+# 由池内某次标准 HF 下载写入、seed 复核 refs/main 与真实 sha 一致后 [skip]）。
+# 重跑全部幂等（[skip]）。
+version: 1
+seeds:
+  - ms_id: Qwen/Qwen2.5-1.5B-Instruct
+    hf_id: Qwen/Qwen2.5-1.5B-Instruct
+    kind: model
+  - ms_id: Qwen/Qwen2.5-VL-3B-Instruct
+    hf_id: Qwen/Qwen2.5-VL-3B-Instruct
+    kind: model
+  - ms_id: Qwen/Qwen3-1.7B
+    hf_id: Qwen/Qwen3-1.7B
+    kind: model
+  - ms_id: Qwen/Qwen3-VL-2B-Instruct
+    hf_id: Qwen/Qwen3-VL-2B-Instruct
+    kind: model
+  - ms_id: Qwen/Qwen2.5-Math-1.5B
+    hf_id: Qwen/Qwen2.5-Math-1.5B
+    kind: model
+  - ms_id: Qwen/Qwen2-1.5B-Instruct
+    hf_id: Qwen/Qwen2-1.5B-Instruct
+    kind: model
+  - ms_id: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+    hf_id: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+    kind: model

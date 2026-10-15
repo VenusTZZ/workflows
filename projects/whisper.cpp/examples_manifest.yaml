@@ -1,9 +1,21 @@
 version: 1
+# 对账模型（docs/examples-check-design.md §2.6）：files 单位 = examples/ 下递归的
+# .cpp/.sh/.py 文件；目录条目（cli/bench/…）作为前缀毯子覆盖其内部源文件。
+# 顶层共享 helper 不是 example，登记在 scan.exclude。whisper.android /
+# whisper.android.java / whisper.nvim / whisper.objc / whisper.swiftui 是
+# Java/Lua/ObjC/Swift 移植，无 .cpp/.sh/.py 源，在对账中恒为 stale（视野外
+# 提示，不判红）。
 scan:
   root: examples
-  unit: mixed
-  max_depth: 1
-  include_extensions: ['.sh', '.py']
+  unit: files
+  include_extensions: ['.cpp', '.sh', '.py']
+  exclude:
+    - examples/common.cpp             # 各 example 共用的命令行/音频工具
+    - examples/common-whisper.cpp
+    - examples/common-ggml.cpp
+    - examples/common-sdl.cpp
+    - examples/ffmpeg-transcode.cpp   # stream 类 example 共用的媒体转码工具
+    - examples/grammar-parser.cpp     # GBNF 语法解析器，被 grammar 类 example 引用
 supported:
   - path: examples/cli
     profile: cann

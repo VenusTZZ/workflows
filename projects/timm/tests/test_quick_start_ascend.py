@@ -61,7 +61,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     extraction.
     """
 
-    # uv pip install timm + the doc's two quick-start #test smoke
+    # pip install timm + the doc's two quick-start #test smoke
     # commands (inference / features) + modelscope weight download.
     # The stack is small (torch / torchvision / pyyaml / huggingface_hub /
     # safetensors / modelscope / timm), so 30 min covers cold cache +
@@ -138,7 +138,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     @classmethod
     def prepare_environment(cls) -> None:
-        """Source CANN env + write CUDA exclusion list + install uv +
+        """Source CANN env + write CUDA exclusion list +
         torch stack + torchvision + modelscope + model cache sanity.
 
         The doc's install-timm section is the single source of truth for
@@ -172,7 +172,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         with open(cls._CONSTRAINTS_FILE, 'w', encoding='utf-8') as fh:
             fh.write('\n'.join(cls._CUDA_CONSTRAINTS) + '\n')
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
-        os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
         # 2) torch stack probe + install
         _PROBE_SCRIPT = (
@@ -226,7 +225,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         purge_modelscope_corrupt(resolve_modelscope_cache())
 
         # 6) timm itself is NOT installed here - the doc's
-        # install-timm block installs timm via uv pip install timm.
+        # install-timm block installs timm via pip.
 
     @classmethod
     def setUpClass(cls) -> None:

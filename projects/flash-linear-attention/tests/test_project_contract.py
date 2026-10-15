@@ -41,7 +41,8 @@ class TestFlashLinearAttentionProjectContract(unittest.TestCase):
             {
                 "quick_start": (
                     ".github/workflows/flash-linear-attention-quick-start.yml"
-                )
+                ),
+                "examples": ".github/workflows/flash-linear-attention-examples.yml",
             },
         )
 

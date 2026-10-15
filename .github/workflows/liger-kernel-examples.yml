@@ -1,0 +1,30 @@
+# Liger-Kernel examples guard. Keep schedule disabled until the NPU jobs pass.
+name: liger-kernel-examples
+
+on:
+  # schedule:
+  #   - cron: '20 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Branch, tag, or SHA to test (empty selects the latest release)
+        required: false
+        default: ''
+        type: string
+
+concurrency:
+  group: ${{ github.event_name == 'schedule' && 'liger-kernel-examples-schedule' || format('manual-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  liger-kernel-examples:
+    uses: ./.github/workflows/examples-template.yml
+    with:
+      project: liger-kernel
+      upstream_repo: linkedin/Liger-Kernel
+      target_ref: ${{ inputs.target_ref }}
+      max_parallel: 2

@@ -6,7 +6,7 @@
 
 ## 清单
 
-- `examples_manifest.yaml` 由仓库根目录 `scripts/bootstrap_manifest.py` 用 `scan.unit: mixed` 扫描目标仓 `examples/`：一层子目录（不要求 `CMakeLists.txt`）加上根目录 `.sh` / `.py` 入口。`max_depth: 1`，所以 `examples/python/*.py` 不会再拆成独立条目。`common*.cpp`、`helpers.js` 这类被引用的辅助源码不是 example。
+- `examples_manifest.yaml` 由仓库根目录 `scripts/bootstrap_manifest.py` 以 files 单位扫描目标仓 `examples/` 下的 `.cpp` / `.sh` / `.py`：对账单位 = 每个源文件（递归不限层），目录条目（`cli`、`bench`…）作为前缀毯子覆盖其内部源文件。顶层共享 helper（`common*.cpp`、`ffmpeg-transcode.cpp`、`grammar-parser.cpp`）不是 example，登记在 `scan.exclude`。`whisper.android` / `whisper.android.java` / `whisper.nvim` / `whisper.objc` / `whisper.swiftui` 是 Java/Lua/ObjC/Swift 移植，无 `.cpp/.sh/.py` 源，在对账中恒为 stale 提示（扫描视野外，不判红）。
 - `supported` 覆盖用户在昇腾服务器上会用到的非交互工具：`cli`、`bench`、`quantize`、`parakeet-quantize`、`parakeet-cli`、`test-cmake`、`vad-speech-segments`、`addon.node`、`server`。`unsupported` 只表示本看护体系当前不跑它们，不是社区支不支持。
   - `examples/bench.wasm`、`examples/command.wasm`、`examples/stream.wasm`、`examples/whisper.wasm` 是浏览器 / WebAssembly 移植。
   - `examples/server.py` 是给 WASM 静态页用的 `serve_forever` HTTP 服务器。真正的转写 HTTP 服务是 `examples/server`。
@@ -40,14 +40,13 @@
 - `run_example.sh` 把 overlay JSON 展开后按 `path` 跑。`cann` / `parakeet` / `node` 在日志里找 `whisper_backend_init_gpu: using CANN[0-9] backend` 或 `CANN[0-9]`；`parakeet-cli` 和 `addon.node` / `server` 还要看到 JFK 转写文本。`host` / `cmake-pkg` / `vad` 跳过 CANN 这条，改验输出文件 / 版本行 / 语音段。ggml 在卡没挂上时会静默退回 CPU 且进程仍退出 0。
 - 编译工具用镜像自带的 `cmake` / `g++` / `make` / `git` / `curl`，不 `apt-get`，不改 `/etc/apt/sources.list`。Node 只放缓存目录，不污染镜像全局。
 
-重新生成清单会**整文件覆盖** `--output` 指向的 yaml。生成器不会合并已填好的 `profile` / `exec` / `overlay_args`；不要用这条命令直接覆盖手头已经调度好的清单，除非你准备把 supported 段再手填回去。`--max-depth` 默认是 1，和清单里的 `scan.max_depth` 一致。
+重新生成清单会**整文件覆盖** `--output` 指向的 yaml。生成器不会合并已填好的 `profile` / `exec` / `overlay_args`，也不会保留 `scan.exclude` 段与 unsupported 注释；不要用这条命令直接覆盖手头已经调度好的清单，除非你准备把它们手工填回去。
 
 ```bash
 python3 scripts/bootstrap_manifest.py \
   --target-root /path/to/whisper.cpp \
   --output projects/whisper.cpp/examples_manifest.yaml \
-  --unit mixed \
-  --max-depth 1 \
+  --include-extension .cpp \
   --include-extension .sh \
   --include-extension .py
 ```

@@ -138,16 +138,27 @@ setup_specforge() {
   apply_sglang_patches
 
   # Pre-download the example model from ModelScope (China-reachable) because
-  # runners cannot reach HuggingFace. The local snapshot dir is exported as
-  # SPECFORGE_MODEL_PATH for run_example.sh + overlay_args to reference.
+  # runners cannot reach HuggingFace. The model id is read from the recipe's
+  # model.target_model_path (its upstream id, e.g. Qwen/Qwen3-4B) so each
+  # supported recipe pulls its own model instead of a fixed hard-coded one.
+  # The local snapshot dir is exported as SPECFORGE_MODEL_PATH for
+  # run_example.sh + overlay_args to reference.
   python -m pip install --quiet modelscope
-  python - <<'PY'
+  python - "$TARGET_ROOT/$EXAMPLE_PATH" <<'PY'
 import os
+import sys
+
+import yaml
+
 os.environ.setdefault("TQDM_MININTERVAL", "15")
+recipe = sys.argv[1]
+doc = yaml.safe_load(open(recipe, encoding="utf-8"))
+model_id = doc["model"]["target_model_path"]
 from modelscope import snapshot_download
+
 MODEL_CACHE = os.environ.get(
     "MODELSCOPE_CACHE", os.path.expanduser("~/.cache/modelscope"))
-local = snapshot_download("Qwen/Qwen3.5-4B", cache_dir=MODEL_CACHE)
+local = snapshot_download(model_id, cache_dir=MODEL_CACHE)
 with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"SPECFORGE_MODEL_PATH={local}\n")
 print("SPECFORGE_MODEL_PATH=", local)
@@ -174,6 +185,7 @@ if ! declare -F "setup_${PROFILE}" >/dev/null 2>&1; then
 fi
 
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
+EXAMPLE_PATH="${EXAMPLE_PATH:?EXAMPLE_PATH is required}"
 GITHUB_WORKSPACE="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
 GITHUB_ENV="${GITHUB_ENV:?GITHUB_ENV is required}"
 FIXTURE_DIR="${FIXTURE_DIR:?FIXTURE_DIR is required}"

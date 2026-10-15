@@ -2,7 +2,7 @@
 
 本目录是 [speculators](https://github.com/vllm-project/speculators) 的看护配套数据，不是上游源码。example 流水线在 [.github/workflows/speculators-examples.yml](../../.github/workflows/speculators-examples.yml)。Quick Start 流水线在 [.github/workflows/speculators-quick-start.yml](../../.github/workflows/speculators-quick-start.yml)。注册信息见根目录 [projects.yaml](../../projects.yaml)（分类：推理加速；支持程度：基础支持；阶段 A）。
 
-上游默认分支是 `main`。上游 GitHub Actions / Buildkite 覆盖 NVIDIA GPU，没有 Ascend / CANN / torch_npu CI，因此按阶段 A 在本仓落地。库本身已经识别 NPU，见 `is_torch_npu_available` 与 `--draft-attn-impl sdpa`。训练 example 默认仍走 CUDA 可见设备和 flex attention。看护用 `sitecustomize` 把 `CUDA_VISIBLE_DEVICES` 同步到 `ASCEND_RT_VISIBLE_DEVICES`；训练额外改工作副本里的 `scripts/launch_vllm.py`，评测走 PATH 上的 `vllm` shim；sdpa 仍由清单 `overlay_args` 传入。
+上游默认分支是 `main`。上游 GitHub Actions / Buildkite 覆盖 NVIDIA GPU，没有 Ascend / CANN / torch_npu CI，因此按阶段 A 在本仓落地。库本身已经识别 NPU，见 `is_torch_npu_available` 与 `--draft-attn-impl sdpa`。训练 example 默认仍走 CUDA 可见设备和 flex attention。看护用 `sitecustomize` 把 `CUDA_VISIBLE_DEVICES` 同步到 `ASCEND_RT_VISIBLE_DEVICES`，子进程里已经更窄的昇腾名单保持不动，避免数据并行的两路叠到同一张卡；训练额外改工作副本里的 `scripts/launch_vllm.py`，评测走 PATH 上的 `vllm` shim；sdpa 仍由清单 `overlay_args` 传入。
 
 example 线的 `schedule` 保持注释。Quick Start 的 cron 是既成决定，本线不跟着打开。
 

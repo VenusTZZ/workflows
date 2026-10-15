@@ -84,6 +84,24 @@ PY
 
 eval "EXTRA_ARGS=( $(expand_overlay) )"
 
+# Distributed recipes gate on is_distributed() (RANK env) and their
+# init_process_group rendezvous via env://. Without these exports the
+# leg dies either with
+#   ValueError: ... environment variable RANK expected, but not set
+# (full_finetune_distributed, init_process_group directly) or with
+#   RuntimeError: Distributed finetune recipe should be run via a
+#   distributed launcher ...
+# (is_distributed() guard). Export a 1-rank world. Single-device
+# recipes must NOT see RANK: they would take the distributed branch
+# too.
+if [[ "$EXAMPLE_REL" == *distributed* ]]; then
+  export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
+  export MASTER_PORT="${MASTER_PORT:-29500}"
+  export RANK="${RANK:-0}"
+  export WORLD_SIZE="${WORLD_SIZE:-1}"
+  export LOCAL_RANK="${LOCAL_RANK:-0}"
+fi
+
 echo "running $LAUNCH_PATH with ${#EXTRA_ARGS[@]} overlay args"
 if ((${#EXTRA_ARGS[@]})); then
   printf 'overlay arg: %q\n' "${EXTRA_ARGS[@]}"
@@ -91,6 +109,5 @@ fi
 
 # torchtune recipes use @config.parse (TuneRecipeArgumentParser) which
 # already does its own argv parsing inside the recipe's recipe_main.
-# No "$@" passthrough patch is needed.
 cd "$TARGET_ROOT"
 python "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"

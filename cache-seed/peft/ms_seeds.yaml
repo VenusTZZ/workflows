@@ -38,6 +38,16 @@ seeds:
   - ms_id: facebook/bart-base
     hf_id: facebook/bart-base
     kind: model
+  # peft_lora_seq2seq_accelerate_fsdp.py 硬编码裸 id "t5-base"
+  # （from_pretrained 走 models--t5-base 目录解析）
+  - ms_id: AI-ModelScope/t5-base
+    hf_id: t5-base
+    kind: model
+  # fp4_finetuning/finetune_fp4_opt_bnb_peft.py 硬编码 facebook/opt-350m
+  # （4-bit NF4 QLoRA，bnb 默认 CPU 后端跑 NPU）
+  - ms_id: AI-ModelScope/opt-350m
+    hf_id: facebook/opt-350m
+    kind: model
   # feature_extraction/peft_lora_embedding_semantic_search.py 的 overlay
   # --model_name_or_path（bare id 走 hub cache 解析）
   - ms_id: AI-ModelScope/all-MiniLM-L6-v2

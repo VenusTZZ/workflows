@@ -27,15 +27,26 @@ fi
 
 EXAMPLE_REL="$1"
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
+PROJECT_ROOT="${PROJECT_ROOT:?PROJECT_ROOT is required}"
 CI_OUTPUT_DIR="${CI_OUTPUT_DIR:?CI_OUTPUT_DIR is required}"
+EXAMPLE_SOURCE="${EXAMPLE_SOURCE:-upstream}"
 
-EXAMPLE_PATH="$TARGET_ROOT/$EXAMPLE_REL"
+# source: project => the example is self-hosted under this repo's
+# projects/opencv/ (scripts/test_npu_*.py); source: upstream => the
+# upstream opencv checkout under TARGET_ROOT.
+case "$EXAMPLE_SOURCE" in
+    upstream) EXAMPLE_ROOT="$TARGET_ROOT" ;;
+    project)  EXAMPLE_ROOT="$PROJECT_ROOT" ;;
+    *) echo "unknown example source: $EXAMPLE_SOURCE" >&2; exit 1 ;;
+esac
+
+EXAMPLE_PATH="$EXAMPLE_ROOT/$EXAMPLE_REL"
 [[ -e "$EXAMPLE_PATH" ]] || { echo "example not found: $EXAMPLE_PATH" >&2; exit 1; }
 
-# Resolve the launchable file: EXEC (relative to the target root) when
+# Resolve the launchable file: EXEC (relative to the example root) when
 # set, otherwise path itself.
 if [[ -n "${EXEC:-}" ]]; then
-    LAUNCH_PATH="$TARGET_ROOT/$EXEC"
+    LAUNCH_PATH="$EXAMPLE_ROOT/$EXEC"
 else
     LAUNCH_PATH="$EXAMPLE_PATH"
 fi
@@ -153,11 +164,12 @@ PY
 
 ensure_passthrough "$LAUNCH_PATH"
 
-# Change to the target root so relative paths in the scripts
-# (opencv/samples/data/baboon.jpg etc.) resolve against the upstream
-# checkout. Use a subshell so the cd doesn't leak to the caller.
+# Change to the example root so relative paths in the scripts resolve
+# against the right checkout (upstream samples/data for upstream source,
+# projects/opencv for project source). Use a subshell so the cd doesn't
+# leak to the caller.
 (
-    cd "$TARGET_ROOT"
+    cd "$EXAMPLE_ROOT"
     if [[ "$LAUNCH_PATH" == *.py ]]; then
         exec "$PYTHON" "$LAUNCH_PATH" "${EXTRA_ARGS[@]}"
     else

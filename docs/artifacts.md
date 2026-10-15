@@ -9,7 +9,6 @@
 | 种类 | 名称 | 上传时机 |
 | --- | --- | --- |
 | example 结果 | `<project>-examples-<run_id>-<job_index>` | 每个 `publish-result` matrix job（对应一个 `run-example`），`if: always()` |
-| manifest 检查 | `<project>-manifest-check` | `manifest-check` job，`if: always()` |
 | quick-start 结果 | `<project>-quick-start-<run_id>`，一轮测多棵树时用 `<project>-quick-start-<run_id>-<job_index>` | 托管 runner 上的 `publish-result`（或仍在同一 job 里写结果的旧流水线）。NPU 上的测试 job 不上传。无变化时整个 run 在 monitor 后结束，不产生此 artifact |
 
 `run_id` 是 GitHub Actions 的 `github.run_id`。`job_index` 是 matrix 的 `strategy.job-index`（从 0 起）。失败也必须上传，不能只在绿的时候留文件。
@@ -20,13 +19,9 @@
 
 单个文件 `result.json`，符合 [schemas/result.schema.json](../schemas/result.schema.json)。
 
-artifact 刻意只装 result.json，不装运行日志和训练产物，且不由自托管 NPU runner 上传：NPU runner 到 GitHub artifact 存储的链路不可靠（曾出现过 example 跑通、仅因上传 stall 而全线判红的 run），所以 result.json 由跑在 GitHub 托管 runner 上的 `publish-result` job 生成——它通过 Jobs API 读取对应 `run-example` 的 conclusion 再写文件上传。完整训练输出在 Actions 页面 `Run example` 步骤的控制台日志里。清单里还没有 supported 条目时，`run-example` 和 `publish-result` 整体跳过，不产生此 artifact、也不判红。同样，`schedule` 触发但 monitor 未检测到上游变化时，整个 run 在 monitor job 后结束，本 artifact 和 `<project>-manifest-check` 都不产生。
+artifact 刻意只装 result.json，不装运行日志和训练产物，且不由自托管 NPU runner 上传：NPU runner 到 GitHub artifact 存储的链路不可靠（曾出现过 example 跑通、仅因上传 stall 而全线判红的 run），所以 result.json 由跑在 GitHub 托管 runner 上的 `publish-result` job 生成——它通过 Jobs API 读取对应 `run-example` 的 conclusion 再写文件上传。完整训练输出在 Actions 页面 `Run example` 步骤的控制台日志里。清单里还没有 supported 条目时，`run-example` 和 `publish-result` 整体跳过，不产生此 artifact、也不判红。同样，`schedule` 触发但 monitor 未检测到上游变化时，整个 run 在 monitor job 后结束，本 artifact 也不产生。
 
 `result.json` 必填字段：`trigger`、`target_repo`、`target_ref`、`path`、`image`、`job_status`。`job_status` 只能是 `success`、`failure` 或 `cancelled`。允许附加字段。
-
-### `<project>-manifest-check`
-
-单个文件 `manifest_check_result.json`，符合 [schemas/manifest_check_result.schema.json](../schemas/manifest_check_result.schema.json)。字段：`trigger`、`target_repo`、`target_ref`、`new_paths`、`stale_paths`、`supported`。`new_paths` / `stale_paths` 只记录、不使 job 失败——例外是 supported 条目的 path 已不在磁盘上：manifest-check 会在写完本文件后立即判红，避免 run-example 白占 NPU runner。`supported` 条目的 `path`、`profile`、`runner`、`npu_devices`、`image`、`timeout_minutes` 均为必填（`overlay_args` 和 `exec` 可选）——example 流水线按这些字段调度 runner、卡、容器镜像、超时和 setup 例程，缺字段会在 manifest-check 被 schema 校验拦下。`path` 是目标树上的身份（文件或目录）；`exec` 只在 `path` 不是那个要启动的文件时写。
 
 ### `<project>-quick-start-<run_id>` 或 `<project>-quick-start-<run_id>-<job_index>`
 

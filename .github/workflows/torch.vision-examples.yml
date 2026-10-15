@@ -1,0 +1,25 @@
+# TorchVision examples guard. Keep schedule disabled until the NPU jobs pass.
+name: torch.vision-examples
+
+on:
+  # schedule:
+  #   - cron: '50 */6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.event_name == 'schedule' && 'torch.vision-examples-schedule' || format('manual-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  torch-vision-examples:
+    uses: ./.github/workflows/examples-template.yml
+    with:
+      project: torch.vision
+      upstream_repo: pytorch/vision
+      # Never allow an older ref to bypass the latest-TorchVision requirement.
+      target_ref: ''
+      max_parallel: 1

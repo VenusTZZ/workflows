@@ -43,4 +43,4 @@ jobs:
       project: peft
       upstream_repo: huggingface/peft
       target_ref: ${{ inputs.target_ref }}
-      max_parallel: 4
+      max_parallel: 8

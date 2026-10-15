@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import unittest
+from pathlib import Path
 
-from workflows.markdown_doc_test_base import MarkdownDocTestBase
+from workflows.markdown_doc_test_base import MarkdownDocTestBase, TestCommand
 from workflows.model_cache import (
     ensure_safetensors,
     purge_modelscope_corrupt,
@@ -25,10 +27,21 @@ def _e2e_enabled() -> bool:
     return _is_truthy(os.environ.get('NPU_READY'))
 
 
+def _write_example_script(document: str) -> None:
+    """Write the single reader-facing Python example into the test cwd."""
+    blocks = re.findall(r'(?ms)^```python[ \t]*\r?\n(.*?)^```[ \t]*$', document)
+    if len(blocks) != 1:
+        raise AssertionError(f'expected one unlabeled Python example, found {len(blocks)}')
+    script = blocks[0].rstrip() + '\n'
+    compile(script, 'sd3_npu.py', 'exec')
+    Path('sd3_npu.py').write_text(script, encoding='utf-8')
+
+
 class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     """SD3 medium smoke on 1 card + 2-card Ulysses parallel (NPU/hccl)."""
 
     DEFAULT_COMMAND_TIMEOUT = 1800
+    _COLD_MODEL_TIMEOUT = 5400
     USER_AGENT = 'cosdt-ci-test/quick-start'
     ERROR_MARKERS = (
         *MarkdownDocTestBase.ERROR_MARKERS,
@@ -50,6 +63,46 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _CONSTRAINTS_FILE = '/tmp/xdit_npu_constraints.txt'
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
     _PROJECT_ROOT = '/root/xdit-test'
+    _GENERATED_PNGS = {
+        'xdit-sd3-smoke': Path('results/sd3_npu1_ulysses1.png'),
+        'xdit-sd3-2card': Path('results/sd3_npu2_ulysses2.png'),
+    }
+
+    def _verify_generated_png(self, path: Path) -> None:
+        """Keep the PNG integrity check in CI, not in the quick start."""
+        if not path.is_file():
+            raise AssertionError(f'generated image not found: {path}')
+        image = path.read_bytes()
+        if len(image) <= 50_000:
+            raise AssertionError(
+                'generated image is suspiciously small '
+                f'({len(image)} bytes): {path}'
+            )
+        if image[:8] != b'\x89PNG\r\n\x1a\n':
+            raise AssertionError(
+                'generated image is not a PNG '
+                f'(magic={image[:8]!r}): {path}'
+            )
+        self.log(
+            f'[Step] verified generated PNG ({len(image)}B): '
+            f'{path}'
+        )
+
+    def _run_one(self, cmd, results, env, cwd, timeout, idx):
+        if isinstance(cmd, TestCommand) and cmd.id in self._GENERATED_PNGS:
+            # The first inference downloads the SD3 model on a cold cache.
+            command_timeout = (
+                self._COLD_MODEL_TIMEOUT if cmd.id == 'xdit-sd3-smoke' else timeout
+            )
+            super()._run_one(cmd, results, env, cwd, command_timeout, idx)
+            self._verify_generated_png(self._GENERATED_PNGS[cmd.id])
+            return
+        return super()._run_one(cmd, results, env, cwd, timeout, idx)
+
+    def pre_process(self) -> str:
+        document = super().pre_process()
+        _write_example_script(document)
+        return document
 
     @classmethod
     def prepare_environment(cls) -> None:
@@ -71,18 +124,15 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         with open(cls._CONSTRAINTS_FILE, 'w', encoding='utf-8') as f:
             f.write('\n'.join(cls._CUDA_CONSTRAINTS) + '\n')
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
-        os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
-        # 2) install uv
-        subprocess.run(['python', '-m', 'pip', 'install', 'uv'], check=True)
-
-        # 3) purge stale xfuser from image
-        subprocess.run(['uv', 'pip', 'uninstall', '-y', 'xfuser'],
+        # 2) purge stale xfuser from image so the doc install block really
+        # installs the PyPI release instead of keeping a baked-in copy
+        subprocess.run(['python', '-m', 'pip', 'uninstall', '-y', 'xfuser'],
             capture_output=True, text=True, check=False)
         stale = os.path.join(cls._PROJECT_ROOT, 'xDiT')
         if os.path.isdir(stale): shutil.rmtree(stale, ignore_errors=True)
 
-        # 4) torch stack probe: reuse usable 2.9.0 stack when available
+        # 3) torch stack probe: reuse usable 2.9.0 stack when available
         ps = 'import torch, torch_npu\nraise SystemExit(0 if torch.npu.is_available() else 1)\n'
         probe = subprocess.run(['python', '-c', ps], capture_output=True, check=False)
         if probe.returncode == 0:
@@ -92,15 +142,15 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         else:
             print('setup: torch probe failed, doc install-torch will install the pinned stack')
 
-        # 5) doc execution cwd
+        # 4) doc execution cwd
         os.makedirs(cls._PROJECT_ROOT, exist_ok=True)
         os.chdir(cls._PROJECT_ROOT)
         print(f'setup: cwd -> {os.getcwd()}')
 
-        # 6) expose both cards (single-card + 2-card ulysses)
+        # 5) expose both cards (single-card + 2-card ulysses)
         os.environ['ASCEND_RT_VISIBLE_DEVICES'] = '0,1'
 
-        # 7) safetensors + modelscope cache validation
+        # 6) safetensors + modelscope cache validation
         ensure_safetensors()
         try:
             purge_modelscope_corrupt(resolve_modelscope_cache())

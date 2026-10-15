@@ -49,12 +49,51 @@ except urllib.error.HTTPError:
   echo "pip index: $PIP_INDEX_URL"
 }
 
+torch_stack_for_profile() {
+  # Two coexisting torch stacks (2026-09-21), selected per profile:
+  # - default (peft / peft_dreambooth): torch 2.12.0 + torch_npu 2.12.0,
+  #   the post-2026-09-20 verified line for single-card entries. The
+  #   2.12 upgrade was originally made for the sparse-COO tuner shira
+  #   (torch_npu 2.9 crashes at torch.sparse_coo_tensor construction
+  #   plus dense+=sparse); shira was pulled back to unsupported on
+  #   2026-09-21 (torch_npu 2.12's sparse backward still loses gradient
+  #   values under bf16, run 35575049729 — see examples_manifest.yaml),
+  #   but the 2.12 line stays as default for the remaining entries.
+  # - peft_29 / peft_ds (the 4 multi-card sft entries): torch 2.9.0 +
+  #   torch_npu 2.9.0.post2, the pre-2026-09-20 verified stack. torch
+  #   2.12's c10d broadcast() computes sm90_or_more via
+  #   torch.cuda.get_device_capability(tensor.device)[0], and torch_npu
+  #   patches Tensor.is_cuda = Tensor.is_npu while its
+  #   get_device_capability shim returns None -> None[0] TypeError.
+  #   That kills FSDP checkpoint save (dist_cp gather_object ->
+  #   broadcast_object_list) and DeepSpeed ZeRO zero-init param
+  #   broadcast (run 35502546409). Upstream torch_npu bug; pin these
+  #   profiles back to 2.9 until fixed.
+  case "$1" in
+    peft_29|peft_ds) printf '2.9.0 2.9.0.post2' ;;
+    *)               printf '2.12.0 2.12.0' ;;
+  esac
+}
+
 ensure_torch_stack() {
+  local torch_ver npu_ver
+  read -r torch_ver npu_ver <<< "$(torch_stack_for_profile "$PROFILE")"
+  if python -c "
+import torch, torch_npu
+raise SystemExit(
+    0 if torch.__version__.startswith('$torch_ver')
+    and torch_npu.__version__.startswith('$npu_ver') else 1)
+"; then
+    echo "reusing image torch stack ($(python -c 'import torch; print(torch.__version__)'))"
+    return
+  fi
+  if [[ "$torch_ver" == "2.9.0" ]]; then
+    echo "installing torch==$torch_ver torch_npu==$npu_ver (pre-2.12 verified stack)"
+    pip_ascend "torch==${torch_ver}" "torch_npu==${npu_ver}"
+    return
+  fi
   # torch 2.12.0 + torch_npu 2.12.0 + CANN 9.1.0 (upgraded 2026-09-20
-  # from 2.9.0 to unblock the sparse-COO tuners shira: torch_npu 2.9
-  # crashes at torch.sparse_coo_tensor construction plus dense+=sparse
-  # off. Reuse the image stack when it already matches, otherwise
-  # install.
+  # from 2.9.0 to unblock the sparse-COO tuners shira, see above).
   #
   # torch==2.12.0 is NOT installed via `pip_ascend`: aliyun (and the
   # cluster pip cache, both PyPI mirrors) only host the CUDA torch
@@ -64,15 +103,6 @@ ensure_torch_stack() {
   # at https://download.pytorch.org/whl/cpu/ - so fetch it by direct
   # URL. We compute the cp tag at runtime because the manifest mixes
   # py3.10 (30 entries) and py3.12 (15 entries) images.
-  if python -c "
-import torch, torch_npu
-raise SystemExit(
-    0 if torch.__version__.startswith('2.12.0')
-    and torch_npu.__version__.startswith('2.12.0') else 1)
-"; then
-    echo "reusing image torch stack ($(python -c 'import torch; print(torch.__version__)'))"
-    return
-  fi
   echo "installing torch==2.12.0+cpu (direct URL) + torch_npu==2.12.0"
   CP_ABI=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')")
   python -m pip install --no-deps \
@@ -97,6 +127,36 @@ install_cpu_torchvision() {
   python -m pip install --no-deps \
     "https://download.pytorch.org/whl/cpu/torchvision-0.27.0%2Bcpu-${cp_abi}-${cp_abi}-manylinux_2_28_aarch64.whl"
   python -m pip install pillow
+}
+
+resolve_seed_envs() {
+  # $@ = alternating (hf_id, env var) pairs. Resolve each seeded asset's
+  # snapshot path from the shared HF hub cache (refs/main -> sha) and
+  # append VAR=<snapshot> to GITHUB_ENV for manifest overlay_args.
+  python - "$@" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+HUB_ROOT = Path(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
+pairs = sys.argv[1:]
+if len(pairs) % 2:
+    raise SystemExit("resolve_seed_envs: expected alternating hf_id var pairs")
+for hf_id, var in zip(pairs[::2], pairs[1::2]):
+    repo_dir = HUB_ROOT / f"models--{hf_id.replace('/', '--')}"
+    refs = repo_dir / "refs" / "main"
+    if not refs.is_file():
+        raise SystemExit(
+            f"{hf_id} missing from shared cache root — dispatch the "
+            f"cache-seed workflow (spec: cache-seed/peft/ms_seeds.yaml)")
+    sha = refs.read_text().strip()
+    snap = repo_dir / "snapshots" / sha
+    if not snap.is_dir() or not any(snap.iterdir()):
+        raise SystemExit(f"{hf_id}: refs/main -> {sha[:8]} has no snapshot files")
+    with open(os.environ["GITHUB_ENV"], "a") as fh:
+        fh.write(f"{var}={snap}\n")
+    print(f"{var}={snap}", flush=True)
+PY
 }
 
 # Copy CI fixture data into the target root so that example scripts can
@@ -169,7 +229,22 @@ setup_peft() {
   python -m pip install -e "$TARGET_ROOT"
   python -m pip install "transformers==4.57.1" "datasets>=4.7.0,<6" \
     "huggingface_hub<1.0" "trl==1.12.0" evaluate scikit-learn
-  install_cpu_torchvision
+  # torchvision only pairs with the 2.12 stack (adamss image example
+  # imports it); the 2.9 profiles are sft-only and don't import
+  # torchvision (its 0.27 wheel links the torch 2.12 ABI).
+  local _torch_ver _npu_ver
+  read -r _torch_ver _npu_ver <<< "$(torch_stack_for_profile "$PROFILE")"
+  if [[ "$_torch_ver" == "2.12.0" ]]; then
+    install_cpu_torchvision
+  fi
+  # t5-base seq2seq FSDP 例（peft_lora_seq2seq_accelerate_fsdp.py）零 CLI，
+  # 数据路径硬编码 cwd 相对 temp/data/FinancialPhraseBank-v1.0/ 下两个
+  # jsonl——从仓内 fixture 放置（run 阶段 cwd=$TARGET_ROOT 直接命中）。
+  mkdir -p "$TARGET_ROOT/temp/data/FinancialPhraseBank-v1.0"
+  cp "$TARGET_ROOT/fixtures/financial_phrasebank/financial_phrase_bank_train.jsonl" \
+     "$TARGET_ROOT/temp/data/FinancialPhraseBank-v1.0/"
+  cp "$TARGET_ROOT/fixtures/financial_phrasebank/financial_phrase_bank_val.jsonl" \
+     "$TARGET_ROOT/temp/data/FinancialPhraseBank-v1.0/"
   python -c "import peft, trl, transformers, datasets, accelerate; print('peft', peft.__version__, '/ trl', trl.__version__, '/ transformers', transformers.__version__)"
 
   # Resolve seeded asset paths for overlay_args. The shared cache root
@@ -178,40 +253,12 @@ setup_peft() {
   # layout, refs/main = real upstream sha; this plant used to live here
   # in setup, moved 2026-09-17 so the seed workflow is the single
   # writer). Nothing downloads in the example jobs anymore.
-  # Hardcoded hub ids (mt0-small / dinov2-base / glue) resolve through
-  # the same seeded cache at example runtime; missing env paths are a
-  # hard error — every example that uses them fails without them.
-  python - <<'PY'
-import os
-from pathlib import Path
-
-HUB_ROOT = Path(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
-
-# (hf_id, env var) — consumed by manifest overlay_args
-#   ${SFT_MODEL_PATH}          sft / miss / mica / supertuning
-#   ${ROBERTA_BASE_PATH}       adamss ×2
-#   ${BERT_BASE_UNCASED_PATH}  sequence_classification
-TO_ENV = [
-    ("Qwen/Qwen2.5-0.5B", "SFT_MODEL_PATH"),
-    ("roberta-base", "ROBERTA_BASE_PATH"),
-    ("bert-base-uncased", "BERT_BASE_UNCASED_PATH"),
-]
-
-for hf_id, var in TO_ENV:
-    repo_dir = HUB_ROOT / f"models--{hf_id.replace('/', '--')}"
-    refs = repo_dir / "refs" / "main"
-    if not refs.is_file():
-        raise SystemExit(
-            f"{hf_id} missing from shared cache root — dispatch the "
-            f"cache-seed workflow (spec: cache-seed/peft/ms_seeds.yaml)")
-    sha = refs.read_text().strip()
-    snap = repo_dir / "snapshots" / sha
-    if not snap.is_dir() or not any(snap.iterdir()):
-        raise SystemExit(f"{hf_id}: refs/main -> {sha[:8]} has no snapshot files")
-    with open(os.environ["GITHUB_ENV"], "a") as fh:
-        fh.write(f"{var}={snap}\n")
-    print(f"{var}={snap}", flush=True)
-PY
+  # Hardcoded hub ids (mt0-small / dinov2-base / glue / t5-base /
+  # opt-350m) resolve through the same seeded cache at example runtime;
+  # only ids consumed by overlay_args get an env path here.
+  resolve_seed_envs Qwen/Qwen2.5-0.5B SFT_MODEL_PATH \
+    roberta-base ROBERTA_BASE_PATH \
+    bert-base-uncased BERT_BASE_UNCASED_PATH
 }
 
 setup_peft_dreambooth() {
@@ -229,41 +276,47 @@ setup_peft_dreambooth() {
   # git clone github.com/google/dreambooth（runner 网络不通 + 纯死代码，
   # 该路径只用于 clone 自身）；预先 mkdir 空目录即可绕过，无需 patch。
   setup_peft
-  echo "installing dreambooth stack (diffusers==0.39.0 + tensorboard, hub<1.0)"
-  python -m pip install "huggingface_hub<1.0" "diffusers==0.39.0" tensorboard
-  python -c "import diffusers, tensorboard; print('diffusers', diffusers.__version__)"
+  echo "installing dreambooth stack (diffusers==0.39.0 + tensorboard + wandb, hub<1.0)"
+  # wandb：boft_dreambooth 走 --report_to wandb（脚本 `import wandb` 硬性，
+  # wandb_init 只在 wandb 分支定义）；sitecustomize 的 wandb neutralizer
+  # 把 wandb.init 强制 disabled，无需 API key。
+  python -m pip install "huggingface_hub<1.0" "diffusers==0.39.0" tensorboard wandb
+  python -c "import diffusers, tensorboard, wandb; print('diffusers', diffusers.__version__)"
   mkdir -p "$TARGET_ROOT/data/dreambooth"
 
   # SD v1.5 由 cache-seed 投递（与 accelerate 共享同一缓存卷，2026-09-17
   # 已 plant；peft 的 ms_seeds.yaml 同步声明，冷缓存时 peft 自己 dispatch
   # 也能补）。resolve refs/main 得 ${SD_MODEL_PATH}，只影响本 profile——
   # 非 SD 例的 setup 不做这个校验，缺资产不拦其它例。
-  python - <<'PY'
-import os
-from pathlib import Path
+  resolve_seed_envs stable-diffusion-v1-5/stable-diffusion-v1-5 SD_MODEL_PATH
+}
 
-HUB_ROOT = Path(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))) / "hub"
-hf_id, var = "stable-diffusion-v1-5/stable-diffusion-v1-5", "SD_MODEL_PATH"
+setup_peft_29() {
+  # Multi-card fsdp sft entries (run_peft_fsdp.sh /
+  # run_peft_qlora_fsdp.sh): identical deps to setup_peft, only the
+  # torch stack differs (2.9.0 pair, see torch_stack_for_profile).
+  setup_peft
+}
 
-repo_dir = HUB_ROOT / f"models--{hf_id.replace('/', '--')}"
-refs = repo_dir / "refs" / "main"
-if not refs.is_file():
-    raise SystemExit(
-        f"{hf_id} missing from shared cache root — dispatch the "
-        f"cache-seed workflow (spec: cache-seed/peft/ms_seeds.yaml)")
-sha = refs.read_text().strip()
-snap = repo_dir / "snapshots" / sha
-if not snap.is_dir() or not any(snap.iterdir()):
-    raise SystemExit(f"{hf_id}: refs/main -> {sha[:8]} has no snapshot files")
-with open(os.environ["GITHUB_ENV"], "a") as fh:
-    fh.write(f"{var}={snap}\n")
-print(f"{var}={snap}", flush=True)
-PY
+setup_peft_fp4() {
+  # fp4_finetuning/finetune_fp4_opt_bnb_peft.py：唯一走 bnb 的条目。
+  # bnb 0.50.2 走默认 CPU 后端在 NPU 上跑 4-bit NF4（无需 NPU 专用
+  # kernel）；run_example.sh 对该目录跳过 transfer_to_npu（见
+  # SKIP_TRANSFER_TO_NPU）。bnb **不能**进全局 setup_peft：diffusers
+  # 0.39 的 quantizers/auto.py 硬 import bnb，而 dreambooth 条目挂
+  # transfer_to_npu 时 bnb 的 cuda backend 崩 torch._C.
+  # _cuda_getCurrentRawStream——装了 bnb 会把 6 条 dreambooth 全带崩。
+  setup_peft
+  python -m pip install --index-url "$ALIYUN_PIP_INDEX" bitsandbytes
 }
 
 setup_peft_ds() {
   # deepspeed 多卡 sft 例（run_peft_deepspeed.sh /
   # run_peft_qlora_deepspeed_stage3.sh）：setup_peft 之上装 deepspeed。
+  # torch 栈固定 2.9.0 对（torch_stack_for_profile）：torch 2.12 的
+  # c10d broadcast sm90 检查 + torch_npu get_device_capability 返回
+  # None 会在 ZeRO zero-init 的 dist.broadcast(param.data) 直接崩
+  # （run 35502546409）。
   # 0.19.7 的 npu accelerator 自动识别 Ascend + HCCL，coder npu-5
   # 2026-09-18 实跑 ZeRO-3 2 卡 exit 0（loss 4.64）。DS_BUILD_OPS=0
   # 跳过 CPU op 内核编译：ZeRO-3 bf16 训练路径不需要编译 op，且

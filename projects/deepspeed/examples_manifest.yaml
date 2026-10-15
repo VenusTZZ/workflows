@@ -1,18 +1,13 @@
 version: 1
-# DeepSpeed examples guard manifest (split mode).
-# Monitored repo: deepspeedai/DeepSpeed (main repo, publishes releases, drives
-# schedule and provides the installed source).
-# Examples repo: deepspeedai/DeepSpeedExamples (no releases, always follows its
-# default branch master); paths in this manifest are relative to that repo root.
-# files-only scan model (docs/examples-guard-engine.md): the reconciliation unit
-# is the entry file (.sh/.py).
-# "unsupported" means "this guard does not run it now", NOT "Ascend cannot run it";
-# comments separate CUDA/multi-node/big-data hard-blocks from promotable items.
+# 主仓 deepspeedai/DeepSpeed 提供被测源码；example 路径相对 deepspeedai/DeepSpeedExamples。
+# supported 为当前 NPU CI 看护；unsupported 仅登记尚未接入的 example 入口。
+# 库、安装脚本、单元测试、数据准备及结果处理工具不作为 example 登记。
+# 扫描无 exclude；同一 example 的启动包装合并到主入口。
 scan:
   root: ''
   include_extensions: ['.sh', '.py']
 supported:
-  # HelloDeepSpeed: Roberta MLM from scratch (ZeRO-1 + CPU offload + BF16). wikitext patched to Salesforce/wikitext (ModelScope) in setup; script passes through $@.
+  # RoBERTa MLM 训练；支持单卡 NPU，2 层模型/10 步验证 ZeRO-1 与 CPU offload。
   - path: training/HelloDeepSpeed/run_ds.sh
     profile: deepspeed
     runner: linux-aarch64-a2-1
@@ -27,13 +22,14 @@ supported:
       - '--log_every 5'
       - '--dtype bf16'
     timeout_minutes: 60
-  # DS-Chat step1 SFT: NPU-aware (get_accelerator); opt-125m via ModelScope; data is an 8-line local/jsonfile fixture written by setup.
-  - path: applications/DeepSpeed-Chat/training/step1_supervised_finetuning/main.py
+  # SFT 训练；支持单卡 NPU，使用本地 OPT-125M 和 8 行数据。
+  - path: applications/DeepSpeed-Chat/training/step1_supervised_finetuning
+    exec: applications/DeepSpeed-Chat/training/step1_supervised_finetuning/main.py
     profile: ds_chat_sft
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - '--model_name_or_path facebook/opt-125m'
+      - '--model_name_or_path ${OPT_125M_PATH}'
       - '--data_path local/jsonfile'
       - '--num_train_epochs 1'
       - '--per_device_train_batch_size 4'
@@ -42,15 +38,17 @@ supported:
       - '--zero_stage 2'
       - '--dtype bf16'
       - '--print_loss'
+      - '--deepspeed'
       - '--output_dir ${CI_OUTPUT_DIR}'
     timeout_minutes: 120
-  # DS-Chat step2 reward model: same data source as step1; trains a chosen>rejected preference scorer.
-  - path: applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/main.py
+  # 奖励模型训练；支持单卡 NPU，使用本地 OPT-125M 和小型偏好数据。
+  - path: applications/DeepSpeed-Chat/training/step2_reward_model_finetuning
+    exec: applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/main.py
     profile: ds_chat_rw
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - '--model_name_or_path facebook/opt-125m'
+      - '--model_name_or_path ${OPT_125M_PATH}'
       - '--data_path local/jsonfile'
       - '--num_train_epochs 1'
       - '--per_device_train_batch_size 4'
@@ -58,15 +56,17 @@ supported:
       - '--max_seq_len 128'
       - '--zero_stage 2'
       - '--dtype bf16'
+      - '--deepspeed'
       - '--output_dir ${CI_OUTPUT_DIR}'
     timeout_minutes: 120
-  # DS-Chat step2 DPO: ref model doubles memory; own profile.
-  - path: applications/DeepSpeed-Chat/training/step2_dpo_finetuning/main.py
+  # DPO 偏好训练；支持单卡 NPU，使用本地 OPT-125M 和小批量数据。
+  - path: applications/DeepSpeed-Chat/training/step2_dpo_finetuning
+    exec: applications/DeepSpeed-Chat/training/step2_dpo_finetuning/main.py
     profile: ds_chat_dpo
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - '--model_name_or_path facebook/opt-125m'
+      - '--model_name_or_path ${OPT_125M_PATH}'
       - '--data_path local/jsonfile'
       - '--num_train_epochs 1'
       - '--per_device_train_batch_size 2'
@@ -75,51 +75,41 @@ supported:
       - '--zero_stage 2'
       - '--dtype bf16'
       - '--beta 0.1'
+      - '--deepspeed'
       - '--output_dir ${CI_OUTPUT_DIR}'
     timeout_minutes: 150
-  # DS-Chat step3 RLHF: official --enable_test_mode + --test_stop_step 5 CI mode; actor/critic both opt-125m.
-  - path: applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/main.py
+  # RLHF 训练；支持单卡 NPU，OPT-125M actor/critic 使用官方 5 步测试模式。
+  - path: applications/DeepSpeed-Chat/training/step3_rlhf_finetuning
+    exec: applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/main.py
     profile: ds_chat_rlhf
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - '--actor_model_name_or_path facebook/opt-125m'
-      - '--critic_model_name_or_path facebook/opt-125m'
+      - '--actor_model_name_or_path ${OPT_125M_PATH}'
+      - '--critic_model_name_or_path ${OPT_125M_PATH}'
       - '--data_path local/jsonfile'
       - '--enable_test_mode'
       - '--test_stop_step 5'
       - '--actor_zero_stage 2'
       - '--critic_zero_stage 2'
       - '--dtype bf16'
+      - '--deepspeed'
     timeout_minutes: 180
-  # HF text-generation inference: --hf_baseline skips the DS-inference kernel, pure HF pipeline for the basic inference path.
+  # 文本生成；支持 NPU 上的 HF baseline，本地 OPT-125M 绕过 DS kernel 注入。
   - path: inference/huggingface/text-generation/inference-test.py
     profile: ds_infer
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
-      - '--model facebook/opt-125m'
+      - '--model ${OPT_125M_PATH}'
       - '--hf_baseline'
       - '--dtype float32'
       - '--max_new_tokens 8'
     timeout_minutes: 60
-  # bf16 master-weight comparison: built-in SimpleTransformer + synthetic data, no external model/data.
-  - path: training/bf16_master_weight/train.py
-    profile: deepspeed
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - '--num_layers 2'
-      - '--hidden_dim 256'
-      - '--num_steps 5'
-      - '--warmup_steps 1'
-      - '--batch_size 2'
-      - '--seq_length 128'
-      - '--deepspeed_config configs/baseline.json'
-    timeout_minutes: 60
-  # CIFAR10 image classification (ZeRO stage 0 + BF16): torchvision auto-downloads CIFAR-10 (~170MB, cluster-reachable).
-  - path: training/cifar/cifar10_deepspeed.py
-    profile: deepspeed
+  # CIFAR-10 分类；支持单卡 NPU，上游 launcher 配合 ModelScope 预置数据。
+  - path: training/cifar
+    exec: training/cifar/run_ds.sh
+    profile: ds_cifar
     runner: linux-aarch64-a2-1
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
@@ -128,17 +118,7 @@ supported:
       - '--dtype bf16'
       - '--stage 0'
     timeout_minutes: 90
-  # Pipeline parallelism (single card, pipeline=1): CIFAR10, AlexNet.
-  - path: training/pipeline_parallelism/train.py
-    profile: deepspeed
-    runner: linux-aarch64-a2-1
-    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-    overlay_args:
-      - '--steps 10'
-      - '-p 1'
-      - '--deepspeed_config ds_config.json'
-    timeout_minutes: 90
-  # ZeRO offload_states: random synthetic data, no external dependency.
+  # ZeRO 状态 offload；支持单卡 NPU，使用小模型和合成数据。
   - path: training/offload_states/offload_states.py
     profile: deepspeed
     runner: linux-aarch64-a2-1
@@ -147,438 +127,552 @@ supported:
       - '--hidden_dim 1024'
       - '--nlayers 2'
     timeout_minutes: 60
+  # CIFAR MoE 训练；支持两卡 HCCL/EP=2，局部禁用 torch.compile 避开 Triton 依赖。
+  - path: training/cifar/run_ds_moe.sh
+    profile: ds_cifar
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--epochs 1'
+      - '--log-interval 50'
+      - '--dtype bf16'
+      - '--stage 0'
+    timeout_minutes: 120
+  # AutoTP loss 等价性；支持四卡 NPU，Qwen3-0.6B 验证 TP=1/3/4 各 5 步。
+  - path: training/autotp_equivalence
+    exec: training/autotp_equivalence/train.py
+    profile: ds_autotp_equivalence
+    runner: linux-aarch64-a2-4
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model_name_or_path ${QWEN3_06B_PATH}'
+      - '--steps 5'
+      - '--seq_len 32'
+      - '--micro_batch_size 1'
+      - '--log_every 1'
+    timeout_minutes: 180
+
+  # HF Trainer AutoTP；八卡 TP=8、本地模型和 fixture，3 步含 2 步预热，已通过 #28。
+  - path: training/tensor_parallel/hf_integration/train.py
+    profile: ds_hf_autotp
+    runner: linux-aarch64-a2-8
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model_name_or_path ${OPT_125M_PATH}'
+      - '--data_path ${ALPACA_CI_PATH}'
+      - '--output_dir ${CI_OUTPUT_DIR}/hf-autotp'
+      - '--max_steps 3'
+      - '--model_max_length 128'
+      - '--per_device_train_batch_size 1'
+      - '--gradient_accumulation_steps 1'
+      - '--learning_rate 2e-5'
+      - '--warmup_steps 2'
+      - '--logging_steps 1'
+      - '--eval_strategy no'
+      - '--save_strategy no'
+      - '--report_to none'
+      - '--bf16 True'
+      - '--tf32 False'
+      - '--gradient_checkpointing False'
+      - '--dataloader_pin_memory False'
+      - '--dataloader_num_workers 0'
+    timeout_minutes: 120
+  # CIFAR PR-MoE；两卡 EP=2、残差专家 2/4，eager MoE 已通过 #27。
+  - path: training/cifar/run_ds_prmoe.sh
+    profile: ds_cifar
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--epochs 1'
+      - '--log-interval 50'
+      - '--dtype bf16'
+      - '--stage 0'
+    timeout_minutes: 120
+  # 动态 batch/LR；单卡合成序列打包及 2 epoch，已通过 #27。
+  - path: training/data_efficiency/variable_batch_size_and_lr/variable_batch_size_and_lr_example.py
+    profile: ds_variable_batch
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--pipeline-num-stages 0'
+    timeout_minutes: 60
+  # ZenFlow offload；两卡 256 维/2 层合成数据，6 次迭代已通过 #27。
+  - path: training/DeepSpeed-ZenFlow/benchmark/zf_benchmark.py
+    profile: ds_zenflow
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--hidden_dim 256'
+      - '--nlayers 2'
+      - '--iteration 3'
+      - '--dtype torch.bfloat16'
+      - '--pin_memory_opts 0'
+      - '--topk_ratios 0.1'
+      - '--update_intervals 2'
+      - '--overlap_steps 0'
+    timeout_minutes: 90
+  # Wanda 校准剪枝；NPU 本地 OPT-125M/JSONL，4×32 token 校准已通过 #27。
+  - path: compression/reasoning_aware_compression/prune.py
+    profile: ds_rac_prune
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model ${OPT_125M_PATH}'
+      - '--device npu'
+      - '--dtype float32'
+      - '--pruning-method wanda'
+      - '--calibration prompt'
+      - '--dataset ${RAC_CI_PATH}'
+      - '--prompt-column prompt'
+      - '--no-chat-template'
+      - '--nsamples 4'
+      - '--seqlen 32'
+      - '--batch-size 1'
+      - '--scope all'
+      - '--layer-thirds 1'
+      - '--sparsity 0.5'
+      - '--output ${CI_OUTPUT_DIR}/rac-pruned'
+      - '--save-report'
+    timeout_minutes: 90
+
+  # SFT 生成评测；单卡先训练小检查点，再对比基础/微调模型，8 token，待实跑。
+  - path: applications/DeepSpeed-Chat/training/step1_supervised_finetuning/prompt_eval.py
+    profile: ds_chat_prompt_eval
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model_name_or_path_baseline ${OPT_125M_PATH}'
+      - '--model_name_or_path_finetune ${CI_OUTPUT_DIR}/prompt-eval-sft'
+      - '--max_new_tokens 8'
+      - '--language English'
+    timeout_minutes: 120
+  # 奖励评分 smoke；单卡本地 OPT-125M/初始化评分头，两组偏好 forward，待实跑。
+  - path: applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/rw_eval.py
+    profile: ds_chat_reward_eval
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model_name_or_path ${OPT_125M_PATH}'
+      - '--num_padding_at_beginning 1'
+    timeout_minutes: 60
+  # 固定长度 HF AutoTP；八卡 TP=8/序列 128/3 步，校验 padding 与 label masking，待实跑。
+  - path: training/tensor_parallel/hf_integration/train_bench_length.py
+    profile: ds_hf_bench_length
+    runner: linux-aarch64-a2-8
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model_name_or_path ${OPT_125M_PATH}'
+      - '--data_path ${ALPACA_CI_PATH}'
+      - '--output_dir ${CI_OUTPUT_DIR}/hf-bench-length'
+      - '--max_steps 3'
+      - '--model_max_length 128'
+      - '--per_device_train_batch_size 1'
+      - '--gradient_accumulation_steps 1'
+      - '--learning_rate 2e-5'
+      - '--warmup_steps 2'
+      - '--logging_steps 1'
+      - '--eval_strategy no'
+      - '--save_strategy no'
+      - '--report_to none'
+      - '--bf16 True'
+      - '--tf32 False'
+      - '--gradient_checkpointing False'
+      - '--dataloader_pin_memory False'
+      - '--dataloader_num_workers 0'
+    timeout_minutes: 120
+  # SuperOffload 入口；两卡 ZeRO-Offload 模式/CPU 参数和优化器卸载，3 步，待实跑。
+  - path: training/DeepSpeed-SuperOffload/finetune_zero3.py
+    profile: ds_superoffload
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model_name ${OPT_125M_PATH}'
+      - '--dataset_name ${ALPACA_DATASET_DIR}'
+      - '--lr 0.001'
+      - '--batch_size 1'
+      - '--num_train_epochs 1'
+      - '--max_length 128'
+      - '--bench_steps 3'
+      - '--warmup_steps 1'
+      - '--attn_implementation eager'
+      - '--output_dir ${CI_OUTPUT_DIR}/superoffload'
+    timeout_minutes: 120
+
+  # 模型张量卸载对比；单卡 ZeRO-3/native mlock，合成小模型/两臂各 3 步，待实跑.
+  - path: benchmarks/pin_memory/model_tensor_offload/bench.py
+    profile: ds_pin_memory
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--hidden 4'
+      - '--layers 2'
+      - '--batch 1'
+      - '--seq 16'
+      - '--steps 3'
+      - '--warmup 1'
+      - '--zero-stage 3'
+    timeout_minutes: 120
+  # 激活卸载对比；单卡 NPU checkpoint/native pin，两臂各 3 步，待实跑。
+  - path: benchmarks/pin_memory/activation_offload/bench.py
+    profile: ds_pin_memory
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--hidden 64'
+      - '--layers 2'
+      - '--batch 1'
+      - '--seq 32'
+      - '--steps 3'
+      - '--warmup 1'
+    timeout_minutes: 120
+  # 主机/NPU 双向拷贝；三种 1MiB 缓冲区各 3 次，不冒充 CUDA host registration，待实跑。
+  - path: benchmarks/pin_memory/h2d_d2h/bench.py
+    profile: ds_pin_memory
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--sizes-mib 1'
+      - '--warmup 1'
+      - '--iters 3'
+      - '--skip-native-register'
+    timeout_minutes: 120
+  # ZenFlow LLM 微调；OPT-125M/16 行本地 Alpaca，单卡 CPU optimizer offload 与保存，待实跑。
+  - path: training/DeepSpeed-ZenFlow/finetuning/finetune_llama.py
+    profile: ds_zenflow_finetune
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model_name "${OPT_125M_PATH}"'
+      - '--lr 0.00002'
+      - '--batch_size 1'
+      - '--num_train_epochs 1'
+      - '--output_dir "${CI_OUTPUT_DIR}/zenflow-finetune-checkpoint"'
+    timeout_minutes: 120
+  # OPSD 在线蒸馏；小模型/3 步 rollout、教师 CPU 缓存与 streamed KL，待实跑。
+  - path: training/opsd/main.py
+    profile: ds_opsd
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 120
+  # Student TP/ZeRO-3 smoke；两卡小模型 forward/backward/step，关闭可选 CPU optimizer offload，待实跑。
+  - path: training/opsd/test_student_autotp_zero3.py
+    profile: ds_opsd
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 120
+  # Teacher TP/ZeRO-3 smoke；两卡小模型参数 CPU offload 与 logit cache，待实跑。
+  - path: training/opsd/test_teacher_autotp_zero3.py
+    profile: ds_opsd
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 120
+  # BERT 推理计时；本地模型/4 次 DS engine forward 与 NPU 同步，待实跑。
+  - path: benchmarks/inference/bert-bench.py
+    profile: ds_legacy_inference_bench
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model "${BERT_BASE_CASED_PATH}"'
+      - '--deepspeed'
+      - '--dtype fp32'
+      - '--trials 4'
+    timeout_minutes: 120
+  # GPT 推理计时；OPT-125M/4 次×8 token，DS engine 与 NPU 同步，待实跑。
+  - path: benchmarks/inference/gpt-bench.py
+    profile: ds_legacy_inference_bench
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model "${OPT_125M_PATH}"'
+      - '--deepspeed'
+      - '--dtype fp32'
+      - '--max-tokens 8'
+      - '--trials 4'
+    timeout_minutes: 120
+  # HF/DS 生成一致性；OPT-125M/2 个 prompt，强制断言零 mismatch，待实跑。
+  - path: inference/huggingface/text-generation/ds-hf-compare.py
+    profile: ds_hf_ds_compare
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model "${OPT_125M_PATH}"'
+      - '--dtype float32'
+      - '--num_inputs 2'
+      - '--min_length 12'
+      - '--max_length 16'
+      - '--print_outputs'
+    timeout_minutes: 120
+  # BERT-large 填词；本地同名 ModelScope 权重，单卡短序列 DS 推理，待实跑。
+  - path: inference/huggingface/fill-mask/test-bert.py
+    profile: ds_fill_mask_bert
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 120
+  # ELECTRA 填词；本地 generator 权重，两卡 TP=2 的显式切分策略，待实跑。
+  - path: inference/huggingface/fill-mask/test-electra.py
+    profile: ds_fill_mask_electra
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 120
+  # RoBERTa-large 填词；本地权重与两卡 TP=2，验证 NPU 结果，待实跑。
+  - path: inference/huggingface/fill-mask/test-roberta.py
+    profile: ds_fill_mask_roberta
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 120
+  # T5 翻译；本地权重与两卡 TP=2，模型生成配置限制 8 token，待实跑。
+  - path: inference/huggingface/translation/test-t5-base.py
+    profile: ds_t5_translation
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 120
+  # HybridEngine rollout；OPT-125M/合成 token/2 次采样，验证原生 NPU 推理，待实跑。
+  - path: benchmarks/opsd/benchmark_hybrid_engine_rollout.py
+    profile: ds_hybrid_rollout
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model "${OPT_125M_PATH}"'
+      - '--dtype bf16'
+      - '--batch-sizes 1'
+      - '--samples-per-prompt 1'
+      - '--prompt-lengths 16'
+      - '--response-lengths 4'
+      - '--warmup 1'
+      - '--iterations 2'
+      - '--output "${CI_OUTPUT_DIR}/hybrid-rollout-profile.json"'
+    timeout_minutes: 120
+  # Wav2Vec2 CTC 推理；两条合成音频/本地同名模型，验证 NPU logits 而非识别准确率，待实跑。
+  - path: inference/huggingface/automatic-speech-recognition/test-wav2vec2.py
+    profile: ds_asr_ctc
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args: []
+    timeout_minutes: 120
+
+  # LLM 微调；SmolLM2-135M/匹配 rotary 的依赖，两卡 ZeRO-2/3 步，待实跑。
+  - path: training/deepspeed_finetune_demo/finetune_llama.py
+    profile: ds_finetune_demo
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model_name "${SMOLLM2_135M_PATH}"'
+      - '--dataset_name "${ALPACA_FINETUNE_DIR}"'
+      - '--batch_size 2'
+      - '--num_train_epochs 1'
+      - '--max_length 128'
+      - '--max_steps 3'
+      - '--eval_steps 0'
+      - '--checkpoint_steps 0'
+      - '--output_dir "${CI_OUTPUT_DIR}/finetune-demo"'
+    timeout_minutes: 120
+  # SD 教师 CFG 蒸馏；本地 SD1.5/8 幅图，两卡 ZeRO-2 FP32/3 步全 UNet 训练，待实跑。
+  - path: training/stable_diffusion/train_sd_distil_lora.py
+    profile: ds_sd_distil
+    runner: linux-aarch64-a2-2
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--pretrained_model_name_or_path "${SD15_PATH}"'
+      - '--default_prompt "a colorful geometric shape"'
+      - '--resolution 64'
+      - '--center_crop'
+      - '--train_batch_size 1'
+      - '--gradient_accumulation_steps 1'
+      - '--max_train_steps 3'
+      - '--learning_rate 0.000005'
+      - '--lr_scheduler constant'
+      - '--lr_warmup_steps 0'
+      - '--mixed_precision no'
+      - '--report_to none'
+      - '--checkpointing_steps 1000'
+      - '--dataloader_num_workers 0'
+      - '--seed 42'
+      - '--output_dir "${CI_OUTPUT_DIR}/sd-distil"'
+    timeout_minutes: 180
+  # OPSD decode 对比；小模型/16 prompt token，原生 raw 与 HybridEngine 各 2 次，待实跑。
+  - path: training/opsd/benchmarks/bench_decode_1p1r.py
+    profile: ds_opsd_decode
+    runner: linux-aarch64-a2-1
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - '--model "${QWEN3_06B_PATH}"'
+      - '--prompt-len 16'
+      - '--max-new-tokens 4'
+      - '--num-warmup 1'
+      - '--num-iters 2'
+    timeout_minutes: 120
+
 unsupported:
-
-  # non-DeepSpeed baseline / reference script; guarding goes through run_ds.sh.
-  - training/HelloDeepSpeed/run.sh
-  - training/HelloDeepSpeed/train_bert.py
-  - training/cifar/cifar10_tutorial.py
-  # invoked internally by a supported entry script (sub-script/config); not scheduled standalone.
-  - training/HelloDeepSpeed/train_bert_ds.py
-  - training/bf16_master_weight/gather_memory.py
-  - training/bf16_master_weight/plot_loss.py
-  - training/bf16_master_weight/run_comparison.sh
-  - training/cifar/run_ds.sh
-  - training/offload_states/run_benchmark.sh
-  - training/pipeline_parallelism/run.sh
-  # autotuning scan (multi-config tuning), not single-card deterministic CI.
-  - training/autotuning/hf/bert-base/test_tune.sh
-  - training/autotuning/hf/bert-large/test_tune.sh
-  - training/autotuning/hf/deberta/test_tune.sh
-  - training/autotuning/hf/distilbert/test_tune.sh
-  - training/autotuning/hf/gpt2-large/test_tune.sh
-  - training/autotuning/hf/gpt2-medium/test_tune.sh
-  - training/autotuning/hf/gpt2-xl/test_tune.sh
-  - training/autotuning/hf/gpt2/test_tune.sh
-  # multi-node/multi-GPU (mpi/ethernet/infiniband) or NCCL-bound BERT training, not single-card.
-  - training/BingBertGlue/nvidia_bert_dataset_provider.py
-  - training/BingBertGlue/run_glue_bert_base_finetune.sh
-  - training/BingBertGlue/run_glue_bert_large_finetune.sh
-  - training/BingBertGlue/run_glue_classifier_bert_base.py
-  - training/BingBertGlue/run_glue_classifier_bert_large.py
-  - training/BingBertSquad/1-bit_adam/mpi_ethernet/run_squad_deepspeed_onebitadam.sh
-  - training/BingBertSquad/1-bit_adam/mpi_ethernet/run_squad_mpi_onebitadam.sh
-  - training/BingBertSquad/1-bit_adam/mpi_infiniband/run_squad_deepspeed_onebitadam.sh
-  - training/BingBertSquad/1-bit_adam/mpi_infiniband/run_squad_mpi_onebitadam.sh
-  - training/BingBertSquad/1-bit_adam/nccl/run_squad_deepspeed_onebitadam.sh
-  - training/BingBertSquad/convert_bert_ckpt_to_deepspeed.py
-  - training/BingBertSquad/evaluate-v1.1.py
-  - training/BingBertSquad/evaluate.py
-  - training/BingBertSquad/nvidia_run_squad_baseline.py
-  - training/BingBertSquad/nvidia_run_squad_deepspeed.py
-  - training/BingBertSquad/run_hf.sh
-  - training/BingBertSquad/run_squad_baseline.sh
-  - training/BingBertSquad/run_squad_deepspeed.sh
-  - training/BingBertSquad/utils.py
-  - training/bing_bert/01_adam/mpi_ethernet/ds_train_bert_01adam_bsz4k_seq128_mpi_ethernet.sh
-  - training/bing_bert/01_adam/mpi_ethernet/ds_train_bert_01adam_bsz4k_seq512_mpi_ethernet.sh
-  - training/bing_bert/01_adam/mpi_infiniband/ds_train_bert_01adam_bsz4k_seq128_mpi_infiniband.sh
-  - training/bing_bert/01_adam/mpi_infiniband/ds_train_bert_01adam_bsz4k_seq512_mpi_infiniband.sh
-  - training/bing_bert/01_adam/nccl/ds_train_bert_01adam_bsz4k_seq128_nccl.sh
-  - training/bing_bert/01_adam/nccl/ds_train_bert_01adam_bsz4k_seq512_nccl.sh
-  - training/bing_bert/1-bit_adam/mpi_ethernet/ds_train_bert_onebitadam_bsz4k_seq128_mpi_ethernet.sh
-  - training/bing_bert/1-bit_adam/mpi_ethernet/mpi_train_bert_onebitadam_bsz4k_seq128_ethernet.sh
-  - training/bing_bert/1-bit_adam/mpi_infiniband/ds_train_bert_onebitadam_bsz4k_seq128_mpi_infiniband.sh
-  - training/bing_bert/1-bit_adam/mpi_infiniband/mpi_train_bert_onebitadam_bsz4k_seq128_infiniband.sh
-  - training/bing_bert/1-bit_adam/nccl/ds_train_bert_onebitadam_bsz4k_seq128_nccl.sh
-  - training/bing_bert/1-bit_lamb/mpi_ethernet/ds_train_bert_onebitlamb_bsz32k_seq512_mpi_ethernet.sh
-  - training/bing_bert/1-bit_lamb/mpi_ethernet/ds_train_bert_onebitlamb_bsz64k_seq128_mpi_ethernet.sh
-  - training/bing_bert/1-bit_lamb/mpi_ethernet/mpi_train_bert_onebitlamb_bsz32k_seq512_ethernet.sh
-  - training/bing_bert/1-bit_lamb/mpi_ethernet/mpi_train_bert_onebitlamb_bsz64k_seq128_ethernet.sh
-  - training/bing_bert/1-bit_lamb/mpi_infiniband/ds_train_bert_onebitlamb_bsz32k_seq512_mpi_infiniband.sh
-  - training/bing_bert/1-bit_lamb/mpi_infiniband/ds_train_bert_onebitlamb_bsz64k_seq128_mpi_infiniband.sh
-  - training/bing_bert/1-bit_lamb/mpi_infiniband/mpi_train_bert_onebitlamb_bsz32k_seq512_infiniband.sh
-  - training/bing_bert/1-bit_lamb/mpi_infiniband/mpi_train_bert_onebitlamb_bsz64k_seq128_infiniband.sh
-  - training/bing_bert/1-bit_lamb/nccl/ds_train_bert_onebitlamb_bsz32k_seq512_nccl.sh
-  - training/bing_bert/1-bit_lamb/nccl/ds_train_bert_onebitlamb_bsz64k_seq128_nccl.sh
-  - training/bing_bert/bert_dataset_provider.py
-  - training/bing_bert/bing_bert_dataset_provider.py
-  - training/bing_bert/data_worker.py
-  - training/bing_bert/deepspeed_train.py
-  - training/bing_bert/ds_sa_train_bert_bsz64k_seq128.sh
-  - training/bing_bert/ds_train_bert_bsz32k_seq512.sh
-  - training/bing_bert/ds_train_bert_bsz64k_seq128.sh
-  - training/bing_bert/ds_train_bert_nvidia_data_bsz32k_seq512.sh
-  - training/bing_bert/ds_train_bert_nvidia_data_bsz64k_seq128.sh
-  - training/bing_bert/ds_train_bert_progressive_layer_drop_bsz4k_seq128.sh
-  - training/bing_bert/nvidia_bert_dataset_provider.py
-  - training/bing_bert/run_glue_bert_base_finetune.sh
-  - training/bing_bert/run_glue_bert_large_finetune.sh
-  - training/bing_bert/run_glue_classifier_bert_base.py
-  - training/bing_bert/run_glue_classifier_bert_large.py
-  - training/bing_bert/timer.py
-  - training/bing_bert/utils.py
-  # requires full ImageNet, not usable in CI.
-  - training/imagenet/extract_ILSVRC.sh
-  - training/imagenet/main.py
-  - training/imagenet/run_ds.sh
-  - training/imagenet/run_ds_fp16.sh
-  - training/imagenet/run_ds_fp16_z1.sh
-  # Stable Diffusion; model 4GB+, training not feasible.
-  - training/stable_diffusion/inf_txt2img_loop.py
-  - training/stable_diffusion/local_pipeline_stable_diffusion.py
-  - training/stable_diffusion/mytrainbash.sh
-  - training/stable_diffusion/train_sd_distil_lora.py
-  # GAN training; gan_deepspeed_run.sh hardcodes --cuda and celeba needs external download, under evaluation.
-  - training/gan/gan_baseline_run.sh
-  - training/gan/gan_baseline_train.py
-  - training/gan/gan_deepspeed_run.sh
-  - training/gan/gan_deepspeed_train.py
-  - training/gan/gan_model.py
-  - training/gan/utils.py
-  # depends on remote HF datasets (alpaca/mmlu/imagenet...); promotable to supported after swapping to local fixtures (next round).
-  - training/data_efficiency/gpt_finetuning/analyze_data.py
-  - training/data_efficiency/gpt_finetuning/bash_script/run_base_random_ltd.sh
-  - training/data_efficiency/gpt_finetuning/bash_script/run_medium_random_ltd.sh
-  - training/data_efficiency/gpt_finetuning/finetune/ds_analyze_gpt_data_map.sh
-  - training/data_efficiency/gpt_finetuning/finetune/ds_analyze_gpt_data_reduce.sh
-  - training/data_efficiency/gpt_finetuning/finetune/ds_finetune_gpt2.sh
-  - training/data_efficiency/gpt_finetuning/finetune/ds_finetune_gpt2_run.sh
-  - training/data_efficiency/gpt_finetuning/learning_rates.py
-  - training/data_efficiency/gpt_finetuning/run_clm_no_trainer.py
-  - training/data_efficiency/variable_batch_size_and_lr/variable_batch_size_and_lr_example.py
-  - training/data_efficiency/vit_finetuning/bash_script/run_cifar_random_ltd.sh
-  - training/data_efficiency/vit_finetuning/bash_script/run_imagenet_random_ltd.sh
-  - training/data_efficiency/vit_finetuning/main_cifar.py
-  - training/data_efficiency/vit_finetuning/main_imagenet.py
-  - training/deepspeed_finetune_demo/benchmark.sh
-  - training/deepspeed_finetune_demo/convert_ds_to_hf.py
-  - training/deepspeed_finetune_demo/evaluate/gsm8k/eval_gsm8k.py
-  - training/deepspeed_finetune_demo/evaluate/gsm8k/gen_gsm8k.py
-  - training/deepspeed_finetune_demo/evaluate/mmlu/eval_mmlu.py
-  - training/deepspeed_finetune_demo/evaluate/mmlu/gen_mmlu.py
-  - training/deepspeed_finetune_demo/finetune.sh
-  - training/deepspeed_finetune_demo/finetune_llama.py
-  - training/deepspeed_finetune_demo/profile.sh
-  - training/deepspeed_finetune_demo/run_and_evaluate.sh
-  # tensor/pipeline/expert parallel or multi-node (>=2 cards); not on single-card a2-1.
-  - training/autotp_equivalence/compare_loss.py
-  - training/autotp_equivalence/run_cpu.sh
-  - training/autotp_equivalence/run_gpu.sh
-  - training/autotp_equivalence/tests/test_compare_loss.py
-  - training/autotp_equivalence/train.py
-  - training/cifar/run_ds_moe.sh
-  - training/cifar/run_ds_prmoe.sh
-  - training/expert_parallel/data_utils.py
-  - training/expert_parallel/init_weights.py
-  - training/expert_parallel/metrics.py
-  - training/expert_parallel/train.py
-  - training/expert_parallel/utils/compare_metrics.py
-  - training/expert_parallel/utils/prepare_init_weights.py
-  - training/opsd/benchmarks/bench_decode_1p1r.py
-  - training/opsd/config.py
-  - training/opsd/data.py
-  - training/opsd/losses.py
-  - training/opsd/main.py
-  - training/opsd/scripts/smoke_autotp.sh
-  - training/opsd/scripts/train_opsd_hybrid.sh
-  - training/opsd/teacher.py
-  - training/opsd/test_student_autotp_zero3.py
-  - training/opsd/test_teacher_autotp_zero3.py
-  - training/opsd/tests/test_data.py
-  - training/opsd/tests/test_losses.py
-  - training/opsd/tests/test_teacher_caching.py
-  - training/opsd/trainer.py
-  - training/opsd/utils.py
-  - training/tensor_parallel/basic_example/autotp_example.py
-  - training/tensor_parallel/basic_example/autotp_memory_compare.py
-  - training/tensor_parallel/custom_patterns/autotp_custom_patterns.py
-  - training/tensor_parallel/hf_integration/run.sh
-  - training/tensor_parallel/hf_integration/train.py
-  - training/tensor_parallel/hf_integration/train_bench_length.py
-  - training/tensor_parallel/hf_integration/utils.py
-  # large-model finetune (GPT-3 6.7B/13B, Llama-70B, Qwen3-30B...), beyond single-card CI.
-  - training/DeepSpeed-Domino/domino/gpt_model.py
-  - training/DeepSpeed-Domino/domino/language_model.py
-  - training/DeepSpeed-Domino/domino/training.py
-  - training/DeepSpeed-Domino/pretrain_gpt.py
-  - training/DeepSpeed-Domino/pretrain_gpt3_13b.sh
-  - training/DeepSpeed-Domino/pretrain_gpt3_6.7b.sh
-  - training/DeepSpeed-SuperOffload/finetune_gpt-oss-20b_1gpu.sh
-  - training/DeepSpeed-SuperOffload/finetune_llama-70b_4gpu.sh
-  - training/DeepSpeed-SuperOffload/finetune_llama-8b_1gpu.sh
-  - training/DeepSpeed-SuperOffload/finetune_phi-4_1gpu.sh
-  - training/DeepSpeed-SuperOffload/finetune_qwen3-14b_1gpu.sh
-  - training/DeepSpeed-SuperOffload/finetune_qwen3-30b-a3b_2gpu.sh
-  - training/DeepSpeed-SuperOffload/finetune_seed-oss-36b_2gpu.sh
-  - training/DeepSpeed-SuperOffload/finetune_zero3.py
-  - training/DeepSpeed-ZenFlow/benchmark/output_table.py
-  - training/DeepSpeed-ZenFlow/benchmark/run_benchmark.sh
-  - training/DeepSpeed-ZenFlow/benchmark/zf_benchmark.py
-  - training/DeepSpeed-ZenFlow/finetuning/finetune_llama.py
-  - training/DeepSpeed-ZenFlow/finetuning/finetune_llama.sh
-  # MoQ quantization, depends on CUDA quant operators.
-  - training/MoQ/run.sh
-  - training/MoQ/run_glue.py
-  # compression flow with hardcoded torch.device(cuda); needs patch before enabling (next-round candidate).
-  - compression/bert/bash_script/XTC/layer_reduction.sh
-  - compression/bert/bash_script/XTC/layer_reduction_1bit.sh
-  - compression/bert/bash_script/XTC/quant_1bit.sh
-  - compression/bert/bash_script/ZeroQuant/zero_quant.sh
-  - compression/bert/bash_script/ZeroQuant/zero_quant_lkd.sh
-  - compression/bert/bash_script/layer_reduction.sh
-  - compression/bert/bash_script/pruning_head.sh
-  - compression/bert/bash_script/pruning_row.sh
-  - compression/bert/bash_script/pruning_sparse.sh
-  - compression/bert/bash_script/pruning_sparse_snip_momentum.sh
-  - compression/bert/bash_script/quant_activation.sh
-  - compression/bert/bash_script/quant_weight.sh
-  - compression/bert/run_glue_lkd.py
-  - compression/bert/run_glue_no_trainer.py
-  - compression/bert/util.py
-  - compression/cifar/resnet.py
-  - compression/cifar/run_compress.sh
-  - compression/cifar/train.py
-  - compression/cifar/utils.py
-  - compression/gpt2/bash_script/run_zero_quant.sh
-  - compression/gpt2/run_clm_no_trainer.py
-  - compression/reasoning_aware_compression/bash_script/collect_traces_zero_inference.sh
-  - compression/reasoning_aware_compression/bash_script/eval_math500.sh
-  - compression/reasoning_aware_compression/bash_script/run_calibration_ablation.sh
-  - compression/reasoning_aware_compression/bash_script/run_rac_qwen1_5b.sh
-  - compression/reasoning_aware_compression/collect_traces.py
-  - compression/reasoning_aware_compression/prune.py
-  # perf/comm benchmark, no training entry; mostly multi-GPU or CUDA kernel bound.
-  - benchmarks/autosp/correctness/correctness.sh
-  - benchmarks/autosp/correctness/correctness_run.py
-  - benchmarks/autosp/correctness/validator.py
-  - benchmarks/autosp/distributed_attention.py
-  - benchmarks/autosp/ring_attention.py
-  - benchmarks/autosp/run.py
-  - benchmarks/autosp/run_autosp.sh
-  - benchmarks/autosp/sp_dp_registry.py
-  - benchmarks/communication/__init__.py
-  - benchmarks/communication/all_gather.py
-  - benchmarks/communication/all_reduce.py
-  - benchmarks/communication/all_to_all.py
-  - benchmarks/communication/broadcast.py
-  - benchmarks/communication/constants.py
-  - benchmarks/communication/pt2pt.py
-  - benchmarks/communication/run_all.py
-  - benchmarks/communication/utils.py
-  - benchmarks/deepcompile/gen_chart_acc_steps.py
-  - benchmarks/deepcompile/generate_conf.py
-  - benchmarks/deepcompile/plot.py
-  - benchmarks/deepcompile/plot_common.py
-  - benchmarks/deepcompile/run.sh
-  - benchmarks/deepcompile/run_bench.sh
-  - benchmarks/deepcompile/run_bench_acc.sh
-  - benchmarks/deepcompile/run_bench_lm.py
-  - benchmarks/deepcompile/run_bench_offload.sh
-  - benchmarks/deepcompile/run_bench_z1.sh
-  - benchmarks/deepcompile/run_multinode.sh
-  - benchmarks/inference/bert-bench.py
-  - benchmarks/inference/collect_results.py
-  - benchmarks/inference/deepspeedometer/run_example.sh
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/__init__.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/arg_parsing.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/benchmark_runner.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/__init__.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/azure_ml_client.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/base.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/dummy_client.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/fastgen_client.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/openai_client.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/clients/vllm_client.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/config.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/prompt.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/response.py
-  - benchmarks/inference/deepspeedometer/src/deepspeedometer/sample_input.py
-  - benchmarks/inference/deepspeedometer/tests/__init__.py
-  - benchmarks/inference/deepspeedometer/tests/conftest.py
-  - benchmarks/inference/deepspeedometer/tests/test_benchmark.py
-  - benchmarks/inference/deepspeedometer/tests/test_config.py
-  - benchmarks/inference/deepspeedometer/tests/test_early_stop.py
-  - benchmarks/inference/deepspeedometer/tests/test_prompt.py
-  - benchmarks/inference/gpt-bench.py
-  - benchmarks/inference/mii/run_all.sh
-  - benchmarks/inference/mii/run_aml.sh
-  - benchmarks/inference/mii/run_benchmark.py
-  - benchmarks/inference/mii/run_example.sh
-  - benchmarks/inference/mii/run_fp6.sh
-  - benchmarks/inference/mii/src/__init__.py
-  - benchmarks/inference/mii/src/client.py
-  - benchmarks/inference/mii/src/defaults.py
-  - benchmarks/inference/mii/src/plot_effective_throughput.py
-  - benchmarks/inference/mii/src/plot_latency_percentile.py
-  - benchmarks/inference/mii/src/plot_repl_scale.py
-  - benchmarks/inference/mii/src/plot_th_lat.py
-  - benchmarks/inference/mii/src/plot_tp_sizes.py
-  - benchmarks/inference/mii/src/postprocess_results.py
-  - benchmarks/inference/mii/src/random_query_generator.py
-  - benchmarks/inference/mii/src/sample_input.py
-  - benchmarks/inference/mii/src/server.py
-  - benchmarks/inference/mii/src/utils.py
-  - benchmarks/inference/run_model.sh
-  - benchmarks/inference/run_triton_benchmark.sh
-  - benchmarks/inference/sweep.sh
-  - benchmarks/inference/triton-bert-benchmark.py
-  - benchmarks/opsd/benchmark_hybrid_engine_rollout.py
-  # needs NVMe hardware + libaio/GDS, not available in CI.
-  - deepnvme/ds_io/ds_io_read_sweep.sh
-  - deepnvme/ds_io/ds_io_sweep.sh
-  - deepnvme/ds_io/ds_io_write_sweep.sh
-  - deepnvme/file_access/aio_load_cpu_tensor.py
-  - deepnvme/file_access/aio_load_gpu_tensor.py
-  - deepnvme/file_access/aio_store_cpu_tensor.py
-  - deepnvme/file_access/aio_store_gpu_tensor.py
-  - deepnvme/file_access/gds_load_gpu_tensor.py
-  - deepnvme/file_access/gds_store_gpu_tensor.py
-  - deepnvme/file_access/py_load_cpu_tensor.py
-  - deepnvme/file_access/py_load_gpu_tensor.py
-  - deepnvme/file_access/py_store_cpu_tensor.py
-  - deepnvme/file_access/py_store_gpu_tensor.py
-  - deepnvme/file_access/run_load_tensor.sh
-  - deepnvme/file_access/run_store_tensor.sh
-  - deepnvme/file_access/utils.py
-  - deepnvme/model_checkpoint/deepspeed_save_model.py
-  - deepnvme/model_checkpoint/save_model_utils.py
-  - deepnvme/model_checkpoint/torch/serialization_fast_v2.6.0.py
-  - deepnvme/model_checkpoint/torch/serialization_orig_v2.6.0.py
-  - deepnvme/model_checkpoint/torch_save_load_model.py
-  - deepnvme/model_checkpoint/torch_save_model.py
-  - deepnvme/model_checkpoint/torch_save_tensor.py
-  - deepnvme/model_checkpoint/torch_save_utils.py
-  # HumanEval eval; needs openai/human-eval pkg + DeepSpeed-MII + 7B CodeLlama, not a light training entry.
-  - evaluation/inference/human_eval/run_human_eval.py
-  # no CLI to shrink / hardcoded CUDA / needs MII, SGLang or gated models; not on single-card NPU.
-  - inference/huggingface/automatic-speech-recognition/test-wav2vec2.py
-  - inference/huggingface/fill-mask/test-bert.py
-  - inference/huggingface/fill-mask/test-electra.py
-  - inference/huggingface/fill-mask/test-roberta.py
-  - inference/huggingface/stable-diffusion/local_pipeline_stable_diffusion.py
-  - inference/huggingface/stable-diffusion/test-stable-diffusion.py
-  - inference/huggingface/text-generation/arguments.py
-  - inference/huggingface/text-generation/ds-hf-compare.py
-  - inference/huggingface/text-generation/run-generation-script/test-gpt.sh
-  - inference/huggingface/text-generation/run-generation-script/test-run-generation.py
-  - inference/huggingface/text-generation/utils.py
-  - inference/huggingface/text2text-generation/test-t5.py
-  - inference/huggingface/translation/test-t5-base.py
-  - inference/huggingface/zero_inference/run_bloom175b_a6000.sh
-  - inference/huggingface/zero_inference/run_llama2_70b_a6000.sh
-  - inference/huggingface/zero_inference/run_model.py
-  - inference/huggingface/zero_inference/run_model.sh
-  - inference/huggingface/zero_inference/run_opt175b_a6000.sh
-  - inference/huggingface/zero_inference/run_opt1p3b_a6000.sh
-  - inference/huggingface/zero_inference/run_opt30b_a6000.sh
-  - inference/huggingface/zero_inference/run_opt66b_a6000.sh
-  - inference/huggingface/zero_inference/timer.py
-  - inference/huggingface/zero_inference/utils.py
-  - inference/mii/non-persistent/falcon.py
-  - inference/mii/non-persistent/llama2.py
-  - inference/mii/non-persistent/mixtral.py
-  - inference/mii/non-persistent/pipeline.py
-  - inference/mii/persistent/client.py
-  - inference/mii/persistent/serve.py
-  - inference/mii/persistent/terminate.py
-  - inference/sglang/run_llama3_1B.sh
-  - inference/sglang/run_llama3_70B.sh
-  - inference/sglang/run_llama3_8B.sh
-  # DeepSpeed-VisualChat: hardcoded cuda + needs CLIP + Llama-2-7B(gated) + tens of GB image data.
-  - applications/DeepSpeed-VisualChat/chat/chat.py
-  - applications/DeepSpeed-VisualChat/chat/chat_scripts/run.sh
-  - applications/DeepSpeed-VisualChat/eval/batch_generation.py
-  - applications/DeepSpeed-VisualChat/eval/eval_scripts/run_batch.sh
-  - applications/DeepSpeed-VisualChat/helper/extract_qwen_vl.py
-  - applications/DeepSpeed-VisualChat/training/main.py
-  - applications/DeepSpeed-VisualChat/training/training_scripts/run_7b.sh
-  # DeepSpeed-Chat library/eval/launcher wrappers, not direct guard entries (guard via each step main.py).
-  - applications/DeepSpeed-Chat/chat.py
-  - applications/DeepSpeed-Chat/e2e_rlhf.py
+  # BF16 主权重训练对比；torch.cuda 和 CUDA autocast 硬绑定。
+  - training/bf16_master_weight/train.py
+  # CIFAR/AlexNet 流水线训练；硬绑定 CUDA 设备和 NCCL。
+  - training/pipeline_parallelism/train.py
+  # 交互式文本聊天；pipeline 硬编码 cuda:0，需已训练模型。
   - applications/DeepSpeed-Chat/inference/chatbot.py
-  - applications/DeepSpeed-Chat/setup.py
-  - applications/DeepSpeed-Chat/tests/test_training.py
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/evaluation_scripts/run_prompt.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/prompt_eval.py
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/llama2/run_llama2_7b.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/llama2/run_llama2_7b_lora.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/multi_node/run_66b.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/single_gpu/run_1.3b.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/single_gpu/run_6.7b_lora.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/single_node/run_1.3b.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/single_node/run_1.3b_lora.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/single_node/run_13b.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/single_node/run_30b_lora.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/single_node/run_6.7b.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/single_node/sweep/run_single.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/opt/single_node/sweep/run_step1_sweep.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/other_language/run_chinese.sh
-  - applications/DeepSpeed-Chat/training/step1_supervised_finetuning/training_scripts/other_language/run_japanese.sh
-  - applications/DeepSpeed-Chat/training/step2_dpo_finetuning/training_scripts/llama2/run_llama2_7b.sh
-  - applications/DeepSpeed-Chat/training/step2_dpo_finetuning/training_scripts/llama2/run_llama2_7b_lora.sh
-  - applications/DeepSpeed-Chat/training/step2_dpo_finetuning/training_scripts/opt/multi_node/run_350m.sh
-  - applications/DeepSpeed-Chat/training/step2_dpo_finetuning/training_scripts/opt/single_gpu/run_350m.sh
-  - applications/DeepSpeed-Chat/training/step2_dpo_finetuning/training_scripts/opt/single_node/run_350m.sh
-  - applications/DeepSpeed-Chat/training/step2_dpo_finetuning/training_scripts/opt/single_node/sweep/run_single.sh
-  - applications/DeepSpeed-Chat/training/step2_dpo_finetuning/training_scripts/opt/single_node/sweep/run_step2_sweep.sh
-  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/evaluation_scripts/run_eval.sh
-  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/rw_eval.py
-  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/training_scripts/llama2/run_llama2_7b.sh
-  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/training_scripts/llama2/run_llama2_7b_lora.sh
-  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/training_scripts/opt/multi_node/run_350m.sh
-  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/training_scripts/opt/single_gpu/run_350m.sh
-  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/training_scripts/opt/single_node/run_350m.sh
-  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/training_scripts/opt/single_node/sweep/run_single.sh
-  - applications/DeepSpeed-Chat/training/step2_reward_model_finetuning/training_scripts/opt/single_node/sweep/run_step2_sweep.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/llama2/run_llama2_7b.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/llama2/run_llama2_7b_lora.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/llama2/run_llama2_7b_mixz.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/multi_node/run_66b.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/single_gpu/run_1.3b.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/single_gpu/run_6.7b_lora.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/single_node/run_1.3b.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/single_node/run_1.3b_lora.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/single_node/run_13b.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/single_node/run_30b_lora.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/single_node/run_6.7b.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/single_node/sweep/run_single.sh
-  - applications/DeepSpeed-Chat/training/step3_rlhf_finetuning/training_scripts/opt/single_node/sweep/run_step3_sweep.sh
-  # repo maintenance tool (license check), not a training example.
-  - scripts/check-license.py
-
-  # ===== 原 scan.exclude 项迁移（2026-09-20）：deepspeed 的 exclude 是「第三方
-  # 代码子树 + 模型定义 + 测试 + utility 模块」剪枝。扫描引擎
-  # （load_scan / discover）从未实现 exclude，下列目录项下的 .py / .sh 子文件
-  # 此前每天 audit 都作为 + new_paths 报红；迁移后这里作为单一事实源。
-  # 具体子文件清单以上游 deepspeedai/DeepSpeed HEAD 为准，本段覆盖 exclude 原意。
-  #
-  # ---- 第三方代码 + utility + 模型定义子树 ----
-  - applications/DeepSpeed-Chat/dschat                 # DeepSpeed-Chat 工具库
-  - applications/DeepSpeed-VisualChat/utils            # VisualChat 工具
-  - training/bing_bert/pytorch_pretrained_bert         # 第三方 BERT 实现
-  - training/bing_bert/nvidia                          # NVIDIA 适配层
-  - training/bing_bert/turing                          # Turing 平台代码
-  - training/BingBertGlue/nvidia                       # 同上（GLUE 任务）
-  - training/BingBertGlue/pytorch_pretrained_bert      # 同上
-  - training/BingBertGlue/turing                       # 同上
-  - training/BingBertSquad/pytorch_pretrained_bert     # 同上（SQuAD 任务）
-  - training/BingBertSquad/turing                      # 同上
-  - compression/bert/huggingface_transformer           # compression 工具
-  - compression/reasoning_aware_compression/rac         # RAC 实现
-  - compression/reasoning_aware_compression/tests       # RAC 测试
-  - training/data_efficiency/vit_finetuning/models      # ViT 模型定义
-  - training/data_efficiency/vit_finetuning/utils       # ViT 工具
-  - training/HelloDeepSpeed/tests                       # HelloDeepSpeed 测试
-  - training/pipeline_parallelism/alexnet.py            # AlexNet 模型定义（单文件）
-  - training/offload_states/output_table.py             # 工具：输出表（单文件）
+  # 交互式视觉聊天；硬绑定 .cuda()，需 Llama-2/视觉模型检查点。
+  - applications/DeepSpeed-VisualChat/chat/chat.py
+  # 视觉聊天批量评测；硬绑定 .cuda()，需预训练检查点。
+  - applications/DeepSpeed-VisualChat/eval/batch_generation.py
+  # 视觉聊天训练；硬绑定 CUDA，需 Llama-2、CLIP 和大规模图文数据。
+  - applications/DeepSpeed-VisualChat/training/main.py
+  # AutoSP 正确性编排；子训练必经 ring_attention/flash_attn CUDA 扩展。
+  - benchmarks/autosp/correctness/correctness.sh
+  # AutoSP loss 对比；调用依赖 CUDA flash_attn 的 run.py，换小模型仍受阻。
+  - benchmarks/autosp/correctness/correctness_run.py
+  # 序列并行训练；必经 import ring_attention/flash_attn，eager 参数也不能绕过 CUDA 扩展。
+  - benchmarks/autosp/run.py
+  # all_gather 吞吐基准；torch.cuda.Event 计时硬绑定 CUDA。
+  - benchmarks/communication/all_gather.py
+  # all_reduce 吞吐基准；torch.cuda.Event 计时硬绑定 CUDA。
+  - benchmarks/communication/all_reduce.py
+  # all_to_all 吞吐基准；torch.cuda.Event 计时硬绑定 CUDA。
+  - benchmarks/communication/all_to_all.py
+  # broadcast 吞吐基准；torch.cuda.Event 计时硬绑定 CUDA。
+  - benchmarks/communication/broadcast.py
+  # 双 rank 点对点吞吐基准；torch.cuda.Event 计时硬绑定 CUDA。
+  - benchmarks/communication/pt2pt.py
+  # 多算子通信基准汇总；硬绑定 CUDA 计时，非训练验证。
+  - benchmarks/communication/run_all.py
+  # DeepCompile 训练；可选 backend，但 DS compile passes 与 NPU 后端组合待验证，关闭编译会丢失核心功能。
+  - benchmarks/deepcompile/run_bench_lm.py
+  # 推理服务并发压测；依赖外部服务或 MII/vLLM，未接入。
+  - benchmarks/inference/deepspeedometer/src/deepspeedometer/benchmark_runner.py
+  # MII 推理吞吐压测；需 MII/vLLM/AzureML 后端及大模型。
+  - benchmarks/inference/mii/run_benchmark.py
+  # BERT Triton 延迟基准；硬绑定 torch.cuda/NCCL 与 CUDA kernel。
+  - benchmarks/inference/triton-bert-benchmark.py
+  # MATH-500 评测；可缩模型和 token，但固定 lighteval vLLM 后端需独立兼容的 Ascend serving 栈。
+  - compression/reasoning_aware_compression/bash_script/eval_math500.sh
+  # 推理轨迹采样；本地模型/小数据可行，但 HF 仅 CUDA/CPU，ZeRO 后端必经 cuda 张量设备。
+  - compression/reasoning_aware_compression/collect_traces.py
+  # IO 参数扫描；合并读写包装，原入口固定 1GiB 与并发矩阵，没有 CI 缩规模参数。
+  - deepnvme/ds_io/ds_io_sweep.sh
+  # async_io 读取 CPU 张量；临时文件可行，但仅 CPU IO，不验证 NPU。
+  - deepnvme/file_access/aio_load_cpu_tensor.py
+  # async_io 读取设备张量；可准备小文件，但结果硬调用 .cuda()。
+  - deepnvme/file_access/aio_load_gpu_tensor.py
+  # async_io 写入 CPU 张量；临时文件可行，但仅 CPU IO，不验证 NPU。
+  - deepnvme/file_access/aio_store_cpu_tensor.py
+  # async_io 写入设备张量；可准备小文件，但源张量硬编码 device='cuda'。
+  - deepnvme/file_access/aio_store_gpu_tensor.py
+  # GDS 读取设备张量；缓冲区硬编码 CUDA，且依赖 CUDA GPUDirect Storage。
+  - deepnvme/file_access/gds_load_gpu_tensor.py
+  # GDS 写入设备张量；缓冲区硬编码 CUDA，且依赖 CUDA GPUDirect Storage。
+  - deepnvme/file_access/gds_store_gpu_tensor.py
+  # Python 读取 CPU 张量；临时文件可行，但仅 CPU IO，不验证 NPU。
+  - deepnvme/file_access/py_load_cpu_tensor.py
+  # Python 读取设备张量；可准备小文件，但结果硬调用 .cuda()。
+  - deepnvme/file_access/py_load_gpu_tensor.py
+  # Python 写入 CPU 张量；临时文件可行，但仅 CPU IO，不验证 NPU。
+  - deepnvme/file_access/py_store_cpu_tensor.py
+  # Python 写入设备张量；可准备小文件，但源张量硬编码 device='cuda'。
+  - deepnvme/file_access/py_store_gpu_tensor.py
+  # DeepSpeed 检查点 IO；必经 NCCL、pdb 断点与 CUDA GDS，换小文件不能绕过。
+  - deepnvme/model_checkpoint/deepspeed_save_model.py
+  # 模型保存恢复校验；输入、模型及恢复张量硬编码 CUDA。
+  - deepnvme/model_checkpoint/torch_save_load_model.py
+  # 模型检查点 IO；设备模式强制 CUDA GDS，关闭 gpu 后仅测 CPU。
+  - deepnvme/model_checkpoint/torch_save_model.py
+  # 张量检查点 IO；设备模式强制 CUDA GDS，关闭 gpu 后仅测 CPU。
+  - deepnvme/model_checkpoint/torch_save_tensor.py
+  # HumanEval 代码生成评测；硬绑定 CUDA，需 MII、7B 模型及评测数据。
+  - evaluation/inference/human_eval/run_human_eval.py
+  # Stable Diffusion 图像生成；硬绑定 CUDA/CUDA graph，模型权重较大。
+  - inference/huggingface/stable-diffusion/test-stable-diffusion.py
+  # GPT 文本生成；model.cuda() 和 torch.cuda.synchronize() 硬绑定 CUDA。
+  - inference/huggingface/text-generation/run-generation-script/test-run-generation.py
+  # T5 文本生成；硬编码四卡 TP/CUDA 设备，无 CLI 缩规模接口。
+  - inference/huggingface/text2text-generation/test-t5.py
+  # 大模型 ZeRO offload 推理；硬绑定 NCCL 和 torch.cuda.current_device。
+  - inference/huggingface/zero_inference/run_model.py
+  # Falcon-7B 推理；需 deepspeed-mii，模型超出当前 CI 规模。
+  - inference/mii/non-persistent/falcon.py
+  # Llama-2-7B 推理；需 deepspeed-mii 和受限模型。
+  - inference/mii/non-persistent/llama2.py
+  # Mixtral MoE 推理；需 deepspeed-mii，模型超出 CI 规模。
+  - inference/mii/non-persistent/mixtral.py
+  # Mistral-7B 推理；当前 CI 未提供 deepspeed-mii 环境。
+  - inference/mii/non-persistent/pipeline.py
+  # MII 持久化推理服务；需 deepspeed-mii 和服务生命周期适配。
+  - inference/mii/persistent/serve.py
+  # SGLang ZeRO 推理基准；需 tjruwase/sglang zero-inference 分支，配方含 CUDA GDS 卸载。
+  - inference/sglang/run_llama3_1B.sh
+  # SGLang ZeRO 推理基准；需专用 zero-inference 分支与 CUDA GDS，换小模型不能解决后端约束。
+  - inference/sglang/run_llama3_70B.sh
+  # SGLang ZeRO 推理基准；需专用 zero-inference 分支，CPU/NVMe/GDS 对比尚无 NPU 配方。
+  - inference/sglang/run_llama3_8B.sh
+  # BERT-base GLUE 微调；硬绑定 CUDA，数据路径固定为 /data/GlueData。
+  - training/BingBertGlue/run_glue_classifier_bert_base.py
+  # BERT-large GLUE 微调；硬绑定 CUDA，并含私人源码/数据路径。
+  - training/BingBertGlue/run_glue_classifier_bert_large.py
+  # BERT-large SQuAD 基线训练；硬绑定 CUDA，需外部权重和数据。
+  - training/BingBertSquad/nvidia_run_squad_baseline.py
+  # BERT-large SQuAD DeepSpeed 训练；上游配方需多机 MPI/NCCL 及 CUDA kernel。
+  - training/BingBertSquad/nvidia_run_squad_deepspeed.py
+  # SQuAD HF 启动包装；目标 nvidia_run_squad_mpi.py 不在仓库内。
+  - training/BingBertSquad/run_hf.sh
+  # Domino GPT-3 预训练；缺少 Megatron 子模块，需大模型和外部语料。
+  - training/DeepSpeed-Domino/pretrain_gpt.py
+  # BERT-base 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
+  - training/autotuning/hf/bert-base/test_tune.sh
+  # BERT-large 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
+  - training/autotuning/hf/bert-large/test_tune.sh
+  # DeBERTa 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
+  - training/autotuning/hf/deberta/test_tune.sh
+  # DistilBERT 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
+  - training/autotuning/hf/distilbert/test_tune.sh
+  # GPT-2 large 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
+  - training/autotuning/hf/gpt2-large/test_tune.sh
+  # GPT-2 medium 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
+  - training/autotuning/hf/gpt2-medium/test_tune.sh
+  # GPT-2 XL 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
+  - training/autotuning/hf/gpt2-xl/test_tune.sh
+  # GPT-2 自动调参；硬编码 16 卡，依赖仓外 Transformers example。
+  - training/autotuning/hf/gpt2/test_tune.sh
+  # BingBERT 预训练；硬绑定 CUDA/NCCL，需多机及内部语料。
+  - training/bing_bert/deepspeed_train.py
+  # BERT-base GLUE 微调；硬绑定 CUDA，数据路径固定为 /data/GlueData。
+  - training/bing_bert/run_glue_classifier_bert_base.py
+  # BERT-large GLUE 微调；硬绑定 CUDA，数据路径固定为 /data/GlueData。
+  - training/bing_bert/run_glue_classifier_bert_large.py
+  # PyTorch CIFAR 教程；设备路径仅支持 CUDA/CPU，未接入 NPU。
+  - training/cifar/cifar10_tutorial.py
+  # GPT random-LTD 微调；本地数据可行，但必经 torch.device('cuda')/cuda.set_device。
+  - training/data_efficiency/gpt_finetuning/run_clm_no_trainer.py
+  # CIFAR ViT 微调；损失与数据传输硬绑定 .cuda()，待适配。
+  - training/data_efficiency/vit_finetuning/main_cifar.py
+  # ImageNet ViT 微调；本地小数据可行，但 criterion.cuda 和设备设置必经绑定。
+  - training/data_efficiency/vit_finetuning/main_imagenet.py
+  # GSM8K 答案生成；依赖 vLLM 及远程评测数据，待适配。
+  - training/deepspeed_finetune_demo/evaluate/gsm8k/gen_gsm8k.py
+  # MMLU 答案生成；依赖 vLLM 及远程评测数据，待适配。
+  - training/deepspeed_finetune_demo/evaluate/mmlu/gen_mmlu.py
+  # AutoEP 训练与多任务评测；默认 16B 模型、八卡 TP，需 vLLM/evalplus。
+  - training/deepspeed_finetune_demo/run_and_evaluate.sh
+  # AutoEP MoE 训练；可缩层数和步数，但 metrics.reduce_max 必经 torch.cuda.current_device。
+  - training/expert_parallel/train.py
+  # DCGAN 基线；可用 fake 数据，但设备仅 CUDA/CPU 且无条件 cuda.synchronize，无法原生 NPU。
+  - training/gan/gan_baseline_train.py
+  # DCGAN DeepSpeed 训练；硬绑定 torch.cuda.set_device，需 CelebA 数据。
+  - training/gan/gan_deepspeed_train.py
+  # ResNet 分类；本地 ImageFolder 可行，但 cuda.set_device/losses.cuda 无切换参数。
+  - training/imagenet/main.py
+  # Stable Diffusion 多卡推理；设备与随机生成器硬绑定 CUDA。
+  - training/stable_diffusion/inf_txt2img_loop.py
+  # 基础 AutoTP 训练；设备硬编码 cuda，默认 Llama-3.1-8B。
+  - training/tensor_parallel/basic_example/autotp_example.py
+  # AutoTP 显存对比；硬绑定 torch.cuda，默认 Llama-3.1-8B。
+  - training/tensor_parallel/basic_example/autotp_memory_compare.py
+  # 自定义 AutoTP 切分训练；设备硬绑定 CUDA，默认 Pythia-6.9B。
+  - training/tensor_parallel/custom_patterns/autotp_custom_patterns.py
+  # DeepCompile 激活卸载；编译为核心功能且原配方 compile=True，暂无兼容的 NPU Inductor 配方。
+  - benchmarks/pin_memory/deepcompile_activation/bench.py
+  # CPU 页锁定对比；native/torch pin 可运行，但不执行 NPU 拷贝或计算。
+  - benchmarks/pin_memory/cpu_pin/bench.py

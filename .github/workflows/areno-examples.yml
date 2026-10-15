@@ -1,0 +1,42 @@
+# areno examples 看护 - 项目薄触发器。
+# 调用公共引擎 examples-template.yml；这里只声明项目差异（schedule、并发、
+# upstream、dispatch 输入转发、matrix 并发），看护循环都在引擎里。
+# 支持列表见 projects/areno/examples_manifest.yaml；每条 supported 在单卡
+# a2-1 上跑 setup_example.sh（源码编译 areno.accel._areno_accel_npu）+ run_example.sh。
+# 目标取最新 release（v0.9.0 已带 NPU），schedule 与手动都直接测该 release。
+
+name: areno-examples
+
+concurrency:
+  # schedule 串行；手动各自独立 group，避免被 schedule 挡住。
+  group: ${{ github.event_name == 'schedule' && 'areno-examples-schedule' || format('manual-{0}', github.run_id) }}
+  # 中途取消会丢 outcome 回写，影响下轮重试。
+  cancel-in-progress: false
+
+on:
+  # 每 6 小时轮询上游 release；引擎按最新 release 解析目标并测试该 release。
+  schedule:
+    - cron: '10 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Branch, tag, or SHA to test (empty = latest upstream release)
+        required: false
+        default: ''
+        type: string
+
+# 引擎的 validate-results 会查 Job API；被调用 workflow 用调用方的 token 权限。
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  areno-examples:
+    uses: ./.github/workflows/examples-template.yml
+    with:
+      # 命名 cache key / artifact 名 / projects/areno 下的调度路径。
+      project: areno
+      upstream_repo: inclusionAI/AReno
+      target_ref: ${{ inputs.target_ref }}
+      # run-example matrix 并发上限（受硬件限制）。
+      max_parallel: 8

@@ -79,7 +79,7 @@ echo "${UPSTREAM_REF}"
 ```shell #test-setup id="clone" load="upstream_ref>>UPSTREAM_REF"
 git clone https://github.com/wenet-e2e/wenet.git
 cd wenet
-git checkout <UPSTREAM_REF>
+git checkout main
 ```
 
 安装 WeNet 及其 NPU 依赖（与官方安装指南一致：`[torch-npu]` extra 已将 torch / torch-npu / torchaudio 钉在推荐版本 2.2.0，并附带 `numpy<2`；`requirements.txt` 只约束 `deepspeed>=0.14.0`，为避免 pip 解析到与 torch 2.2.0 不兼容的 0.16+，安装后显式回钉 0.14.4）：
@@ -90,6 +90,11 @@ cd wenet
 pip install -e .[torch-npu]
 pip install -r requirements.txt
 pip install "deepspeed==0.14.4"
+# train_utils.py 无条件 import tensorboardX；requirements.txt 是开发全量清单
+# （含 flake8/clang-format/openai-whisper 等与训练无关项），aarch64 上任一包
+# 解析失败会导致整张清单未安装，且失败被命令块尾部的 rc 静默吞掉，
+# 故训练核心依赖在安装步骤显式补齐（装失败将在此步骤快速失败）
+pip install tensorboardX
 ```
 
 安装 sox：
@@ -126,49 +131,59 @@ npu count: 1
 ```shell #test-setup id="download-data"
 pip install modelscope -q
 mkdir -p /root/asr-data/OpenSLR/33
-
-# 下载并获取实际路径
-DATASET_DIR=$(python -c "
+# 从 ModelScope 下载 AISHELL-1 数据集
+python -c "
 from modelscope import snapshot_download
-print(snapshot_download('OmniData/AISHELL-1', repo_type='dataset'))
-")
-
-echo "Dataset downloaded to: $DATASET_DIR"
-
-# 解压数据集到 weNet 期望的目录结构
-cd /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33
-tar -xzf data_aishell.tgz -C /root/asr-data/OpenSLR/33/
-tar -xzf resource_aishell.tgz -C /root/asr-data/OpenSLR/33/
-# 创建 .complete 标记文件
+snapshot_download('OmniData/AISHELL-1', local_dir='/root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1', repo_type='dataset')
+"
+echo "=== 下载后目录结构 ==="
+find /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1
+# 解压数据集：data_aishell.tgz 内层 wav/ 下是按说话人二次打包的 *.tar.gz，
+# 必须再解压内层包（对齐官方 local/download_and_untar.sh），否则 stage 0 找不到任何 wav。
+# 解压产物随 modelscope 缓存卷跨 run 保留：用标记文件 wav/.extracted 做幂等判断，
+# 首次解压后（约 40min）后续 run 直接跳过整段；缓存卷被清空时标记随之消失，自动重新解压
+cd /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/
+if [ ! -f data_aishell/wav/.extracted ]; then
+  tar xzf data_aishell.tgz
+  tar xzf resource_aishell.tgz
+  (
+    cd data_aishell/wav
+    for x in *.tar.gz; do tar xzf "$x"; done
+    rm -f *.tar.gz
+    touch .extracted
+  )
+fi
+cd ../..
+# 创建软链接
+ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/data_aishell /root/asr-data/OpenSLR/33/data_aishell
+ln -sf /root/.cache/modelscope/hub/datasets/OmniData/AISHELL-1/raw/33/resource_aishell /root/asr-data/OpenSLR/33/resource_aishell
 touch /root/asr-data/OpenSLR/33/data_aishell/.complete
 touch /root/asr-data/OpenSLR/33/resource_aishell/.complete
+echo "=== 软链接验证 ==="
+ls -la /root/asr-data/OpenSLR/33/
 ```
 
 验证 `data_aishell` 与 `resource_aishell` 两个数据包均下载完成：
 
 ```shell #test id="verify-download"
 echo "=== 检查下载标记文件 ==="
-ls -la /root/asr-data/OpenSLR/33/data_aishell/.complete /root/asr-data/OpenSLR/33/resource_aishell/.complete
-echo "=== 检查数据目录内容 ==="
-ls /root/asr-data/OpenSLR/33/data_aishell/ | head -5
-ls /root/asr-data/OpenSLR/33/resource_aishell/ | head -5
+ls /root/asr-data/OpenSLR/33/data_aishell/.complete /root/asr-data/OpenSLR/33/resource_aishell/.complete
+echo "=== 检查数据目录 ==="
+ls /root/asr-data/OpenSLR/33/data_aishell/ | head -2
+ls /root/asr-data/OpenSLR/33/resource_aishell/ | head -2
 ```
 
 输出结果如下：
 
 ```shell #test-result id="verify-download"
 === 检查下载标记文件 ===
-... /root/asr-data/OpenSLR/33/data_aishell/.complete
-... /root/asr-data/OpenSLR/33/resource_aishell/.complete
-=== 检查数据目录内容 ===
-...
-...
-...
-...
-...
-...
-...
-...
+/root/asr-data/OpenSLR/33/data_aishell/.complete
+/root/asr-data/OpenSLR/33/resource_aishell/.complete
+=== 检查数据目录 ===
+transcript
+wav
+lexicon.txt
+speaker.info
 ```
 
 ---
@@ -201,18 +216,59 @@ wc -l data/train/wav.scp data/train/text data/dev/wav.scp data/test/wav.scp | aw
 
 ---
 
-## 10. 模型训练（stage 4）
+## 7. 生成 CMVN、词典与 data.list（stage 1-3）
 
-`run_npu.sh` 脚本中实现了 NPU 卡号的自动获取和相关环境变量设置，可直接启动昇腾 NPU 上的模型训练。为控制时长，将 `max_epoch` 从 240 缩短到 5（其余参数全部保持脚本默认值）：
+stage 1 去除转写文本中的词间空格（普通话字符建模标准做法）并计算全局 CMVN 统计，stage 2 从训练转写生成字符级词典 `data/dict/lang_char.txt`，stage 3 将 `wav.scp`/`text` 组织为训练可读的 `data.list`（raw 格式，每行一条 utterance 的 JSON）。三者均为训练（stage 4）的前置产物，缺少时训练启动即报 `FileNotFoundError: data/dict/lang_char.txt`：
+
+```shell #test-setup id="prep-cmvn-dict"
+cd wenet/examples/aishell/s0
+bash run_npu.sh --stage 1 --stop_stage 3 --data /root/asr-data/OpenSLR/33
+```
+
+验证三个前置产物（`data.list` 行数与对应 `wav.scp`/`text` 一致）：
+
+```shell #test id="verify-stages123"
+cd wenet/examples/aishell/s0
+test -f data/train/global_cmvn && echo "global_cmvn ok"
+test -f data/dict/lang_char.txt && echo "lang_char.txt ok"
+wc -l data/train/data.list data/dev/data.list data/test/data.list | awk '{print $1, $2}'
+```
+
+输出结果如下：
+
+```shell #test-result id="verify-stages123"
+global_cmvn ok
+lang_char.txt ok
+120098 data/train/data.list
+14326 data/dev/data.list
+7176 data/test/data.list
+141600 total
+```
+
+---
+
+## 8. 模型训练（stage 4）
+
+`run_npu.sh` 脚本中实现了 NPU 卡号的自动获取和相关环境变量设置，可直接启动昇腾 NPU 上的模型训练。为控制时长，将 `max_epoch` 从 240 缩短到 1（其余参数全部保持脚本默认值）：
 
 > **注意**：训练产物校验放在命令尾部，快速失败：
 
 ```shell #test-setup id="train"
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet/examples/aishell/s0
-cp conf/train_conformer.yaml conf/train_conformer_5ep.yaml
-sed -i 's/max_epoch: .*/max_epoch: 5/' conf/train_conformer_5ep.yaml
-bash run_npu.sh --stage 4 --stop_stage 4 --train_config conf/train_conformer_5ep.yaml --data /root/asr-data/OpenSLR/33
+cp conf/train_conformer.yaml conf/train_conformer_1ep.yaml
+sed -i 's/max_epoch: .*/max_epoch: 1/' conf/train_conformer_1ep.yaml
+# NPU fork-safety 适配：主进程初始化 CANN 后 fork 出的 DataLoader worker 会段
+# 错误（torch_npu 2.2 + CANN 8.0 已知问题），必须单进程读取（num_workers=0）。
+# torch 2.2 还要求 num_workers=0 时 persistent_workers=False 且
+# prefetch_factor=None，否则 DataLoader 构造直接 ValueError，一并条件化
+sed -i 's/^num_workers=.*/num_workers=0/' run_npu.sh
+sed -i 's/persistent_workers=True/persistent_workers=args.num_workers > 0/g' "$(git rev-parse --show-toplevel)/wenet/utils/train_utils.py"
+sed -i 's/prefetch_factor=args.prefetch/prefetch_factor=args.prefetch if args.num_workers > 0 else None/g' "$(git rev-parse --show-toplevel)/wenet/utils/train_utils.py"
+# 源码改写校验：sed 路径或匹配失败时立即报错，避免被命令块尾部的 rc=0 吞掉
+grep -q "persistent_workers=args.num_workers > 0" "$(git rev-parse --show-toplevel)/wenet/utils/train_utils.py"
+grep -q "if args.num_workers > 0 else None" "$(git rev-parse --show-toplevel)/wenet/utils/train_utils.py"
+bash run_npu.sh --stage 4 --stop_stage 4 --train_config conf/train_conformer_1ep.yaml --data /root/asr-data/OpenSLR/33
 ```
 
 训练完成后检查输出：
@@ -220,7 +276,7 @@ bash run_npu.sh --stage 4 --stop_stage 4 --train_config conf/train_conformer_5ep
 ```shell #test id="verify-train"
 cd wenet/examples/aishell/s0
 ls -la exp/conformer/train.yaml
-ls exp/conformer/*.pt | head -5
+ls exp/conformer/epoch_*.pt
 ```
 
 输出结果如下：
@@ -228,28 +284,28 @@ ls exp/conformer/*.pt | head -5
 ```shell #test-result id="verify-train"
 ... exp/conformer/train.yaml
 exp/conformer/epoch_0.pt
-exp/conformer/epoch_1.pt
-exp/conformer/epoch_2.pt
-exp/conformer/epoch_3.pt
-exp/conformer/epoch_4.pt
 ```
 
 ---
 
-## 11. 测试推理（stage 5）
+## 9. 测试推理（stage 5）
 
-stage 5 为模型测试推理阶段，将测试集中语音文件识别为文本。此外，stage 5 还提供平均模型的功能：当 `${average_checkpoint}` 为 `true`（脚本默认值）时，将交叉验证集上最佳的 `${average_num}` 个模型平均，生成增强模型 `avg_5.pt`，供解码与导出使用：
+stage 5 为模型测试推理阶段，将测试集中语音文件识别为文本。此外，stage 5 还提供平均模型的功能：当 `${average_checkpoint}` 为 `true`（脚本默认值）时，将交叉验证集上最佳的 `${average_num}` 个模型平均，生成增强模型 `avg_1.pt`，供解码与导出使用：
 
 ```shell #test-setup id="infer"
+# CANN 环境必须显式加载：否则 LD_LIBRARY_PATH 缺少 libascendcl 等库路径，
+# recognize.py 里 import torch_npu 会静默失败（ImportError 被
+# is_torch_npu_available 吞掉只打印提示），随后 torch.device('npu') 直接崩溃
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet/examples/aishell/s0
-bash run_npu.sh --stage 5 --stop_stage 5 --average_num 5 --data /root/asr-data/OpenSLR/33
+bash run_npu.sh --stage 5 --stop_stage 5 --average_num 1 --data /root/asr-data/OpenSLR/33
 ```
 
 验证推理结果（测试集 7176 条全部识别完成，并抽样打印前两条识别文本）：
 
 ```shell #test id="verify-infer"
 cd wenet/examples/aishell/s0
-test -f exp/conformer/avg_5.pt && echo "avg_5.pt ok"
+test -f exp/conformer/avg_1.pt && echo "avg_1.pt ok"
 wc -l exp/conformer/ctc_greedy_search/text | awk '{print $1}'
 head -2 exp/conformer/ctc_greedy_search/text
 ```
@@ -257,7 +313,7 @@ head -2 exp/conformer/ctc_greedy_search/text
 输出结果如下（xxx 为识别文本，随模型收敛情况变化）：
 
 ```shell #test-result id="verify-infer" fuzzy='xxx'
-avg_5.pt ok
+avg_1.pt ok
 7176
 xxx
 xxx
@@ -265,13 +321,14 @@ xxx
 
 ---
 
-## 12. 导出训练好的模型（stage 6）
+## 10. 导出训练好的模型（stage 6）
 
-stage 6 为模型导出阶段，`wenet/bin/export_jit.py` 使用 `Libtorch` 导出以上训练好的模型（基于 stage 5 生成的 `avg_5.pt`），导出的模型可用于其他编程语言（如 C++）的推理：
+stage 6 为模型导出阶段，`wenet/bin/export_jit.py` 使用 `Libtorch` 导出以上训练好的模型（基于 stage 5 生成的 `avg_1.pt`），导出的模型可用于其他编程语言（如 C++）的推理：
 
 ```shell #test-setup id="export"
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd wenet/examples/aishell/s0
-bash run_npu.sh --stage 6 --stop_stage 6 --average_num 5
+bash run_npu.sh --stage 6 --stop_stage 6 --average_num 1
 ```
 
 验证导出产物：
@@ -291,7 +348,7 @@ final_quant.zip ok
 
 ---
 
-## 13. 验证完整流程
+## 11. 验证完整流程
 
 确认所有关键文件均已生成：
 
@@ -302,7 +359,7 @@ ls data/dict/lang_char.txt data/train/data.list data/dev/data.list data/test/dat
 echo "=== 训练输出 ==="
 ls exp/conformer/train.yaml exp/conformer/final.pt | sort
 echo "=== 推理输出 ==="
-ls exp/conformer/avg_5.pt exp/conformer/ctc_greedy_search/text exp/conformer/ctc_prefix_beam_search/text | sort
+ls exp/conformer/avg_1.pt exp/conformer/ctc_greedy_search/text exp/conformer/ctc_prefix_beam_search/text | sort
 echo "=== 导出输出 ==="
 ls exp/conformer/final.zip exp/conformer/final_quant.zip | sort
 echo "=== 流程完成 ==="
@@ -320,7 +377,7 @@ data/train/data.list
 exp/conformer/final.pt
 exp/conformer/train.yaml
 === 推理输出 ===
-exp/conformer/avg_5.pt
+exp/conformer/avg_1.pt
 exp/conformer/ctc_greedy_search/text
 exp/conformer/ctc_prefix_beam_search/text
 === 导出输出 ===

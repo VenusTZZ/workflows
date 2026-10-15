@@ -1,0 +1,26 @@
+# xllm 例程资产的 ModelScope plant spec（由 cache-seed workflow 的
+# scripts/ms_seed.py 执行）。
+#
+# xllm examples guard 迁移到共享引擎 examples-template.yml 时一并把
+# 模型缓存从「/data/ci-cache/modelscope/xllm 容器 bind-mount +
+# setup 内 modelscope 下载」改为共享缓存 plant（同 torchtune / areal
+# 模式）：引擎容器不挂项目专属卷，setup_example.sh 只从共享 HF hub
+# cache（refs/main -> snapshot）解析 XLLM_MODEL_PATH，manifest overlay
+# 引用 --model ${XLLM_MODEL_PATH}。
+#
+# 首次接入 / 镜像漂移后需手动 dispatch cache-seed workflow
+# （projects=xllm）暖池；冷池时 setup 自带 HF/ModelScope 兜底下载。
+version: 1
+seeds:
+  # examples/generate.py / generate_beam_search.py / generate_embedding.py /
+  # sample.py 共用的 7B 主模型（manifest 四条 supported 的
+  # --model ${XLLM_MODEL_PATH}）。
+  - ms_id: Qwen/Qwen2-7B-Instruct
+    hf_id: Qwen/Qwen2-7B-Instruct
+    kind: model
+  # generate_vlm.py（当前 unsupported：0.10.0 release 二进制在
+  # Qwen2VLPromptProcessor 崩溃，见 examples_manifest.yaml）回移时由
+  # setup 的 vlm profile 消费；暂不 plant，回移时加回：
+  # - ms_id: Qwen/Qwen2.5-VL-7B-Instruct
+  #   hf_id: Qwen/Qwen2.5-VL-7B-Instruct
+  #   kind: model

@@ -13,7 +13,6 @@ EXAMPLE_REL="$1"
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
 CI_OUTPUT_DIR="${CI_OUTPUT_DIR:?CI_OUTPUT_DIR is required}"
 EXEC_REL="${EXEC:?EXEC is required}"
-PROFILE="${PROFILE:-}"
 
 EXAMPLE_PATH="$TARGET_ROOT/$EXAMPLE_REL"
 
@@ -88,8 +87,12 @@ RUN_LOG="$CI_OUTPUT_DIR/$(basename "$EXEC_REL").log"
 
 assert_cann_used() {
   local run_log="$1"
-  case "$PROFILE" in
-    host|cmake-pkg|vad)
+  # Host-only profiles (quantize / test-cmake / vad) never touch the
+  # CANN device. Keyed on the example path - the engine's run step
+  # passes no PROFILE env (and the host-only set is exactly the case
+  # branches below, so no manifest duplication).
+  case "$EXAMPLE_REL" in
+    examples/quantize|examples/parakeet-quantize|examples/test-cmake|examples/vad-speech-segments)
       return 0
       ;;
   esac

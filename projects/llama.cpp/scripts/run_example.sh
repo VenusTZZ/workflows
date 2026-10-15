@@ -14,7 +14,6 @@ EXAMPLE_REL="$1"
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
 CI_OUTPUT_DIR="${CI_OUTPUT_DIR:?CI_OUTPUT_DIR is required}"
 EXEC_REL="${EXEC:-}"
-PROFILE="${PROFILE:-}"
 
 EXAMPLE_PATH="$TARGET_ROOT/$EXAMPLE_REL"
 
@@ -88,9 +87,14 @@ export CI_OUTPUT_DIR ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
 
 assert_cann_used() {
   local run_log="$1"
-  if [[ "$PROFILE" == "cpu" ]]; then
-    return 0
-  fi
+  # Host-only examples (the manifest's cpu-profile entries) never
+  # touch the CANN device. Keyed on the example path: the engine's run
+  # step passes no PROFILE env, and the cpu set is static here.
+  case "$EXAMPLE_REL" in
+    examples/convert-llama2c-to-ggml|examples/gguf|examples/gguf-hash|examples/gen-docs)
+      return 0
+      ;;
+  esac
   if ! grep -q 'CANN[0-9]' "$run_log"; then
     echo "run used no CANN device; check the container card mounts" >&2
     exit 1

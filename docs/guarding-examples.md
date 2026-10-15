@@ -96,7 +96,7 @@ monitor 状态存在 `.monitor-state/` 目录，用 actions/cache 持久化（�
 机制是「清单 + 差集」：
 
 1. 初始化清单。用 `scripts/bootstrap_manifest.py` 扫描目标仓 examples/。默认按文件扫 `.sh` / `.py` / `.yaml`（`--scan-root` / `--include-extension` 可调）。C++ 这类「一条 example 是一个子目录」的项目用 `--unit directories`（可再加 `--marker` / `--max-depth`，默认只要目录里有 `CMakeLists.txt`、只认一层子目录）。扫描规则记在清单的 scan 段，检查脚本按它执行。你确认能在 CI 跑通的 example 列入 supported——supported 条目必须写全 path、profile、runner、npu_devices、image、timeout_minutes（overlay_args 可选；path 不是启动文件时再写 exec）；其余全部自动写入 unsupported。`profile` 命名该 example 的环境准备例程，由项目的 `setup_example.sh` 解释；容器卡挂载由 `npu_devices` 派生，加一条 supported 只改清单（和必要时的 overlay_args / exec / setup 分支），不改 workflow。
-2. 每次 CI 比对。创建一个跑在免费的 ubuntu-latest 上的 job，这个 job 把目标仓磁盘上实际存在的 example 与清单求差集：新增的路径（磁盘有、清单无）和失效的路径（清单有、磁盘无）打印到日志，并写进 manifest_check_result.json 随 artifact 上传（外部机器读 `new_paths` / `stale_paths` 字段），一般不使 job 失败——新 example 出现是「提示有待办」。唯一例外：supported 条目的 path 在磁盘上已不存在时立即判红，避免 run-example 在 NPU runner 上装完依赖才发现 example 没了。
+2. 每次 CI 比对。引擎化流水线的 `manifest-check` job（免费 ubuntu-latest）只做 supported 条目的校验与矩阵派发（`scripts/check_supported_entries.py`）：supported 的 path 在目标树上已不存在时立即判红，避免 run-example 在 NPU runner 上装完依赖才发现 example 没了；缺调度字段同样判红。该 job 不扫描目标树求差集——「上游新增了 example、清单还没登记」的发现由独立的每日对账 workflow 承担（设计见 [examples-check-design.md](examples-check-design.md)）；其前身（legacy 流水线的 `check_examples_manifest.py` 差集步骤及 `manifest_check_result.json` artifact）已随 31 个项目全部迁移到共享引擎而删除。
 
 
 

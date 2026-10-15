@@ -7,7 +7,7 @@
 本仓（[cosdt-ci-test/workflows](https://github.com/cosdt-ci-test/workflows)）目前有两类看护流水线，处于两种不同的工程形态：
 
 - **quick start 已引擎化**：公共回路在 [quick-start-template.yml](../.github/workflows/quick-start-template.yml)（823 行，`on.workflow_call`），每个项目只持有一份约 60 行的薄触发器（如 [peft-quick-start.yml](../.github/workflows/peft-quick-start.yml)）。修一个 guard 缺陷只改引擎一处。
-- **examples 仍是复制式模板**：[templates/project-examples.yml](../templates/project-examples.yml) 是带 `<project>` / `<upstream_repo>` 占位符的 440 行骨架，14 个项目各持一份几乎全同的拷贝。同一个 monitor 缺陷要改 14 处；其三信号轮询（examples 树 / release / main HEAD）NPU 占用过高，ms-swift 与 trl 的 `schedule` 已被迫停用。
+- **examples 仍是复制式模板**：templates/project-examples.yml（已随迁移完成于 2026-10-08 删除）曾是带 `<project>` / `<upstream_repo>` 占位符的 440 行骨架，14 个项目各持一份几乎全同的拷贝。同一个 monitor 缺陷要改 14 处；其三信号轮询（examples 树 / release / main HEAD）NPU 占用过高，ms-swift 与 trl 的 `schedule` 已被迫停用。
 
 **本设计的目标**：产出通用引擎 `.github/workflows/examples-template.yml`（引擎 + 薄触发器形态，对齐 quick start）；监控**只保留一个信号——软件最新版本发布（release）**：上游发新版时，把清单 `supported` 条目的 example 在新版 tag 上跑一遍；**上游没有 release 时，显示没有 release，不产生执行结果**。看护回路的其余部分（supported 条目校验、矩阵调度、结果发布、outcome 回写）沿用 [ms-swift-examples.yml](../.github/workflows/ms-swift-examples.yml) 已验证的设计；**上游 example 新增发现不属于本引擎**——独立的监控 workflow（待单独设计，§2.7），新增未分类不阻塞已声明条目的执行。
 
@@ -17,7 +17,7 @@
 
 - 本仓 HEAD `067de9a`（2026-09-10）；同日新增的 [ms-swift-examples-guard.md](ms-swift-examples-guard.md) 是单项目设计视图，本文是其通用化后续。
 - peft 上游快照（2026-09-10）：latest release `v0.20.0`；`examples/sft/run_peft.sh` 是一个全参数化的 shell 训练入口（驱动 `train.py`，TRL SFTTrainer + LoRA），是 overlay 压规模的首选被测对象。
-- 参考实现：[quick-start-template.yml](../.github/workflows/quick-start-template.yml)（引擎化先例）、[ms-swift-examples.yml](../.github/workflows/ms-swift-examples.yml)（看护回路全量参考）、[scripts/check_supported_entries.py](../scripts/check_supported_entries.py)（引擎的 supported 校验 + 矩阵派生脚本，可单测）；legacy 差集脚本 [check_examples_manifest.py](../scripts/check_examples_manifest.py) 本引擎不复用、[projects/trl](../projects/trl/examples_manifest.yaml)（HF 栈 example 的 ModelScope 模型预下载 + fixture 数据集模式）。
+- 参考实现：[quick-start-template.yml](../.github/workflows/quick-start-template.yml)（引擎化先例）、[ms-swift-examples.yml](../.github/workflows/ms-swift-examples.yml)（看护回路全量参考）、[scripts/check_supported_entries.py](../scripts/check_supported_entries.py)（引擎的 supported 校验 + 矩阵派生脚本，可单测）；legacy 差集脚本 check_examples_manifest.py 本引擎不复用（2026-10-08 已随迁移完成删除）、[projects/trl](../projects/trl/examples_manifest.yaml)（HF 栈 example 的 ModelScope 模型预下载 + fixture 数据集模式）。
 
 ### 1.3 范围
 
@@ -177,17 +177,19 @@ peft 侧新增（引擎零改动）：
 
 ### 2.6 存量迁移计划（后续工作，不在本期范围）
 
-1. 新项目一律走引擎；`templates/project-examples.yml` 标记 deprecated。
+1. 新项目一律走引擎；`templates/project-examples.yml` 已于 2026-10-08 删除（迁移全部完成后清理）。
 2. 存量 14 份分批迁移：每项目 = 写薄触发器 + 删复制式 YAML；监控语义同时收敛为 release-only（旧三信号状态文件 `.examples_head` / `.last_tested_sha` 等成为无主文件）；cache key 切换到引擎格式（§2.4.6）→ 每项目冷启动一轮（[guarding-examples.md](guarding-examples.md) 已定性「无害」）。
 3. [guarding-examples.md](guarding-examples.md)「要求 2」的三信号描述随引擎落地同步更新。
+
+> 2026-10-08 状态：存量迁移全部完成（30 个 thin workflow 走引擎，31 份清单）；legacy 差集脚本 `check_examples_manifest.py`、复制式模板 `templates/project-examples.yml` 与 `schemas/manifest_check_result.schema.json` 已删除。
 
 ### 2.7 不在范围内的事
 
 - 不校验 example 输出数值（loss 等），只认退出码。
-- 不为引擎另建 result schema，沿用 [schemas/result.schema.json](../schemas/result.schema.json) 与 [manifest_check_result.schema.json](../schemas/manifest_check_result.schema.json)。
+- 不为引擎另建 result schema，沿用 [schemas/result.schema.json](../schemas/result.schema.json)（曾并用的 manifest_check_result.schema.json 已随 legacy 差集脚本删除，引擎自 2026-09-11 起本就不产该 artifact）。
 - 不跨 runner 切分单条 example（`max-parallel` 上限语义不变）。
 - 不改写上游 example 本体；看护失败如实标红，修复走上游 PR。
-- **不做上游 example 新增发现**（磁盘有、清单无的 new_paths）：本引擎只对已声明的 supported 条目负责，新增未分类**不阻塞执行**；「上游多了什么该纳入看护」是独立关注点，后续单独设计监控 workflow（定期扫描目标树与清单求差集、报告新增——形态待定）。
+- **不做上游 example 新增发现**（磁盘有、清单无的 new_paths）：本引擎只对已声明的 supported 条目负责，新增未分类**不阻塞执行**；「上游多了什么该纳入看护」是独立关注点，由每日对账 workflow 承担（设计见 [examples-check-design.md](examples-check-design.md)）。
 - **扫描模型简化为 files-only**（发现 workflow 采用；legacy 的 `unit: directories / mixed` 连同 marker / max_depth 废弃）：对账单位统一为**入口文件**——`scan` 只有两个键：`root`、`include_extensions`（只扫这几类，`.h`/`.md` 天然不进）。多文件 example 的内部 helper 源文件、`__init__.py`、上游自测等"不是 example 的配套物"一律登记在 `unsupported` 段（扫描引擎不消费的"声明性 exclude"字段已退役——曾经 8 份清单依赖它过滤扩展名之外的文件，但引擎本身从未实现 exclude，对账单位与 `load_scan` 实测一致）。随之 `path` 语义统一为**入口源文件**；`exec` 仅剩一种用途——path 是源码而启动的是构建产物（llama.cpp：`path: examples/simple/simple.cpp` + `exec: build/bin/llama-simple`）；python/shell 例不需要 exec，启动命令由项目脚本按扩展名分发（`.sh` → bash，其余 → python，解释器即 setup 装依赖的那个）。实施为独立 PR（涉及扫描脚本与 llama.cpp / whisper.cpp / trl 三个存量清单迁移），不混入本 PR。
 
 ## 3. 核心数据结构
@@ -354,6 +356,8 @@ GET /repos/<upstream_repo>/releases/latest    → release 信号（tag_name）
 
 | 日期 | 变更内容 | 原因 |
 |------|----------|------|
+| 2026-09-24 | torchtune overlay 必要性审计：删 24 条无效 overlay（14 条死 key：`max_steps`×3 / `max_seq_len`×4 / quantize `tokenizer.*`×3 / distributed 的 `context_parallel_dim` 等 main-HEAD 字段×4，@config.parse 的 `OmegaConf.merge` 非 struct 模式静默塞入但 recipe 从不消费；10 条冗余：值与 config 默认相同的 `log_every_n_steps`×3 / `prompt.system` / eleuther_eval 5 条 / `tensor_parallel_dim`）；`max_steps=1` 修正为 `max_steps_per_epoch=1`×3（原意图 1 步验证从未生效，实测全 epoch 跑）。 | 逐条对照 v0.6.1 recipe 源码 `cfg.xxx` 消费与 config yaml 默认值；npu-3 动态验证 3 条：lora_finetune_single `1/1` 步退出（改前 `8/8` 全 epoch）、full_finetune_distributed 精简 overlay exit 0（world_size=1 时 v0.6.1 recipe 无需 dim overlay，tp 默认 1、dp=ws//tp）、quantize 无 tokenizer overlay exit 0（quantize.py 不消费 tokenizer）。 |
+| 2026-09-24 | torchtune 零补丁收口：supported 14→8，6 个 distributed recipe（lora_dpo / lora_finetune / full_dpo / knowledge_distillation / qat / qat_lora_finetune_distributed）移 unsupported（v0.6.1 硬编码 `init_process_group("cuda:nccl,cpu:gloo")` / CPU-tensor collectives，overlay 不可解）；full_finetune_distributed 留 supported 靠 `seed=42` overlay 绕过 `_broadcast_tensor`（training/seed.py 仅 seed=None 时 broadcast）；setup_example.sh 退役 `patch_main_head_bugs()`（6 块字符串补丁）+ `torchtune_qat_lora` profile，distributed profile 精简（去 teacher resolve）。 | coder npu-3 零补丁实证（torch 2.11.0+cpu / torch_npu 2.11.0 / torchao 0.13.0 / transformers 4.57.1，ref=v0.6.1）：lora_dpo_single / quantize 免补丁 exit 0（Bug 1/2 是 main-HEAD-only no-op），full_finetune_distributed 加 seed=42 exit 0 / 不加撞 `No backend type associated with device type cpu`。确立"supported = 零源码修改可跑通"原则，补丁与 supported 互斥。 |
 | 2026-09-20 | 新增 workflow-files 信号：`monitor-release` step 改名为 `monitor`，内部分两信号区块（release + 本项目文件 SHA），共用 `.monitor` state。监控本项目相关文件（`projects/<project>/**` + `.github/workflows/<project>-examples.yml`）在 main HEAD 上的 blob/tree SHA 合成 hash，变化即 fire `reason=workflow-files`，ref 取最新 release tag。priority release > workflow-files。两信号共用同一 `need_to_run` 输出。`.monitor` 文件新增 `last_workflow_files_hash` 字段；decide step 简化为 4 行透传。 | 用户要求：本仓 example 监控相关文件改动也能触发看护，无需等 6 小时 schedule。复用 monitor-release 的 release API 调用作 ref，workflow-files step 不重复调 release；fire-and-forget，不防 retry 风暴（与现有 release 信号同形，靠 release-outcome=failure 推动 release-retry）。 |
 | 2026-09-16 | 引擎新增可选输入 `examples_repo`（分离模式）：example 脚本与被测软件分属两仓时（如 deepspeed：监控 `deepspeedai/DeepSpeed`，脚本在 `deepspeedai/DeepSpeedExamples`），examples 单独 checkout 到 `examples/`（跟默认分支）并以 `EXAMPLES_ROOT` 暴露；`target` 与 `TARGET_ROOT` 语义不变（被测仓 `@ target_ref`），setup 安装契约对所有项目同形。存量步骤零修改，不传输入时行为与此前逐字一致。 | PR 评审：原方案给存量 checkout 加条件并新引 `UPSTREAM_ROOT`；改为「只加步骤、不动存量」后回归面更小、契约更统一。代价是分离模式下 manifest-check 多一次主仓 checkout（免费 runner，可接受）。examples 仓跟默认分支而非 main：DeepSpeedExamples 默认分支为 master，且 release tag 跨仓不存在。 |
 | 2026-09-10 | 初版设计：examples 看护引擎化（引擎 + 薄触发器），监控信号由三（examples / release / commit）收敛为二（examples / release），scan.root 单一事实源，以 peft 为首个接入示例。 | 14 份复制式 examples workflow 维护成本高；commit 信号 NPU 占用过高致 schedule 停用；quick start 已验证引擎化形态。 |
@@ -377,6 +381,6 @@ GET /repos/<upstream_repo>/releases/latest    → release 信号（tag_name）
 | 2026-09-14 | 评审确定扫描模型简化为 files-only（§2.7）：scan 收敛为 root + include_extensions，废弃 unit: directories/mixed 及 marker/max_depth；对账单位统一为入口文件；exec 语义收窄为「path 是源码、启动的是构建产物」（py/sh 不需要——项目脚本按扩展名分发 bash/python）。实施为独立 PR，不混入本 PR。 | llama.cpp examples/ 下非 example 目录极少且扩展名白名单天然滤掉；目录单元引入的 unit/marker/max_depth/mixed 复杂度不值。 |
 | 2026-09-14 | 修复 publish-result 首跑判红：write_example_result 的 job 名匹配从精确相等改为后缀匹配——可复用 workflow 的 Jobs API 给 job 名加 `<调用方 workflow 名> / ` 前缀（run 34818091939 实测 `peft-examples / run-example (…)`），独立 workflow 时代的精确匹配移植过来即失效；新增 job_matches 单测（精确/带前缀/嵌套前缀/不匹配）。 | 首跑 dispatch（run-example 全绿）暴露：脚本报 could not find completed job → result.json 未写 → upload 级联红。 |
 | 2026-09-14 | peft 清单应用 exclude：34 项非 example 配套物（utils 模块 / __init__ / test_* / 配置 yaml / sft/train.py 实现）从 unsupported 移入 scan.exclude（9 条目录+glob 规则），unsupported 收敛为 84 条真实 example；exclude 语义定为「目录路径（递归剪枝）或 glob」。 | unsupported 是"example 注册表"，配套物登记其中污染对账信号；exclude 是声明"这一类根本不是 example"。扫描工具支持随发现 workflow PR 落地（引擎不扫描，本变更对引擎零影响）。 |
-| 2026-09-20 | 退役 scan.exclude 字段：9 份清单（accelerate / deepspeed / opencv / roll / slime / specforge / torchtitan / torchtune / trl）原先用 scan.exclude 声明非 example 配套物，实测扫描引擎（load_scan / discover）从未实现 exclude，对账逻辑始终基于 supported ∪ unsupported 集合求差；与 audit_examples_manifest.py 头注释「there is no separate exclude mechanism」一致。把各清单 scan.exclude 项迁移到 unsupported 段（带说明性注释），scan 收敛为 root + include_extensions 两个键；examples-guard-engine §2.7 与 §4 同步更新；roll / slime 两个项目的 tests/*_examples.py 一并更新断言（unsupported 含原 exclude 项 + scan schema 仅剩 2 键）。 | 引擎从未消费 exclude，scan.exclude 是死字段；统一收口到 unsupported 让 audit 噪声清零（xtuner 4 + accelerate 6 + torchtune 5 + opencv ~30 + deepspeed 7 + roll 2 + slime 2 + specforge 0 + torchtitan ~10 + trl 0 daily "+ new_paths"），且 supported 与 unsupported 在结构上对称。 |
+| 2026-09-20 | 退役 scan.exclude 字段：9 份清单（accelerate / deepspeed / opencv / roll / slime / specforge / torchtitan / torchtune / trl）原先用 scan.exclude 声明非 example 配套物，实测扫描引擎（load_scan / discover）从未实现 exclude，对账逻辑始终基于 supported ∪ unsupported 集合求差。把各清单 scan.exclude 项迁移到 unsupported 段（带说明性注释），scan 收敛为 root + include_extensions 两个键；examples-guard-engine §2.7 与 §4 同步更新；roll / slime 两个项目的 tests/*_examples.py 一并更新断言（unsupported 含原 exclude 项 + scan schema 仅剩 2 键）。 | 引擎从未消费 exclude，scan.exclude 是死字段；统一收口到 unsupported 让"on-disk ≠ manifest"的偏差收敛到零（xtuner 4 + accelerate 6 + torchtune 5 + opencv ~30 + deepspeed 7 + roll 2 + slime 2 + specforge 0 + torchtitan ~10 + trl 0 daily "+ new_paths"），且 supported 与 unsupported 在结构上对称。 |
 | 2026-09-14 | 移除 `target_repo` 输入（引擎与薄触发器）：上游仓库唯一来源是薄触发器里的 `upstream_repo`，dispatch 界面只留 `target_ref`（默认 main）；下游 checkout 与 result.json 的 target_repo 均直接取 `inputs.upstream_repo`。 | 评审决策：仓库不该在界面上选择——每项目的上游是固定配置；测 fork 的场景如出现，临时改薄触发器即可。 |
 | 2026-09-14 | peft examples 全量逐例验证（coder npu-3，torch2.9+torch_npu2.9.0.post2+CANN9.1，transfer_to_npu shim）：28 条实测、其余静态分析；supported 1→9，unsupported 84 条附理由注释；setup 依赖线 pin + evaluate/torchvision；run_example 增加 cuda→npu sitecustomize shim（与 dataset shim 合并单文件）。 | 用户要求逐例分析验证：NPU 可行进 supported、受阻给理由。实测确认 8 条 NPU 硬阻塞。 |

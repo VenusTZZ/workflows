@@ -1,0 +1,106 @@
+# evalscope quick start guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/quick-start-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, runner, container image + options, upstream repo,
+# monitored doc, and the test entry command. The guard loop, cache
+# I/O, state relay and publishing all live in the engine. See the
+# engine's `workflow_call.inputs` block for the full input contract.
+#
+# Engine-fixed behaviours this trigger relies on (declared in the
+# engine, NOT here):
+#   * cache key prefix: quick-start-monitor-state-evalscope_  (from inputs.project)
+#   * artifact name:    evalscope-quick-start-<run_id>
+#   * result.json is written by the engine and validated against
+#     schemas/result.schema.json before upload.
+#
+# NOTE: the pipeline went green on the stabilised branch run, so the
+# daily schedule below is now ENABLED - it drives the engine's periodic
+# monitor loop (the schedule-only steps: monitor /
+# record-monitor-outcome / cache save). workflow_dispatch remains
+# available for on-demand runs; this matches the onboarding rhythm of
+# transformers / funasr, the other daily quick-starts.
+#
+# Bind mounts: three host-side caches persist across runs (see the
+# container_options block below for the volume list). The self-hosted
+# NPU runner (linux-aarch64-a2-1) auto-passes /dev/davinci* into the
+# container via the cluster device-plugin.
+#
+# Datasets: the doc's run-eval block downloads both benchmark repos
+# via ModelScope on the first run; --limit 5 keeps the smoke tiny.
+# The Native backend passes device_map="npu" (its get_device() value on
+# NPU) with torch_npu + accelerate present, so the model lands on npu:0
+# (ASCEND_RT_VISIBLE_DEVICES=0 is set by the test's
+# prepare_environment). No HF endpoint or Xet path is involved;
+# the HF cache mount (mount 3) only persists the local datasets
+# builder/arrow artifacts across runs.
+
+name: evalscope-quick-start
+
+concurrency:
+  # Fixed group: manual and schedule runs share one serial queue. The
+  # pip wheel cache and the ModelScope cache are bind-mounted on the host
+  # and shared across runs, so concurrent runs would race on them; this
+  # also matches the single-NPU physical constraint of the runner.
+  group: evalscope-quick-start
+  # cancel-in-progress: false because (1) a schedule run cancelled
+  # mid-way loses its outcome writeback - the outcome is what makes
+  # the retry mechanism work, and the 'if: always()' guard isn't
+  # enough when the container is being torn down; (2) queueing is the
+  # desired behaviour here - back-to-back dispatches on the
+  # single-card runner should run one after another.
+  cancel-in-progress: false
+
+on:
+  schedule:
+    # Daily: '45 2 * * *' fires at 02:45 UTC (10:45 北京时间). The
+    # pipeline is green, so the periodic monitor loop is now enabled;
+    # once a day is enough for doc-hash changes (and upstream wheel
+    # updates) to propagate within a day. The minute :45 matches the
+    # eval-framework family here, and 02:45 UTC is deliberately
+    # staggered BEFORE transformers (03:30 UTC) and funasr (04:30 UTC)
+    # because funasr shares this single-card NPU runner
+    # (linux-aarch64-a2-1); the offset keeps the runner queue clean.
+    - cron: '45 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  evalscope-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      # Namespaces cache keys (quick-start-monitor-state-evalscope_*),
+      # artifacts (evalscope-quick-start-<run_id>) and the
+      # test working dir (workflows/projects/evalscope).
+      project: evalscope
+      # Self-hosted NPU runner for the test job only; the engine pins
+      # the cache I/O jobs (restore-cache / publish-and-persist) to
+      # GitHub-hosted ubuntu-latest.
+      test_runner: '["linux-aarch64-a2-1"]'
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+      container_options: >-
+        --volume=/data/ci-cache/modelscope/evalscope:/root/.cache/modelscope
+        --volume=/data/ci-cache/pip:/root/.cache/pip
+        --volume=/data/ci-cache/hf/evalscope:/root/.cache/huggingface
+      # Three bind mounts persist caches on the host across runs:
+      # 1. ModelScope weights (Qwen/Qwen2.5-0.5B-Instruct, ~1 GB,
+      #    downloaded by the doc flow on the first run only);
+      # 2. pip wheel cache, shared across projects (transformers /
+      #    evalscope / modelscope wheels, pip only unpacks on repeat);
+      # 3. HF hub + datasets cache (per-project subdir) - the local
+      #    datasets builder/arrow artifacts persist, so repeat runs
+      #    skip the dataset build entirely.
+      timeout_minutes: 120
+      upstream_repo: modelscope/evalscope
+      # Raw URL the engine's monitor hashes and the test fetches;
+      # doc-hash state lives under the quick-start-monitor-state-evalscope-
+      # cache prefix.
+      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/evalscope/docs/Quick-start-Ascend.md
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/evalscope/docs/Quick-start-Ascend.md
+      # cwd is workflows/projects/evalscope; env contract
+      # (MONITORED_DOC_URL / NPU_READY) is injected by the engine. All
+      # project env prep (CANN / CUDA constraints / NPU card pin / torch
+      # stack) lives in the test subclass's prepare_environment hook.
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

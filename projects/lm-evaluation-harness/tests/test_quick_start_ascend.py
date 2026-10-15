@@ -31,7 +31,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from workflows.markdown_doc_test_base import MarkdownDocTestBase
+from workflows.markdown_doc_test_base import MarkdownDocTestBase, TestCommand
 from workflows.model_cache import (
     ensure_safetensors,
     purge_modelscope_corrupt,
@@ -139,6 +139,66 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     # ``image:`` input of ``lm-evaluation-harness-quick-start.yml``.
     _CANN_SET_ENV = '/usr/local/Ascend/ascend-toolkit/set_env.sh'
 
+    _RESULT_DIR = Path('output/lm_eval_out')
+    _TASKS = ('arc_easy', 'winogrande')
+
+    def _verify_eval_results(self) -> None:
+        """CI-side guard: the doc only prints the two accuracy values.
+
+        A run that produces no result JSON, drops a task, or reports an
+        accuracy outside [0, 1] is the failure mode the doc used to assert
+        inline; keeping the check here preserves the coverage without
+        exposing assertions to readers of the quick start. Runs after
+        ``run-eval``, which now covers download + eval + result reporting
+        in one block.
+        """
+        import glob
+        import json
+
+        found: dict = {}
+        for path in glob.glob(
+            str(self._RESULT_DIR / '**' / '*.json'), recursive=True
+        ):
+            with open(path, encoding='utf-8') as fh:
+                payload = json.load(fh)
+            for task, metrics in payload.get('results', {}).items():
+                if task not in self._TASKS:
+                    continue
+                # v0.4.x stores metrics as "acc,none" / "acc_norm,none"
+                for key in metrics:
+                    if key.startswith('acc') and 'norm' not in key:
+                        value = metrics[key]
+                        found[task] = (
+                            value.get('value', value)
+                            if isinstance(value, dict) else value
+                        )
+                        break
+
+        for task in self._TASKS:
+            if task not in found:
+                raise AssertionError(
+                    f'no accuracy for task {task!r} under {self._RESULT_DIR}'
+                )
+            acc = float(found[task])
+            if not 0.0 <= acc <= 1.0:
+                raise AssertionError(
+                    f'{task} accuracy out of [0, 1]: {acc}'
+                )
+        self.log(
+            '[Step] verified eval results '
+            + ', '.join(f'{t}={float(found[t]):.4f}' for t in self._TASKS)
+        )
+
+    def _run_one(self, cmd, results, env, cwd, timeout, idx):
+        if (
+            isinstance(cmd, TestCommand)
+            and getattr(cmd, 'id', None) == 'run-eval'
+        ):
+            super()._run_one(cmd, results, env, cwd, timeout, idx)
+            self._verify_eval_results()
+            return
+        return super()._run_one(cmd, results, env, cwd, timeout, idx)
+
     # ----------------------------------------------------------
     # pre_process: read doc from local checkout instead of fetching
     # raw.githubusercontent.com — the NPU runner sits behind a cluster
@@ -172,13 +232,13 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
     # ----------------------------------------------------------
     # prepare_environment: CANN env + CUDA constraints + NPU card pin +
-    # uv + torch stack probe + safetensors + modelscope cache validation
+    # torch stack probe + safetensors + modelscope cache validation
     # ----------------------------------------------------------
 
     @classmethod
     def prepare_environment(cls) -> None:
         """Source CANN env + write CUDA exclusion list + pin NPU card 0 +
-        install uv + torch stack probe + safetensors + modelscope cache
+        torch stack probe + safetensors + modelscope cache
         validation.
 
         The doc's ``## 安装 lm-eval`` block is the single source of truth
@@ -217,7 +277,6 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         with open(cls._CONSTRAINTS_FILE, 'w', encoding='utf-8') as fh:
             fh.write('\n'.join(cls._CUDA_CONSTRAINTS) + '\n')
         os.environ['PIP_CONSTRAINT'] = cls._CONSTRAINTS_FILE
-        os.environ['UV_CONSTRAINT'] = cls._CONSTRAINTS_FILE
 
         # 2) Pin the visible NPU card to 0; the doc's run-eval block
         #    targets --device npu:0 and the runner may expose several
@@ -225,16 +284,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         #    the constraints above.
         os.environ.setdefault('ASCEND_RT_VISIBLE_DEVICES', '0')
 
-        # 3) uv: install the tool up front; the doc's install-lmeval
-        # block already invokes ``uv pip install`` directly. Inherit
-        # ``PIP_INDEX_URL`` + ``PIP_TRUSTED_HOST`` from the yml job-level
-        # env (cluster cache path + trusted-host).
-        subprocess.run(
-            ['python', '-m', 'pip', 'install', 'uv'],
-            check=True,
-        )
-
-        # 4) torch stack probe: when version matches the image's
+        # 3) torch stack probe: when version matches the image's
         # pre-installed wheels, reuse them to avoid the cluster cache
         # triggering ``+cpu`` resolution.
         _PROBE_SCRIPT = (
@@ -292,7 +342,7 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         """Run env setup once per test class: CANN env + CUDA constraints +
-        HF endpoint + uv + torch stack + safetensors + modelscope cache
+        HF endpoint + torch stack + safetensors + modelscope cache
         validation.
 
         ``@unittest.skipIf`` only skips the test *method* — ``setUpClass``

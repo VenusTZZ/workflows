@@ -6,6 +6,10 @@ hydra:
 
 pg_variant: ppo
 exp_name: roll-ci-rlvr
+# v0.4.0 defaults to TransferQueue, but DataProto rejects RemoteBatch on NPU.
+# Use the supported local DataProto path for this single-node smoke.
+transfer_backend:
+  backend_name: null
 seed: 42
 logging_dir: ${oc.env:CI_OUTPUT_DIR}/logs
 output_dir: ${oc.env:CI_OUTPUT_DIR}/output
@@ -139,6 +143,7 @@ rewards:
       model_name_or_path: ${reward_pretrain}
     data_args:
       template: qwen2_5
-    tag_included: [ci_math]
+    # Match the fixture's tag, not its source; v0.4.0 has no fallback domain.
+    tag_included: [math_rule]
     world_size: 1
     infer_batch_size: 1

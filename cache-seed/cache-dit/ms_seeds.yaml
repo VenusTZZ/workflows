@@ -1,0 +1,24 @@
+# cache-dit 例程资产的 ModelScope plant spec（由 cache-seed workflow 的
+# scripts/ms_seed.py 执行）。
+#
+# examples guard 迁移到共享引擎 examples-template.yml 时（同 xllm，
+# PR #655），把模型从「setup 内 modelscope 下载到容器
+# /root/.cache/modelscope（旧流水线每次 run 重下 ~30GB）」改为共享缓存
+# plant：setup_example.sh 只从共享 HF hub cache（refs/main -> snapshot）
+# 解析 FLUX_MODEL_PATH，manifest overlay 引用
+# --model-path ${FLUX_MODEL_PATH}。
+#
+# FLUX.1-dev 在 HF 是 gated repo（black-forest-labs），ms_seed 的 sha
+# 查询走镜像 API 元数据（公开），文件内容从 ModelScope 镜像
+# （AI-ModelScope/FLUX.1-dev，diffusers 布局）plant，例程全程不碰
+# HF gated 端点。
+#
+# 首次接入需手动 dispatch cache-seed workflow（projects=cache-dit）
+# 暖池；冷池时 setup 的 HF 兜底对 gated repo 必然失败，会落到
+# ModelScope 临时目录（每 run 重下），暖池是常态路径。
+version: 1
+seeds:
+  # examples/generate.py（flux）的 --model-path ${FLUX_MODEL_PATH}。
+  - ms_id: AI-ModelScope/FLUX.1-dev
+    hf_id: black-forest-labs/FLUX.1-dev
+    kind: model

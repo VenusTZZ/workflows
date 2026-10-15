@@ -5,6 +5,10 @@ hydra:
   output_subdir: null
 
 exp_name: roll-ci-agentic-rollout
+# v0.4.0 defaults to TransferQueue, but DataProto rejects RemoteBatch on NPU.
+# Use the supported local DataProto path for this single-node smoke.
+transfer_backend:
+  backend_name: null
 seed: 42
 logging_dir: ${oc.env:CI_OUTPUT_DIR}/logs
 output_dir: ${oc.env:CI_OUTPUT_DIR}/output

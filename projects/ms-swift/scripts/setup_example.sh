@@ -192,6 +192,16 @@ TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
 GITHUB_WORKSPACE="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
 GITHUB_ENV="${GITHUB_ENV:?GITHUB_ENV is required}"
 
+# Redirect the two caches the legacy workflow provided via container
+# bind-mounts (/data/ci-cache/modelscope, /data/ci-cache/pip) onto the
+# shared persistent runner cache the pool mounts at ~/.cache/huggingface
+# (docs/examples-guard-engine.md). GITHUB_ENV so the run step inherits
+# MODELSCOPE_CACHE too: ms-swift downloads its models at run time.
+SHARED_CACHE_ROOT="${HF_HOME:-${HOME}/.cache/huggingface}"
+export MODELSCOPE_CACHE="${MODELSCOPE_CACHE:-${SHARED_CACHE_ROOT}/modelscope}"
+export PIP_CACHE_DIR="${PIP_CACHE_DIR:-${SHARED_CACHE_ROOT}/pip}"
+echo "MODELSCOPE_CACHE=${MODELSCOPE_CACHE}" >> "$GITHUB_ENV"
+
 HERE=$(cd "$(dirname "$0")" && pwd)
 if is_vllm_family; then
   export PIP_CONSTRAINT="$(cd "$HERE/.." && pwd)/constraints-npu-vllm.txt"

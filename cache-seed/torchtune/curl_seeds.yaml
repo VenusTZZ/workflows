@@ -1,0 +1,24 @@
+# torchtune PPO reward model 的 curl plant spec（由 cache-seed workflow 的
+# scripts/curl_seed.py 执行）。smohammadi/tinyllama_rm_sentiment_1b 是个人
+# HF 仓库，ModelScope 不 mirror，且 model.safetensors（4.14GB）是
+# xet-backed：huggingface_hub 被 transformers==4.57.1 压回 0.36.2 不认
+# HF_HUB_DISABLE_XET → xet resume 撞 416 / consistency 校验失败（run
+# 35582685960）；又太大不能打 repo bundle（git checkout 拉整棵树 504，
+# run 35694653606 / 35702569867）。故走 curl 整文件 GET，落 HF hub cache
+# 布局（refs/main = 真实上游 sha），setup 从 refs/main 解析 ${TT_RM_PATH}。
+version: 1
+seeds:
+  - hf_id: smohammadi/tinyllama_rm_sentiment_1b
+    files:
+      - name: model.safetensors
+        sha256: 6697a3f12a082b0e5b1ecb70d826365d2e76780950bfcd171470b7e408c44afa
+      - name: config.json
+        sha256: a7d4283286b7305dc14f1deb1caf24784efc1eaad1ef7bed951c765e4f365173
+      - name: special_tokens_map.json
+        sha256: 6fa06efa2785e450051989a6f8fb4416b10149ded485ddd3f127a40734f5cfd0
+      - name: tokenizer.json
+        sha256: bf467c9e0f536bda271283c6ef85eb1a943e3196b621c8a912d64953b205df83
+      - name: tokenizer.model
+        sha256: 9e556afd44213b6bd1be2b850ebbbd98f5481437a8021afaf58ee7fb1818d347
+      - name: tokenizer_config.json
+        sha256: 2f5489e80dc7750365b9941323ad9804a95132e0afee155eef43b62ca1c1d8e1

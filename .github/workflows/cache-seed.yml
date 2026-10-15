@@ -37,10 +37,12 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: cache-seed
-  # idempotent, but let a running seed finish instead of cancelling
-  cancel-in-progress: false
+# No concurrency group: the seed is idempotent (sha256 skip-if-match on
+# every file), so concurrent dispatches (e.g. per-branch or per-project
+# warm-ups) are allowed to run in parallel rather than queue behind a
+# single in-flight run. The only shared-state risk is two cold runs
+# writing the SAME not-yet-seeded file at once; that self-heals on the
+# next dispatch's sha256 mismatch → delete → re-stage.
 
 jobs:
   seed:
@@ -67,7 +69,7 @@ jobs:
       PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
       PIP_TIMEOUT: "120"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install seeder stack
         run: |
@@ -82,3 +84,6 @@ jobs:
 
       - name: Seed shared cache (ModelScope plants)
         run: python scripts/ms_seed.py --projects "${{ inputs.projects }}"
+
+      - name: Seed shared cache (curl downloads)
+        run: python scripts/curl_seed.py --projects "${{ inputs.projects }}"

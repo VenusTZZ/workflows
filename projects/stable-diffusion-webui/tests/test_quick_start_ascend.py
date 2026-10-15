@@ -93,59 +93,124 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
     _API_READY_ENDPOINT = "http://127.0.0.1:7861/docs"
     _API_READY_ATTEMPTS = 120
     _API_READY_INTERVAL_S = 5
+    _WEBUI_LOG = Path("/tmp/sdwebui.log")
+    _GENERATED_PNG = Path("/tmp/sd-turbo-out.png")
+
+    def _verify_generated_png(self):
+        """CI-side guard: the doc only reports success and the output path.
+
+        Empty or truncated images are the failure mode the doc used to assert
+        inline; keeping the check here preserves the coverage without exposing
+        size / magic-byte assertions to readers of the quick start.
+        """
+        if not self._GENERATED_PNG.is_file():
+            raise AssertionError(
+                f"generated image not found: {self._GENERATED_PNG}"
+            )
+        image = self._GENERATED_PNG.read_bytes()
+        if len(image) <= 10000:
+            raise AssertionError(
+                "generated image is suspiciously small "
+                f"({len(image)} bytes): {self._GENERATED_PNG}"
+            )
+        if image[:8] != b"\x89PNG\r\n\x1a\n":
+            raise AssertionError(
+                "generated image is not a PNG "
+                f"(magic={image[:8]!r}): {self._GENERATED_PNG}"
+            )
+        self.log(
+            f"[Step] verified generated PNG ({len(image)}B): "
+            f"{self._GENERATED_PNG}"
+        )
+
+    def _webui_log_tail(self):
+        if not self._WEBUI_LOG.is_file():
+            return ""
+        return "\n".join(
+            self._WEBUI_LOG.read_text(
+                encoding="utf-8",
+                errors="replace",
+            ).splitlines()[-100:]
+        )
+
+    def _log_webui_tail(self):
+        self.log("--- tail /tmp/sdwebui.log ---")
+        self.log(self._webui_log_tail() or "(log file missing or empty)")
 
     def _wait_for_api(self):
-        """Poll the --nowebui docs endpoint until it answers.
-
-        The pending check runs here (CI-side concern) instead of in the doc,
-        so the visible ""wait-ready"" step only asserts readiness via curl.
-        """
         for attempt in range(1, self._API_READY_ATTEMPTS + 1):
             try:
                 with urllib.request.urlopen(
-                    self._API_READY_ENDPOINT, timeout=10
-                ) as resp:
-                    if resp.status == 200:
+                    self._API_READY_ENDPOINT,
+                    timeout=10,
+                ) as response:
+                    if response.status == 200:
                         return
             except (urllib.error.URLError, TimeoutError, OSError):
                 pass
+
             self.log(
                 "waiting for api: "
                 f"attempt {attempt}/{self._API_READY_ATTEMPTS}"
             )
             time.sleep(self._API_READY_INTERVAL_S)
-        log = Path("/tmp/sdwebui.log")
-        tail = ""
-        if log.is_file():
-            try:
-                tail = "\n".join(
-                    log.read_text(
-                        encoding="utf-8", errors="replace"
-                    ).splitlines()[-100:]
-                )
-            except OSError:
-                tail = ""
-        self.log("--- tail /tmp/sdwebui.log ---")
-        self.log(tail or "(log file missing or empty)")
+
+        self._log_webui_tail()
         raise RuntimeError(
             f"api not ready after {self._API_READY_ATTEMPTS} attempts"
         )
 
     def _run_one(self, cmd, results, env, cwd, timeout, idx):
-        if isinstance(cmd, SetupCommand) and "nohup python launch.py" in cmd.cmd and "sdwebui.log" not in cmd.cmd:
-            actual_cmd = self.substitute_placeholders(cmd.cmd, cmd.load, self._captures)
-            launch_cmd = actual_cmd.rstrip()
-            if launch_cmd.endswith("&"):
-                launch_cmd = launch_cmd[:-1].rstrip()
-            rc, out, err = self.run_command(launch_cmd + " > /tmp/sdwebui.log 2>&1 &", env, cwd, timeout)
-            if rc != 0:
-                raise AssertionError(f"setup command failed (rc={rc}); CMD stderr:\n{err.rstrip() or '(empty)'}")
+        if (
+            isinstance(cmd, SetupCommand)
+            and cmd.language == "python"
+            and '"launch.py"' in cmd.cmd
+        ):
+            actual_cmd = self.substitute_placeholders(
+                cmd.cmd,
+                cmd.load,
+                self._captures,
+            )
+            self.log(
+                "running WebUI setup with CI output redirected to "
+                "/tmp/sdwebui.log"
+            )
+            try:
+                with self._WEBUI_LOG.open(
+                    "w",
+                    encoding="utf-8",
+                ) as log_file:
+                    process = subprocess.run(
+                        [*self._LANG_RUNNER[cmd.language], actual_cmd],
+                        env=env,
+                        cwd=cwd,
+                        stdout=log_file,
+                        stderr=subprocess.STDOUT,
+                        check=False,
+                        timeout=timeout,
+                    )
+            except subprocess.TimeoutExpired:
+                self._log_webui_tail()
+                raise
+            if process.returncode != 0:
+                self._log_webui_tail()
+                raise AssertionError(
+                    "WebUI setup command failed "
+                    f"(rc={process.returncode})"
+                )
             return
         if (
             isinstance(cmd, TestCommand)
-            and getattr(cmd, "id", None) == "wait-ready"
+            and getattr(cmd, "id", None) == "txt2img"
         ):
             self._wait_for_api()
+            try:
+                super()._run_one(cmd, results, env, cwd, timeout, idx)
+            except Exception:
+                self._log_webui_tail()
+                raise
+            self._verify_generated_png()
+            return
         return super()._run_one(cmd, results, env, cwd, timeout, idx)
 
     def pre_process(self):
@@ -183,19 +248,14 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
 
         os.environ.setdefault("ASCEND_RT_VISIBLE_DEVICES", "0")
 
-        subprocess.run(["apt-get", "update", "-qq"], check=True)
-        subprocess.run(
-            [
-                "apt-get", "install", "-y", "-qq", "--no-install-recommends",
-                "libgl1", "libglib2.0-0",
-            ],
-            check=True,
-        )
-        print("setup: installed libgl1 libglib2.0-0")
-
         _PROBE = (
-            "import torch, torch_npu\n"
-            + 'raise SystemExit(0 if torch.__version__.startswith("2.9.0") and torch_npu.__version__.startswith("2.9.0") else 1)'
+            "import torch, torch_npu, torchvision\n"
+            "torch_version = torch.__version__.split('+', 1)[0]\n"
+            "torchvision_version = torchvision.__version__.split('+', 1)[0]\n"
+            "raise SystemExit(0 if "
+            "torch_version == '2.9.0' and "
+            "torchvision_version == '0.24.0' and "
+            "torch_npu.__version__ == '2.9.0.post6' else 1)"
         )
         probe = subprocess.run(
             ["python", "-c", _PROBE],
@@ -204,20 +264,29 @@ class TestQuickStartAscend(MarkdownDocTestBase, unittest.TestCase):
         )
         if probe.returncode == 0:
             v = subprocess.run(
-                ["python", "-c",
-                 "import torch, torch_npu; "
-                 "print(torch.__version__, torch_npu.__version__)"],
+                [
+                    "python",
+                    "-c",
+                    "import torch, torch_npu, torchvision; "
+                    "print(torch.__version__, torchvision.__version__, "
+                    "torch_npu.__version__)",
+                ],
                 capture_output=True, text=True, check=True,
             )
             print(f"setup: reusing image torch stack ({v.stdout.strip()})")
         else:
-            print("setup: installing torch==2.9.0 torch_npu==2.9.0.post2")
+            print(
+                "setup: installing torch==2.9.0 torchvision==0.24.0 "
+                "torch_npu==2.9.0.post6"
+            )
             subprocess.run(
                 [
                     "python", "-m", "pip", "install",
                     "--index-url", cls._CLUSTER_INDEX,
                     "--extra-index-url", cls._ASCEND_EXTRA,
-                    "torch==2.9.0", "torch_npu==2.9.0.post2",
+                    "torch==2.9.0",
+                    "torchvision==0.24.0",
+                    "torch_npu==2.9.0.post6",
                 ],
                 check=True,
             )

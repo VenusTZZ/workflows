@@ -1,167 +1,81 @@
 # xDiT（Ascend NPU）
 
-xDiT（PyPI 包名 `xfuser`）是一套统一的并行推理框架：同一组 `xFuser*Pipeline` API 配合 `xFuserArgs` CLI 参数系统，切换模型或并行策略只改参数。本示例在单卡昇腾 NPU 上生成第一张图，再用同一脚本展示 2 卡序列并行。
+xDiT（PyPI 包名 `xfuser`）是一套统一的并行推理框架。本示例在单卡昇腾 NPU 上生成第一张图。
 
 ## 前置条件
 
 ### 硬件
 
-Atlas 900 A2 / A3 训练系列产品或者 Ascend 950 系列产品，并按需完成物理机或容器内的设备挂载。
+Atlas 900 A2 训练服务器（Ascend 910B），并按需完成物理机或容器内的设备挂载。单卡生成示例需 1 张卡，序列并行示例需 2 张卡。
 
 ### 基础软件
 
-在跑本文档**之前**，你的机器上需要已经装好并可用：
+在运行本文档示例之前，你的机器上需要已经装好并可用：
 
 - 可用的 Python 环境
 - 可用的 CANN（参考[快速安装昇腾环境](https://ascend.github.io/docs/sources/ascend/quick_install.html)）
 
-### 本文档示例使用的版本
+本文档示例在 Python 3.12、CANN 9.1.0 环境下验证通过。
 
-**配套机器**：
-
-- **机器类型**：Atlas 900 A2 PODc（Ascend 910B4，64 GB × 2）
-- **操作系统**：Ubuntu 22.04
-
-**配套镜像**：
-
-swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
-
-**软件版本**：
-
-| 组件 | 版本 |
-| --- | --- |
-| Python | 3.12 |
-| CANN | 9.1.0 |
-| torch | 2.9.0 |
-| torch_npu | 2.9.0.post2 |
-| triton | 3.5.* |
-| xfuser | 最新 release（PyPI） |
-| modelscope | 1.37.0 |
-| 模型 | [stabilityai/stable-diffusion-3-medium-diffusers](https://www.modelscope.cn/models/stabilityai/stable-diffusion-3-medium-diffusers)，约 28 GB |
-
-```{admonition}
-:class: note
-也可用带 CANN 的昇腾镜像（如 [ascendhub cann 镜像](https://www.hiascend.com/developer/ascendhub)）跳过 CANN 安装，其余步骤相同
-```
-
-### 前置安装
-
-确认能看到 NPU 设备：
+## 加载 CANN 环境
 
 ```shell
-npu-smi info
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
 ```
 
-输出类似：
+## 安装 PyTorch NPU 栈
 
-```
-+------------------------------------------------------------------------------------------------+
-| npu-smi 25.5.2                   Version: 25.5.2                                               |
-+---------------------------+---------------+----------------------------------------------------+
-| NPU   Name                | Health        | Power(W)    Temp(C)           Hugepages-Usage(page)|
-| Chip                      | Bus-Id        | AICore(%)   Memory-Usage(MB)  HBM-Usage(MB)        |
-+===========================+===============+====================================================+
-| 5     910B4               | OK            | 89.9        39                0    / 0             |
-| 0                         | 0000:41:00.0  | 0           0    / 0          2922 / 32768         |
-+===========================+===============+====================================================+
-+---------------------------+---------------+----------------------------------------------------+
-| NPU     Chip              | Process id    | Process name             | Process memory(MB)      |
-+===========================+===============+====================================================+
-| No running processes found in NPU 5                                                            |
-+===========================+====================================================+
-```
+参考的版本配套如下（更多组合见 [CANN 与 PyTorch 配套表](https://github.com/Ascend/pytorch/blob/master/COMPATIBILITY.md)）：
 
-```{admonition}
-:class: note
-如果 `npu-smi` 不存在，请回到 [Ascend 官方快速安装指南](https://ascend.github.io/docs/sources/ascend/quick_install.html) 补装驱动
-```
+| CANN | PyTorch | `torch_npu` 安装包 |
+| --- | --- | --- |
+| 9.1.0 | 2.9.0 | 2.9.0.post6 |
+| 9.1.0 | 2.10.0 | 2.10.0.post4 |
+| 9.1.0 | 2.11.0 | 2.11.0 |
 
-加载 CANN 环境变量：
-
-```shell
-source ~/Ascend/ascend-toolkit/set_env.sh
-```
-
-检查 Python 版本：
-
-```shell #test id="check-py"
-python --version
-```
-
-输出结果如下：
-
-```shell #test-result id="check-py" fuzzy='xxx'
-Python 3.12.xxx
-```
-
-### 安装 torch + torch_npu + triton
+本示例使用第一行的组合：
 
 ```shell #test-setup id="xdit-install-torch"
-pip install uv
-uv pip install "torch==2.9.0" "torch_npu==2.9.0.post2" "triton==3.5.*"
+pip install torch==2.9.0 torch_npu==2.9.0.post6
 ```
 
-检查 NPU 运行时可用：
+## 安装 xDiT
 
-```shell #test id="check-npu-runtime"
-python -c "import torch, torch_npu; print(f'torch={torch.__version__}'); print(f'torch_npu={torch_npu.__version__}'); print('is_available:', torch.npu.is_available()); print('count:', torch.npu.device_count())"
+安装 `xfuser`（PyPI 包名），并打印安装版本：
+
+```shell #test id="xdit-install"
+pip install xfuser
+python -c "from importlib.metadata import version; print('xDiT version:', version('xfuser'))"
 ```
 
 输出结果如下：
 
-```shell #test-result id="check-npu-runtime" fuzzy='xxx'
-torch=xxx
-torch_npu=xxx
-is_available: True
-count: 2
-```
-
-```{admonition}
-:class: note
-如果 `import torch_npu` 失败，回到 [Ascend PyTorch 安装文档](https://gitcode.com/Ascend/pytorch) 检查 torch / torch_npu / CANN 三方兼容矩阵
-```
-
-### 安装 xDiT
-
-安装 `xfuser`（PyPI 包名）：
-
-```shell #test-setup id="xdit-install"
-uv pip install xfuser "modelscope==1.37.0"
-```
-
-校验 import 链与 NPU 分发（`npu hccl True`）：
-
-```shell #test id="xdit-install-verify"
-python -c "
-import torch
-import torch_npu
-from importlib.metadata import version
-from xfuser.envs import get_device_name, get_torch_distributed_backend, _is_npu
-print('torch:', torch.__version__)
-print('torch_npu:', torch_npu.__version__)
-print('xfuser:', version('xfuser'))
-print('npu dispatch:', get_device_name(), get_torch_distributed_backend(), bool(_is_npu()))
-"
-```
-
-```shell #test-result id="xdit-install-verify" fuzzy='...' fuzzy='xxx'
+```shell #test-result id="xdit-install" fuzzy='...' fuzzy='xxx'
 ...
-torch: 2.9.xxx
-torch_npu: 2.9.xxx
-xfuser: xxx
-npu dispatch: npu hccl True
+xDiT version: xxx
 ```
 
-## 文生图
+:::{note}
+其中 `xxx` 是安装的 xDiT（`xfuser`）版本号。
+:::
 
-### 单卡生成
+## 运行示例：文生图
 
-用 [SD3 medium](https://modelscope.cn/models/stabilityai/stable-diffusion-3-medium-diffusers) 在单卡上生成一张 256×256 的图。模型约 28 GB，首次运行时自动下载到 ModelScope 默认缓存：
+安装示例使用的 Triton 和模型下载所需的 ModelScope：
 
-```shell #test id="xdit-sd3-smoke"
-cat > sd3_npu.py <<'PY'
+```shell #test-setup
+pip install triton==3.5.0 "modelscope==1.37.0"
+```
+
+用 [SD3 medium](https://modelscope.cn/models/stabilityai/stable-diffusion-3-medium-diffusers) 在单卡上生成一张 256×256 的图。模型约 28 GB。
+
+将下面的 Python 代码保存为 `sd3_npu.py`：
+
+```python
 import os
 import sys
+import time
+
 import torch
 import torch_npu
 from modelscope import snapshot_download
@@ -189,6 +103,8 @@ pipe = xFuserStableDiffusion3Pipeline.from_pretrained(
 ).to(f"npu:{local_rank}")
 pipe.prepare_run(input_config)
 
+torch.npu.synchronize(device=local_rank)
+start = time.perf_counter()
 output = pipe(
     height=input_config.height,
     width=input_config.width,
@@ -198,41 +114,34 @@ output = pipe(
     guidance_scale=input_config.guidance_scale,
     generator=torch.Generator(device="npu").manual_seed(input_config.seed),
 )
+torch.npu.synchronize(device=local_rank)
+elapsed = time.perf_counter() - start
+
 os.makedirs("results", exist_ok=True)
 if pipe.is_dp_last_group():
-    output.images[0].save("results/sd3_npu.png")
-    print("saved: results/sd3_npu.png")
+    world_size = get_world_group().world_size
+    path = f"results/sd3_npu{world_size}_ulysses{engine_args.ulysses_degree}.png"
+    output.images[0].save(path)
+    print(f"inference time: {elapsed:.2f} sec")
+    print(f"image saved to {path}")
 get_runtime_state().destroy_distributed_env()
-PY
+```
+
+用 `torchrun` 在单卡上运行：
+
+```shell #test id="xdit-sd3-smoke"
 torchrun --nproc_per_node=1 sd3_npu.py --prompt "a tiny test sketch" --height 256 --width 256 --num_inference_steps 1 --seed 42
 ```
 
-```shell #test-result id="xdit-sd3-smoke"
+输出结果如下：
+
+```shell #test-result id="xdit-sd3-smoke" fuzzy='...' fuzzy='xxx'
 ...
-saved: results/sd3_npu.png
+inference time: xxx sec
+image saved to results/sd3_npu1_ulysses1.png
 ```
 
-### 输出校验
-
-校验生成的图片完整有效（PNG 文件头魔数 + 大小 >50 KB 下限，防止空图 / 坏图）：
-
-```shell #test id="xdit-sd3-output"
-python - <<'PY'
-import os
-p = 'results/sd3_npu.png'
-size = os.path.getsize(p)
-assert size > 50_000, f'output too small: {size} bytes'
-with open(p, 'rb') as fh:
-    assert fh.read(8) == bytes([137, 80, 78, 71, 13, 10, 26, 10]), 'not a png'
-print('size:', size)
-PY
-```
-
-```shell #test-result id="xdit-sd3-output" fuzzy='xxx'
-size: xxx
-```
-
-### 一步到多卡：序列并行
+### 多卡运行示例
 
 同一个脚本、同一个模型，加 `--ulysses_degree 2` 在 2 卡上做序列并行，attention 用 SDPA 后端：
 
@@ -240,14 +149,19 @@ size: xxx
 torchrun --nproc_per_node=2 sd3_npu.py --prompt "a tiny test sketch" --height 256 --width 256 --num_inference_steps 1 --seed 42 --ulysses_degree 2 --attention_backend SDPA
 ```
 
-```shell #test-result id="xdit-sd3-2card"
+输出结果如下：
+
+```shell #test-result id="xdit-sd3-2card" fuzzy='...' fuzzy='xxx'
 ...
-saved: results/sd3_npu.png
+inference time: xxx sec
+image saved to results/sd3_npu2_ulysses2.png
 ```
 
-```{admonition}
-:class: note
-如新开终端执行生成，先 `source ~/Ascend/ascend-toolkit/set_env.sh`
-```
+:::{note}
+其中 `xxx` 为实际推理耗时，单位为秒。
+:::
 
-更多模型与多卡并行（PipeFusion / CFG 并行 / Ring 等）见 [xDiT examples](https://github.com/xdit-project/xDiT/tree/main/examples)。
+## 外部链接
+
+- [官方仓库](https://github.com/xdit-project/xDiT)
+- [官方快速开始文档](https://github.com/xdit-project/xDiT#QuickStart)

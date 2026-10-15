@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 # Prepare the CI environment for one supported llm-compressor example.
-# $1 is the manifest profile. Unknown profiles fail before any install.
+# $1 is the manifest profile. $2 is the example path relative to the
+# target repo (the engine passes it as the EXAMPLE_PATH env instead;
+# either form works). Unknown profiles fail before any install.
 set -euo pipefail
 
 export PYTHONNOUSERSITE=1
 
-if [[ $# -lt 1 ]]; then
-  echo "usage: $0 <profile>" >&2
+if [[ $# -lt 1 ]] || [[ $# -gt 2 ]]; then
+  echo "usage: $0 <profile> [example-relpath]" >&2
   exit 2
 fi
 
 PROFILE="$1"
+EXAMPLE_REL="${2:-${EXAMPLE_PATH:?EXAMPLE_PATH env or \$2 is required}}"
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 ASCEND_PIP_INDEX=https://repo.huaweicloud.com/ascend/repos/pypi
 ASCEND_PIP_VARIANT=https://mirrors.huaweicloud.com/ascend/repos/pypi/variant
@@ -18,10 +22,24 @@ FALLBACK_PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
 CLUSTER_PIP_HOST=cache-service.nginx-pypi-cache.svc.cluster.local
 export CLUSTER_PIP_INDEX="http://${CLUSTER_PIP_HOST}/pypi/simple"
 
-pip_ascend() {
+# CANN 9.1.0 官方推荐组合是 torch 2.12.0 + torch_npu 2.12.0。
+# PyPI 上的 Linux torch==2.12.0 轮子依赖 cuda-toolkit；CPU 轮子只在
+# download.pytorch.org，版本号带 +cpu。后面的 pip 必须钉住这颗轮子，
+# 否则解析器会换成 CUDA 构建。
+write_torch_constraint() {
+  if [[ -z "${TORCH_CONSTRAINT:-}" ]]; then
+    TORCH_CONSTRAINT=$(mktemp)
+    export TORCH_CONSTRAINT
+  fi
+  printf '%s\n' 'torch==2.12.0+cpu' 'cuda-toolkit<0' > "$TORCH_CONSTRAINT"
+}
+
+pip_locked() {
+  write_torch_constraint
   python -m pip install \
     --extra-index-url "$ASCEND_PIP_VARIANT" \
     --extra-index-url "$ASCEND_PIP_INDEX" \
+    -c "$TORCH_CONSTRAINT" \
     "$@"
 }
 
@@ -44,35 +62,27 @@ except urllib.error.HTTPError:
 }
 
 ensure_torch_npu_stack() {
+  write_torch_constraint
   if python -c "
 import torch, torch_npu
 print('found torch', torch.__version__, 'torch_npu', torch_npu.__version__)
 raise SystemExit(
-    0 if torch.__version__.startswith('2.10.0')
-    and torch_npu.__version__.startswith('2.10.0')
+    0 if torch.__version__.startswith('2.12.0')
+    and torch_npu.__version__.startswith('2.12.0')
     else 1)
 "; then
-    echo "reusing torch 2.10 / torch_npu 2.10 stack"
+    echo "reusing torch 2.12 / torch_npu 2.12 stack"
     return
   fi
-  echo "installing torch==2.10.0 torch_npu==2.10.0.post4 numpy pyyaml"
-  pip_ascend torch==2.10.0 torch_npu==2.10.0.post4 numpy pyyaml
-}
-
-ensure_cpu_torch() {
-  python -m pip uninstall -y torch_npu >/dev/null 2>&1 || true
-  echo "installing CPU torch==2.10.0 numpy pyyaml"
-  python -m pip install torch==2.10.0 numpy pyyaml
-  python -c "
-import torch
-assert torch.__version__.startswith('2.10.0'), torch.__version__
-try:
-    import torch_npu
-except ImportError:
-    print('cpu torch', torch.__version__, 'torch_npu absent')
-else:
-    raise SystemExit('cpu profile must not import torch_npu')
-"
+  echo "installing torch==2.12.0+cpu (direct URL) + torch_npu==2.12.0"
+  CP_ABI=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')")
+  python -m pip install --no-deps \
+    "https://download.pytorch.org/whl/cpu/torch-2.12.0%2Bcpu-${CP_ABI}-${CP_ABI}-manylinux_2_28_aarch64.whl"
+  python -m pip install -c "$TORCH_CONSTRAINT" \
+    'filelock' 'typing-extensions>=4.10.0' 'setuptools<82' \
+    'sympy>=1.13.3' 'networkx>=2.5.1' 'jinja2' 'fsspec>=0.8.5' \
+    numpy pyyaml
+  pip_locked torch_npu==2.12.0
 }
 
 install_llmcompressor() {
@@ -81,8 +91,8 @@ install_llmcompressor() {
   # floor breaks import when the pip mirror lags on hub 0.4.3. The
   # plant_hf_from_modelscope import path (modelscope.hub.snapshot_download)
   # exists in 1.37.0.
-  python -m pip install "modelscope==1.37.0" huggingface_hub
-  pip_ascend -e "$TARGET_ROOT" torch==2.10.0
+  pip_locked "modelscope==1.37.0" huggingface_hub
+  pip_locked -e "$TARGET_ROOT"
 }
 
 prefetch_hf_model() {
@@ -184,14 +194,15 @@ PY
 # commit SHA unless offline. The planted snapshot name is not that SHA,
 # so leave this until after every prefetch that needs the network.
 emit_offline_hub() {
+  # Datasets stay online. Calibration splits are often computed at
+  # runtime, and a wrong offline cache miss is guard noise. Model ids
+  # stay offline so a planted gated snapshot is not re-checked on the Hub.
   export HF_HUB_OFFLINE=1
   export TRANSFORMERS_OFFLINE=1
-  export HF_DATASETS_OFFLINE=1
   if [[ -n "${GITHUB_ENV:-}" ]]; then
     {
       echo 'HF_HUB_OFFLINE=1'
       echo 'TRANSFORMERS_OFFLINE=1'
-      echo 'HF_DATASETS_OFFLINE=1'
     } >> "$GITHUB_ENV"
   fi
 }
@@ -201,7 +212,7 @@ setup_npu_inference() {
   # shellcheck disable=SC1091
   source /usr/local/Ascend/ascend-toolkit/set_env.sh
   select_pip_index
-  python -m pip install -U pip setuptools wheel
+  python -m pip install -U pip 'setuptools<82' wheel
   ensure_torch_npu_stack
   python -c "
 import torch, torch_npu
@@ -213,44 +224,19 @@ print(torch.__version__, torch_npu.__version__, torch.npu.device_count())
 import llmcompressor
 import torch
 import torch_npu
-assert torch.__version__.startswith('2.10.0'), torch.__version__
-assert torch_npu.__version__.startswith('2.10.0'), torch_npu.__version__
+assert torch.__version__.startswith('2.12.0'), torch.__version__
+assert torch_npu.__version__.startswith('2.12.0'), torch_npu.__version__
 print('llmcompressor', llmcompressor.__version__)
 "
   PREFETCH_HF_ID=nm-testing/tinyllama-fp8-dynamic-compressed prefetch_hf_model
 }
 
-setup_cpu() {
-  select_pip_index
-  python -m pip install -U pip setuptools wheel
-  ensure_cpu_torch
-  python -m pip install "modelscope==1.37.0" huggingface_hub
-  python -m pip install -e "$TARGET_ROOT" torch==2.10.0
-  python -m pip uninstall -y torch_npu >/dev/null 2>&1 || true
-  python -c "
-import llmcompressor
-import torch
-assert torch.__version__.startswith('2.10.0'), torch.__version__
-try:
-    import torch_npu
-except ImportError:
-    pass
-else:
-    raise SystemExit('cpu profile must not import torch_npu after install')
-print('llmcompressor', llmcompressor.__version__, 'cpu torch', torch.__version__)
-"
-  PREFETCH_MS_ID=LLM-Research/Meta-Llama-3-8B-Instruct \
-    PREFETCH_HF_ID=meta-llama/Meta-Llama-3-8B-Instruct \
-    plant_hf_from_modelscope
-  emit_offline_hub
-}
-
-setup_npu_int8() {
+install_npu_stack() {
   export PATH="/usr/local/sbin:$PATH"
   # shellcheck disable=SC1091
   source /usr/local/Ascend/ascend-toolkit/set_env.sh
   select_pip_index
-  python -m pip install -U pip setuptools wheel
+  python -m pip install -U pip 'setuptools<82' wheel
   ensure_torch_npu_stack
   python -c "
 import torch, torch_npu
@@ -262,46 +248,46 @@ print(torch.__version__, torch_npu.__version__, torch.npu.device_count())
 import llmcompressor
 import torch
 import torch_npu
+assert torch.__version__.startswith('2.12.0'), torch.__version__
+assert torch_npu.__version__.startswith('2.12.0'), torch_npu.__version__
 assert torch.npu.is_available()
 print('llmcompressor', llmcompressor.__version__)
 "
-  PREFETCH_MS_ID=LLM-Research/gemma-2-2b-it \
-    PREFETCH_HF_ID=google/gemma-2-2b-it \
-    plant_hf_from_modelscope
-  PREFETCH_DATASET_ID=mlabonne/open-perfectblend \
-    PREFETCH_DATASET_SPLIT=train[:512] \
-    prefetch_dataset
+}
+
+install_example_extras() {
+  local example="$TARGET_ROOT/$EXAMPLE_REL"
+  if grep -q 'qwen_vl_utils' "$example"; then
+    echo "installing qwen_vl_utils for ${EXAMPLE_REL}"
+    pip_locked qwen_vl_utils
+    python -c "
+import torch
+assert torch.__version__.startswith('2.12.0'), torch.__version__
+import qwen_vl_utils
+print('qwen_vl_utils ok', torch.__version__)
+"
+  fi
+}
+
+prefetch_for_example() {
+  if [[ ! -f "$TARGET_ROOT/$EXAMPLE_REL" ]]; then
+    echo "example not found: $TARGET_ROOT/$EXAMPLE_REL" >&2
+    exit 1
+  fi
+  python "$SCRIPT_DIR/prefetch_example_assets.py" "$TARGET_ROOT/$EXAMPLE_REL"
   emit_offline_hub
 }
 
-setup_npu_autoround() {
-  export PATH="/usr/local/sbin:$PATH"
-  # shellcheck disable=SC1091
-  source /usr/local/Ascend/ascend-toolkit/set_env.sh
-  select_pip_index
-  python -m pip install -U pip setuptools wheel
-  ensure_torch_npu_stack
-  python -c "
-import torch, torch_npu
-assert torch.npu.is_available()
-print(torch.__version__, torch_npu.__version__, torch.npu.device_count())
-"
-  install_llmcompressor
-  python -c "
-import auto_round
-import llmcompressor
-import torch
-import torch_npu
-assert torch.npu.is_available()
-print('llmcompressor', llmcompressor.__version__, 'auto_round ok')
-"
-  PREFETCH_MS_ID=Qwen/Qwen3-8B \
-    PREFETCH_HF_ID=Qwen/Qwen3-8B \
-    plant_hf_from_modelscope
-  PREFETCH_DATASET_ID=HuggingFaceH4/ultrachat_200k \
-    PREFETCH_DATASET_SPLIT=train_sft \
-    prefetch_dataset
-  emit_offline_hub
+setup_npu_oneshot() {
+  install_npu_stack
+  install_example_extras
+  prefetch_for_example
+}
+
+setup_npu_ddp() {
+  install_npu_stack
+  install_example_extras
+  prefetch_for_example
 }
 
 supported_profiles() {

@@ -1,0 +1,29 @@
+name: flash-linear-attention-examples
+
+concurrency:
+  group: ${{ github.event_name == 'schedule' && 'flash-linear-attention-examples-schedule' || format('manual-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+on:
+  schedule:
+    - cron: '45 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Tag, branch, or SHA; empty selects the latest release (fallback main)
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  flash-linear-attention-examples:
+    uses: ./.github/workflows/examples-template.yml
+    with:
+      project: flash-linear-attention
+      upstream_repo: fla-org/flash-linear-attention
+      target_ref: ${{ inputs.target_ref }}
+      max_parallel: 1

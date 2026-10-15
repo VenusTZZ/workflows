@@ -11,21 +11,28 @@ fi
 
 PROFILE="$1"
 
-TINY_EN_DEST=/root/.cache/cosdt-ci-test/whisper.cpp/ggml-tiny.en.bin
+# Cached assets (models, Node tarball, cmake-js headers) live on the
+# shared persistent runner cache - the pool mounts one volume at
+# ~/.cache/huggingface (docs/examples-guard-engine.md). The legacy
+# default /root/.cache/cosdt-ci-test/whisper.cpp existed only via a
+# container bind-mount the engine does not provide.
+CACHE_ROOT="${WHISPER_CI_CACHE_ROOT:-${HF_HOME:-${HOME}/.cache/huggingface}/whisper.cpp}"
+
+TINY_EN_DEST=${CACHE_ROOT}/ggml-tiny.en.bin
 TINY_EN_SHA256=921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f
 TINY_EN_URLS=(
   https://www.modelscope.cn/models/cjc1887415157/whisper.cpp/resolve/master/ggml-tiny.en.bin
   https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
 )
 
-PARAKEET_F16_DEST=/root/.cache/cosdt-ci-test/whisper.cpp/ggml-parakeet-tdt-0.6b-v3-f16.bin
+PARAKEET_F16_DEST=${CACHE_ROOT}/ggml-parakeet-tdt-0.6b-v3-f16.bin
 PARAKEET_F16_SHA256=833bffc9513b2cae867ee9e51633cfd11e4d51aaa5597c8ac02159385a2b426f
 PARAKEET_F16_URLS=(
   https://www.modelscope.cn/models/ggml-org/parakeet-GGUF/resolve/master/ggml-parakeet-tdt-0.6b-v3-f16.bin
   https://hf-mirror.com/ggml-org/parakeet-GGUF/resolve/main/ggml-parakeet-tdt-0.6b-v3-f16.bin
 )
 
-VAD_DEST=/root/.cache/cosdt-ci-test/whisper.cpp/ggml-silero-v6.2.0.bin
+VAD_DEST=${CACHE_ROOT}/ggml-silero-v6.2.0.bin
 VAD_SHA256=2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987
 VAD_URLS=(
   https://www.modelscope.cn/models/ggml-org/whisper-vad/resolve/master/ggml-silero-v6.2.0.bin
@@ -35,13 +42,13 @@ VAD_URLS=(
 NODE_VERSION=v20.18.2
 NODE_ARCH=linux-arm64
 NODE_NAME="node-${NODE_VERSION}-${NODE_ARCH}"
-NODE_DEST="/root/.cache/cosdt-ci-test/whisper.cpp/${NODE_NAME}"
+NODE_DEST="${CACHE_ROOT}/${NODE_NAME}"
 NODE_TARBALL="${NODE_DEST}.tar.xz"
 NODE_URL="https://mirrors.huaweicloud.com/nodejs/${NODE_VERSION}/${NODE_NAME}.tar.xz"
 NODE_TARBALL_SHA256=5c1437aa16e7e6a2e0687a42c4d3f0a8f8a2039cda8880cb3be8cd983aeefb44
 NPM_REGISTRY=https://repo.huaweicloud.com/repository/npm/
 NVM_NODEJS_ORG_MIRROR=https://mirrors.huaweicloud.com/nodejs
-CMAKE_JS_CACHE=/root/.cache/cosdt-ci-test/whisper.cpp/cmake-js
+CMAKE_JS_CACHE=${CACHE_ROOT}/cmake-js
 CMAKE_JS_RUNTIME="${HOME}/.cmake-js/node-arm64/${NODE_VERSION}"
 
 file_sha256() {

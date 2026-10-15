@@ -14,15 +14,11 @@
 #   * result.json is written by the engine and validated against
 #     schemas/result.schema.json before upload.
 #
-# NOTE: only workflow_dispatch is enabled for now (per spec: same
-# onboarding rhythm as llama.cpp / whisper.cpp / trl / timm). Once the
-# pipeline runs green and stable, re-enable the schedule block below
-# to start the periodic monitor loop. Until then, the engine's
-# schedule-only steps (monitor / record-monitor-outcome / cache save)
-# simply never run.
+# The schedule runs every six hours at minute 45. workflow_dispatch
+# remains available for branch validation and manual reruns.
 #
-# Bind mount: the doc flow runs with FASTCHAT_USE_MODELSCOPE=True and
-# downloads real model weights, so the ModelScope cache is
+# Bind mount: the CLI and model worker download real model weights from
+# ModelScope, so the ModelScope cache is
 # bind-mounted to the host (/data/ci-cache/modelscope/fastchat) to keep
 # the downloaded weights persistent across runs. The self-hosted NPU
 # runner (linux-aarch64-a2-1) auto-passes /dev/davinci* into the
@@ -34,8 +30,7 @@ concurrency:
   # format() is load-bearing: a '||' between 'manual-' and
   # github.run_id would short-circuit on the truthy literal and
   # every dispatch would share one 'manual-' group.
-  # The schedule branch is kept (even though schedule is not enabled
-  # yet) so re-enabling the cron later needs no concurrency change.
+  # Scheduled runs share one group; dispatch runs use their run ID.
   group: ${{ github.event_name == 'schedule' && 'fastchat-quick-start-schedule' || format('manual-{0}', github.run_id) }}
   # cancel-in-progress: false because (1) a schedule run cancelled
   # mid-way loses its outcome writeback - the outcome is what makes
@@ -45,9 +40,8 @@ concurrency:
   cancel-in-progress: false
 
 on:
-  # schedule: deliberately NOT enabled yet - see the header note.
-  # Enable with e.g. `- cron: '45 */3 * * *'` once the pipeline is
-  # proven stable on manual runs.
+  schedule:
+    - cron: '45 */6 * * *'
   workflow_dispatch:
 
 permissions:
@@ -72,10 +66,10 @@ jobs:
       # the bind-mount above persists the ModelScope cache on the host.
       timeout_minutes: 120
       upstream_repo: lm-sys/FastChat
-      # Raw URL the engine's monitor hashes and the test fetches;
-      # doc-hash state lives under the quick-start-monitor-state-fastchat_ cache
-      # prefix.
-      doc_url: https://raw.githubusercontent.com/cosdt-ci-test/workflows/main/projects/fastchat/docs/Quick-start-Ascend.md
+      # Contents API + the triggering SHA keeps branch dispatches pinned to
+      # the document from the same commit. The test fetches this URL through
+      # the shared MarkdownDocTestBase implementation.
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/fastchat/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
       doc_path: https://github.com/cosdt-ci-test/workflows/blob/main/projects/fastchat/docs/Quick-start-Ascend.md
       # cwd is workflows/projects/fastchat; env contract (MONITORED_DOC_URL /
       # NPU_READY) is injected by the engine. All project env prep and

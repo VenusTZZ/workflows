@@ -16,10 +16,14 @@ EXAMPLE_REL="${EXAMPLE_PATH:-}"
 # 910B DataType table lists FP16 / Q8_0 / Q4_0 / BF16 (Q4_K_M etc. not in table); upstream docs/backend/CANN.md.
 QWEN_MODEL_URL=https://modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/master/qwen2.5-0.5b-instruct-q4_0.gguf
 QWEN_MODEL_FILE=qwen2.5-0.5b-instruct-q4_0.gguf
-# Dream GGUF is produced by prepare-dream-gguf (ModelScope HF → Q8_0).
-# This profile only consumes the cached file; it does not download.
+# Dream GGUF is produced by prepare_dream_gguf.sh (ModelScope HF →
+# Q8_0) on the shared persistent runner cache (the pool mounts one
+# volume at ~/.cache/huggingface - the legacy /root/.cache/cosdt-ci-
+# test/llama.cpp existed only via a container bind-mount the engine
+# does not provide).
 DREAM_MODEL_FILE=Dream-v0-Instruct-7B.Q8_0.gguf
-DREAM_MODEL_DEST=/root/.cache/cosdt-ci-test/llama.cpp/$DREAM_MODEL_FILE
+DREAM_CACHE_ROOT="${DREAM_CACHE_ROOT:-${HF_HOME:-${HOME}/.cache/huggingface}/llama.cpp}"
+DREAM_MODEL_DEST="$DREAM_CACHE_ROOT/$DREAM_MODEL_FILE"
 
 require_exec() {
   if [[ -z "$EXEC_REL" ]]; then
@@ -142,9 +146,15 @@ setup_cann-diffusion() {
   cmake_llama -DGGML_CANN=on
   build_target
   assert_cann_lib "$TARGET_ROOT/build/bin"
+  # The legacy pipeline staged the Dream GGUF via a separate
+  # prepare-dream-gguf job + an NFS bind-mount shared with this job;
+  # the engine has no extra-job hooks, so this leg's setup prepares it
+  # itself on the shared persistent cache. Idempotent and flock-
+  # protected: warm caches return in seconds, and only this leg pays
+  # the cold cost (manifest timeout covers the full prepare + build).
+  bash "${PROJECT_ROOT:?PROJECT_ROOT is required}/scripts/prepare_dream_gguf.sh"
   if [[ ! -f "$DREAM_MODEL_DEST" || "$(head -c 4 "$DREAM_MODEL_DEST")" != "GGUF" ]]; then
-    echo "Dream GGUF missing or incomplete: $DREAM_MODEL_DEST" >&2
-    echo "prepare-dream-gguf must populate the NFS cache before this job." >&2
+    echo "Dream GGUF missing or incomplete after prepare: $DREAM_MODEL_DEST" >&2
     exit 1
   fi
   echo "LLAMA_CI_MODEL=$DREAM_MODEL_DEST" >> "$GITHUB_ENV"

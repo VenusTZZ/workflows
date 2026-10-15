@@ -1,0 +1,31 @@
+# TensorDict examples guard: the project-specific trigger for examples-template.
+name: tensordict-examples
+
+on:
+  # Enable only after the NPU tutorial jobs pass manual acceptance.
+  # schedule:
+  #   - cron: '45 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Branch, tag, or SHA to test (empty selects the latest release)
+        required: false
+        default: ''
+        type: string
+
+concurrency:
+  group: ${{ github.event_name == 'schedule' && 'tensordict-examples-schedule' || format('manual-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  tensordict-examples:
+    uses: ./.github/workflows/examples-template.yml
+    with:
+      project: tensordict
+      upstream_repo: pytorch/tensordict
+      target_ref: ${{ inputs.target_ref }}
+      max_parallel: 2

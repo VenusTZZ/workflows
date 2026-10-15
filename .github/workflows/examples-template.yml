@@ -85,6 +85,7 @@ jobs:
           UPSTREAM_REPO: ${{ inputs.upstream_repo }}
           PROJECT: ${{ inputs.project }}
           WORKFLOW_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ inputs.default_branch }}
         run: |
           set -euo pipefail
           # Single source of .monitor state for both signals below.
@@ -106,11 +107,42 @@ jobs:
           fi
           rm -f "$RESP_FILE"
           if [ "$HTTP_CODE" = "404" ]; then
-            echo "no release published for $UPSTREAM_REPO - nothing to guard"
-            {
-              echo "## examples guard: $UPSTREAM_REPO"
-              echo "No release published - nothing to guard, no result."
-            } >> "$GITHUB_STEP_SUMMARY"
+            # Release-less upstream (e.g. microsoft/onnxruntime-inference-
+            # examples): fall back to the default-branch HEAD sha so the
+            # schedule signal has something to diff, and target_ref is never
+            # empty downstream (result.schema.json target_ref minLength:1;
+            # save-monitor-state's TARGET_REF :? guard). Same tier as
+            # quick-start-template's /commits/HEAD fallback. Refs of both
+            # kinds land in the same last_release_tag state slot; the
+            # release_outcome retry bookkeeping is shared.
+            HEAD_RESP=$(mktemp)
+            HEAD_CODE=$(curl -sSL --retry 3 -o "$HEAD_RESP" -w '%{http_code}' \
+              "https://api.github.com/repos/$UPSTREAM_REPO/commits/$DEFAULT_BRANCH" || true)
+            HEAD_SHA=""
+            if [ "$HEAD_CODE" = "200" ]; then
+              HEAD_SHA=$(jq -r '.sha // empty' "$HEAD_RESP")
+            fi
+            rm -f "$HEAD_RESP"
+            if [ -n "$HEAD_SHA" ]; then
+              TAG="$HEAD_SHA"
+              if [ "${last_release_tag:-}" != "$TAG" ]; then
+                NEED="true"
+                REASON="head"
+                echo "release signal 404 (no releases); HEAD fallback FIRED: ${last_release_tag:-<none>} -> $HEAD_SHA"
+              elif [ "${release_outcome:-}" = "failure" ]; then
+                NEED="true"
+                REASON="head-retry"
+                echo "HEAD fallback RETRY (previous outcome failure, sha $HEAD_SHA unchanged)"
+              else
+                echo "HEAD fallback unchanged ($HEAD_SHA), previous outcome: ${release_outcome:-none}"
+              fi
+            else
+              echo "no release published and HEAD lookup failed (HTTP $HEAD_CODE) - nothing to guard"
+              {
+                echo "## examples guard: $UPSTREAM_REPO"
+                echo "No release published - nothing to guard, no result."
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
           elif [ -z "$TAG" ]; then
             echo "release signal unknown (HTTP $HTTP_CODE) - not triggering, state untouched"
           else
@@ -250,12 +282,12 @@ jobs:
       has_supported: ${{ steps.check.outputs.has_supported }}
     steps:
       - name: Checkout workflows
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: workflows
 
       - name: Checkout target
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ needs.monitor.outputs.target_repo }}
           ref: ${{ needs.monitor.outputs.target_ref }}
@@ -267,7 +299,7 @@ jobs:
       # branch (DeepSpeedExamples uses master, not main).
       - name: Checkout examples repo
         if: inputs.examples_repo != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ inputs.examples_repo }}
           path: examples
@@ -326,12 +358,12 @@ jobs:
       image: ${{ matrix.example.image }}
     steps:
       - name: Checkout workflows
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: workflows
 
       - name: Checkout target
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ needs.monitor.outputs.target_repo }}
           ref: ${{ needs.monitor.outputs.target_ref }}
@@ -339,7 +371,7 @@ jobs:
 
       - name: Checkout examples repo
         if: inputs.examples_repo != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ inputs.examples_repo }}
           path: examples
@@ -353,6 +385,11 @@ jobs:
       - name: Setup example environment
         env:
           PROFILE: ${{ matrix.example.profile }}
+          EXAMPLE_PATH: ${{ matrix.example.path }}
+          # EXEC forwarded so setups that build per-target (whisper.cpp
+          # builds the cmake target named by exec) can see it; empty for
+          # entries without an exec field (existing setups ignore it).
+          EXEC: ${{ matrix.example.exec }}
         run: bash "$PROJECT_ROOT/scripts/setup_example.sh" "$PROFILE"
 
       - name: Run example
@@ -361,6 +398,10 @@ jobs:
           EXAMPLE_SOURCE: ${{ matrix.example.source || 'upstream' }}
           EXEC: ${{ matrix.example.exec }}
           LAUNCHER: ${{ matrix.example.launcher || '' }}
+          # PROFILE forwarded so run scripts that dispatch substantial
+          # per-profile flow on it (mooncake's transfer-engine guard)
+          # see it; path-derived scripts ignore it.
+          PROFILE: ${{ matrix.example.profile }}
           OVERLAY_ARGS: ${{ toJSON(matrix.example.overlay_args) }}
         run: |
           df -h /dev/shm
@@ -380,7 +421,7 @@ jobs:
         example: ${{ fromJSON(needs.manifest-check.outputs.supported_matrix) }}
     steps:
       - name: Checkout workflows
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: workflows
 
@@ -402,7 +443,7 @@ jobs:
       - name: Validate result.json
         run: |
           set -euo pipefail
-          python3 -m pip install -q check-jsonschema
+          python3 -m pip install -q "check-jsonschema==0.38.0"
           check-jsonschema --schemafile workflows/schemas/result.schema.json \
             output/result.json
 

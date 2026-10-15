@@ -1,54 +1,84 @@
-#!/bin/bash
-# run_example.sh - Run a cache-dit example on NPU
-# Called from workflow YAML's run-example job
-# Positional argument: $1 is the example path relative to target repo root (e.g., examples/api/run_cache_refresh_flux.py)
-
+#!/usr/bin/env bash
+# Run one cache-dit example from a CI working copy of the target tree.
+# Overlay CLI args come from OVERLAY_ARGS (JSON array, as emitted by
+# toJSON(matrix.example.overlay_args)); cache-dit examples parse sys.argv
+# themselves (argparse), so args are passed straight through.
+# EXEC overrides the launcher command when set (e.g. torchrun).
 set -euo pipefail
 
-EXAMPLE_PATH="$1"
-PROJECT_ROOT="$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")"
-TARGET_ROOT="${TARGET_ROOT:-/workspace/cache-dit}"
-FIXTURE_DIR="${FIXTURE_DIR:-${PROJECT_ROOT}/fixtures}"
-CI_OUTPUT_DIR="${CI_OUTPUT_DIR:-${TARGET_ROOT}/output}"
+if [[ $# -lt 1 ]]; then
+  echo "usage: $0 <example-relpath>" >&2
+  exit 2
+fi
 
-# Environment variables from workflow
+EXAMPLE_REL="$1"
+TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
+CI_OUTPUT_DIR="${CI_OUTPUT_DIR:?CI_OUTPUT_DIR is required}"
+
+EXAMPLE_PATH="$TARGET_ROOT/$EXAMPLE_REL"
+
+if [[ ! -f "$EXAMPLE_PATH" ]]; then
+  echo "example not found: $EXAMPLE_PATH" >&2
+  exit 1
+fi
+
+mkdir -p "$CI_OUTPUT_DIR"
+
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON=python3
+else
+  PYTHON=python
+fi
+
+expand_overlay() {
+  "$PYTHON" - <<'PY'
+import json
+import os
+import shlex
+
+raw = os.environ.get('OVERLAY_ARGS', '').strip()
+if not raw or raw in ('null', '""'):
+    raise SystemExit(0)
+try:
+    items = json.loads(raw)
+except json.JSONDecodeError as exc:
+    raise SystemExit(f'OVERLAY_ARGS is not valid JSON: {exc}') from exc
+if items in (None, ''):
+    raise SystemExit(0)
+if not isinstance(items, list):
+    raise SystemExit(
+        f'OVERLAY_ARGS must be a JSON array, got {type(items).__name__}')
+tokens = []
+for item in items:
+    if not isinstance(item, str):
+        raise SystemExit(
+            f'OVERLAY_ARGS items must be strings, got {type(item).__name__}')
+    tokens.extend(shlex.split(os.path.expandvars(item), posix=True))
+print(' '.join(shlex.quote(token) for token in tokens))
+PY
+}
+
+eval "EXTRA_ARGS=( $(expand_overlay) )"
+
 export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
-
-# Source CANN environment if available
 if [ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]; then
     source /usr/local/Ascend/ascend-toolkit/set_env.sh
 fi
 
-# Create output directory
-mkdir -p "${CI_OUTPUT_DIR}"
+# Run from the target repo root so relative paths (generated image
+# outputs, example data) resolve consistently.
+cd "$TARGET_ROOT"
 
-# Determine how to run the example
-RUN_CMD=""
-
-# Check if EXEC is set (override script to run)
-if [ -n "${EXEC:-}" ]; then
-    RUN_CMD="${EXEC}"
-else
-    # Default: run the example Python script
-    RUN_CMD="python3 "${EXAMPLE_PATH}""
+echo "Running example: $EXAMPLE_PATH"
+echo "With overlay args:"
+if ((${#EXTRA_ARGS[@]})); then
+  printf '  %q\n' "${EXTRA_ARGS[@]}"
 fi
-
-# Add overlay args if provided
-OVERLAY_ARGS_STR=""
-if [ -n "${OVERLAY_ARGS:-}" ]; then
-    IFS=',' read -ra ARRAY <<< "${OVERLAY_ARGS}"
-    for arg in "${ARRAY[@]}"; do
-        OVERLAY_ARGS_STR="${OVERLAY_ARGS_STR} ${arg}"
-    done
-fi
-
-# Execute the example
-echo "Running example: ${EXAMPLE_PATH}"
-echo "With overlay args: ${OVERLAY_ARGS_STR}"
 echo "Using NPU devices: ${ASCEND_RT_VISIBLE_DEVICES}"
 
-eval "${RUN_CMD} ${OVERLAY_ARGS_STR}"
-
-# Exit with the result code from the example
-exit $?
+if [[ -n "${EXEC:-}" ]]; then
+  eval "${EXEC} ${EXTRA_ARGS[*]}"
+else
+  "$PYTHON" "$EXAMPLE_PATH" "${EXTRA_ARGS[@]}"
+fi

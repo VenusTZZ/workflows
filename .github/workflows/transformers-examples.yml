@@ -1,326 +1,53 @@
+# transformers examples guard - project thin trigger.
+#
+# Calls the common engine .github/workflows/examples-template.yml;
+# this file only declares what varies per project: schedule,
+# concurrency, upstream repo, dispatch input forwarding, and matrix
+# parallelism. The guard loop (release-only monitor / manifest-check /
+# run-example matrix / validate-results / save-monitor-state) lives in
+# the engine. See docs/examples-guard-engine.md for the design.
+
 name: transformers-examples
 
+concurrency:
+  # schedule runs serialize; each manual run gets its own group so a
+  # dispatch is never blocked behind a scheduled run.
+  group: ${{ github.event_name == 'schedule' && 'transformers-examples-schedule' || format('manual-{0}', github.run_id) }}
+  # false: a run cancelled mid-way loses its outcome writeback, and the
+  # outcome is what drives the next cycle's retry.
+  cancel-in-progress: false
+
 on:
+  # Daily cadence preserved from the legacy pipeline. The first
+  # engine-driven cycle cold-starts (new monitor-state cache key
+  # family, equivalent to lost state) and simply runs once.
   schedule:
     - cron: '30 3 * * *'
   workflow_dispatch:
     inputs:
-      target_repo:
-        description: Target repository to checkout and run
-        required: true
-        default: huggingface/transformers
-        type: string
       target_ref:
-        description: Branch, tag, or SHA in the target repository
-        required: true
-        default: main
+        description: Branch, tag, or SHA to test (empty = latest upstream release; falls back to main on API failure)
+        required: false
+        default: ''
         type: string
 
-concurrency:
-  group: transformers-examples
-  cancel-in-progress: false
-
+# Engine jobs query the GitHub Job API (validate-results); called
+# workflows run with the caller's GITHUB_TOKEN permissions.
 permissions:
   actions: read
   contents: read
 
-env:
-  UPSTREAM_REPO: huggingface/transformers
-  GH_API: https://api.github.com
-
 jobs:
-  monitor:
-    runs-on: ubuntu-latest
-    outputs:
-      changed: ${{ steps.decide.outputs.changed }}
-      trigger: ${{ steps.decide.outputs.trigger }}
-      reason: ${{ steps.decide.outputs.reason }}
-      target_repo: ${{ steps.decide.outputs.target_repo }}
-      target_ref: ${{ steps.decide.outputs.target_ref }}
-    steps:
-      # Schedule runs compare three independent upstream signals. The decide
-      # step below gives examples changes priority over release and main HEAD,
-      # so one run tests one resolved ref instead of duplicating NPU work.
-      - name: Restore monitor state
-        if: github.event_name == 'schedule'
-        uses: actions/cache/restore@v4
-        with:
-          path: .monitor-state
-          key: transformers-examples-monitor-state-${{ github.run_id }}
-          restore-keys: transformers-examples-monitor-state-
-      - name: Monitor examples tree
-        id: examples
-        if: github.event_name == 'schedule'
-        run: |
-          set -euo pipefail
-          mkdir -p .monitor-state
-          sha=$(curl -fsSL --retry 3 "$GH_API/repos/$UPSTREAM_REPO/commits?sha=main&path=examples&per_page=1" | jq -r '.[0].sha // empty')
-          old=$(cat .monitor-state/.examples_head 2>/dev/null || true)
-          outcome=$(cat .monitor-state/.examples_outcome 2>/dev/null || true)
-          if [ -n "$sha" ] && [ "$old" != "$sha" ]; then
-            echo "$sha" > .monitor-state/.examples_head
-            echo changed=true >> "$GITHUB_OUTPUT"
-            echo ref="$sha" >> "$GITHUB_OUTPUT"
-            echo reason=examples >> "$GITHUB_OUTPUT"
-          elif [ "$outcome" = failure ]; then
-            echo changed=true >> "$GITHUB_OUTPUT"
-            echo ref="$sha" >> "$GITHUB_OUTPUT"
-            echo reason=examples-retry >> "$GITHUB_OUTPUT"
-          else
-            echo changed=false >> "$GITHUB_OUTPUT"
-          fi
-      - name: Monitor release
-        id: release
-        if: github.event_name == 'schedule'
-        run: |
-          set -euo pipefail
-          mkdir -p .monitor-state
-          tag=$(curl -fsSL --retry 3 "$GH_API/repos/$UPSTREAM_REPO/releases/latest" | jq -r '.tag_name // empty')
-          old=$(cat .monitor-state/.release_tag 2>/dev/null || true)
-          outcome=$(cat .monitor-state/.release_outcome 2>/dev/null || true)
-          if [ -n "$tag" ] && [ "$old" != "$tag" ]; then
-            echo "$tag" > .monitor-state/.release_tag
-            echo changed=true >> "$GITHUB_OUTPUT"
-            echo ref="$tag" >> "$GITHUB_OUTPUT"
-            echo reason=release >> "$GITHUB_OUTPUT"
-          elif [ "$outcome" = failure ]; then
-            echo changed=true >> "$GITHUB_OUTPUT"
-            echo ref="$tag" >> "$GITHUB_OUTPUT"
-            echo reason=release-retry >> "$GITHUB_OUTPUT"
-          else
-            echo changed=false >> "$GITHUB_OUTPUT"
-          fi
-      - name: Monitor main commit
-        id: commit
-        if: github.event_name == 'schedule'
-        run: |
-          set -euo pipefail
-          mkdir -p .monitor-state
-          sha=$(curl -fsSL --retry 3 "$GH_API/repos/$UPSTREAM_REPO/commits/main" | jq -r '.sha // empty')
-          old=$(cat .monitor-state/.main_sha 2>/dev/null || true)
-          outcome=$(cat .monitor-state/.commit_outcome 2>/dev/null || true)
-          if [ -n "$sha" ] && [ "$old" != "$sha" ]; then
-            echo "$sha" > .monitor-state/.main_sha
-            echo changed=true >> "$GITHUB_OUTPUT"
-            echo ref="$sha" >> "$GITHUB_OUTPUT"
-            echo reason=commit >> "$GITHUB_OUTPUT"
-          elif [ "$outcome" = failure ]; then
-            echo changed=true >> "$GITHUB_OUTPUT"
-            echo ref="$sha" >> "$GITHUB_OUTPUT"
-            echo reason=commit-retry >> "$GITHUB_OUTPUT"
-          else
-            echo changed=false >> "$GITHUB_OUTPUT"
-          fi
-      - name: Persist monitor state
-        if: github.event_name == 'schedule' && always()
-        uses: actions/cache/save@v4
-        with:
-          path: .monitor-state
-          # The run-id key avoids cache overwrite rules; record-outcome can
-          # restore this run's state, add the outcome, and save a post key.
-          key: transformers-examples-monitor-state-${{ github.run_id }}-post
-      - name: Decide target
-        id: decide
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          INPUT_REPO: ${{ inputs.target_repo }}
-          INPUT_REF: ${{ inputs.target_ref }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT_NAME" = workflow_dispatch ]; then
-            {
-              echo changed=true
-              echo trigger=workflow_dispatch
-              echo reason=manual
-              echo target_repo="${INPUT_REPO:-$UPSTREAM_REPO}"
-              echo target_ref="${INPUT_REF:-main}"
-            } >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          changed=false; reason=; ref=
-          if [ "${{ steps.examples.outputs.changed }}" = true ]; then
-            changed=true
-            reason="${{ steps.examples.outputs.reason }}"
-            ref="${{ steps.examples.outputs.ref }}"
-          elif [ "${{ steps.release.outputs.changed }}" = true ]; then
-            changed=true
-            reason="${{ steps.release.outputs.reason }}"
-            ref="${{ steps.release.outputs.ref }}"
-          elif [ "${{ steps.commit.outputs.changed }}" = true ]; then
-            changed=true
-            reason="${{ steps.commit.outputs.reason }}"
-            ref="${{ steps.commit.outputs.ref }}"
-          fi
-          {
-            echo changed=$changed
-            echo trigger=schedule
-            echo reason="$reason"
-            echo target_repo="$UPSTREAM_REPO"
-            echo target_ref="$ref"
-          } >> "$GITHUB_OUTPUT"
-
-  manifest-check:
-    needs: monitor
-    if: needs.monitor.outputs.changed == 'true'
-    runs-on: ubuntu-latest
-    outputs:
-      supported_matrix: ${{ steps.check.outputs.supported_matrix }}
-      has_supported: ${{ steps.check.outputs.has_supported }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          path: workflows
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ needs.monitor.outputs.target_repo }}
-          ref: ${{ needs.monitor.outputs.target_ref }}
-          path: target
-      - name: Check manifest
-        id: check
-        env:
-          TARGET_REPO: ${{ needs.monitor.outputs.target_repo }}
-          TARGET_REF: ${{ needs.monitor.outputs.target_ref }}
-          TRIGGER: ${{ needs.monitor.outputs.trigger }}
-        run: |
-          python3 -m pip install -q pyyaml
-          python3 workflows/scripts/check_examples_manifest.py --target-root target --manifest workflows/projects/transformers/examples_manifest.yaml --result-json manifest_check_result.json --target-repo "$TARGET_REPO" --target-ref "$TARGET_REF" --trigger "$TRIGGER"
-      - name: Validate and upload manifest
-        if: always()
-        # Keep the diagnostic artifact even when schema validation fails. The
-        # supported matrix is produced by check_examples_manifest.py; this
-        # validation step is not the matrix gate.
-        run: |
-          python3 -m pip install -q check-jsonschema
-          check-jsonschema --schemafile workflows/schemas/manifest_check_result.schema.json manifest_check_result.json
-        continue-on-error: true
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: transformers-manifest-check
-          path: manifest_check_result.json
-
-  run-example:
-    name: run-example (${{ matrix.example.path }})
-    needs: [monitor, manifest-check]
-    if: needs.manifest-check.outputs.has_supported == 'true'
-    runs-on: ${{ matrix.example.runner }}
-    timeout-minutes: ${{ matrix.example.timeout_minutes }}
-    defaults:
-      run:
-        shell: bash
-    strategy:
-      fail-fast: false
-      matrix:
-        example: ${{ fromJSON(needs.manifest-check.outputs.supported_matrix) }}
-      # Device mounts, image, timeout, and profile all come from the manifest.
-      # Adding a supported example should normally require a manifest entry and
-      # project-script branch, not another workflow edit.
-    env:
-      ASCEND_RT_VISIBLE_DEVICES: ${{ matrix.example.npu_devices }}
-      PROJECT_ROOT: ${{ github.workspace }}/workflows/projects/transformers
-      TARGET_ROOT: ${{ github.workspace }}/target
-      FIXTURE_DIR: ${{ github.workspace }}/workflows/projects/transformers/fixtures
-      PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
-      PIP_TRUSTED_HOST: repo.huaweicloud.com
-      HF_ENDPOINT: https://hf-mirror.com
-      MODELSCOPE_CACHE: /root/.cache/modelscope
-      PIP_TIMEOUT: '120'
-    container:
-      image: ${{ matrix.example.image }}
-      options: >-
-        --shm-size=64g ${{ matrix.example.device_options }}
-        --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
-        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
-        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
-        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
-        --volume=/data/ci-cache/pip:/root/.cache/pip
-        --volume=/data/ci-cache/modelscope:/root/.cache/modelscope
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          path: workflows
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ needs.monitor.outputs.target_repo }}
-          ref: ${{ needs.monitor.outputs.target_ref }}
-          path: target
-      - name: Check NPU
-        run: |
-          source /usr/local/Ascend/ascend-toolkit/set_env.sh
-          npu-smi info
-          python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())" || true
-      - name: Setup example
-        env:
-          PROFILE: ${{ matrix.example.profile }}
-        run: bash "$PROJECT_ROOT/scripts/setup_example.sh" "$PROFILE"
-      - name: Run example
-        env:
-          OVERLAY_ARGS: ${{ toJSON(matrix.example.overlay_args) }}
-        run: |
-          source /usr/local/Ascend/ascend-toolkit/set_env.sh
-          mkdir -p "$GITHUB_WORKSPACE/output"
-          CI_OUTPUT_DIR="$GITHUB_WORKSPACE/output" bash "$PROJECT_ROOT/scripts/run_example.sh" "${{ matrix.example.path }}" 2>&1 | tee "$GITHUB_WORKSPACE/output/example.log"
-
-  validate-results:
-    needs: [monitor, manifest-check, run-example]
-    if: always() && needs.manifest-check.outputs.has_supported == 'true'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        example: ${{ fromJSON(needs.manifest-check.outputs.supported_matrix) }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          path: workflows
-      - name: Write result
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET_REPO: ${{ needs.monitor.outputs.target_repo }}
-          TARGET_REF: ${{ needs.monitor.outputs.target_ref }}
-          TRIGGER: ${{ needs.monitor.outputs.trigger }}
-          EXAMPLE_PATH: ${{ matrix.example.path }}
-          IMAGE: ${{ matrix.example.image }}
-          EXPECTED_JOB: run-example (${{ matrix.example.path }})
-          STATUS: ${{ needs.run-example.result }}
-        run: |
-          set -euo pipefail
-          conclusion=$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" | jq -r --arg name "$EXPECTED_JOB" '.jobs[] | select(.name == $name) | .conclusion')
-          [ -n "$conclusion" ] || exit 1
-          [ "$conclusion" = success ] && status=success || { [ "$conclusion" = cancelled ] && status=cancelled || status=failure; }
-          mkdir -p output
-          python3 -c 'import json,os; json.dump({"trigger":os.environ["TRIGGER"],"target_repo":os.environ["TARGET_REPO"],"target_ref":os.environ["TARGET_REF"],"path":os.environ["EXAMPLE_PATH"],"image":os.environ["IMAGE"],"job_status":os.environ["STATUS"]},open("output/result.json","w"),indent=2)'
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: transformers-examples-${{ github.run_id }}-${{ strategy.job-index }}
-          path: output/result.json
-
-  record-outcome:
-    needs: [monitor, manifest-check, run-example]
-    if: always() && github.event_name == 'schedule' && needs.monitor.outputs.changed == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      # A failed scheduled run writes failure to the signal-specific state;
-      # the next monitor cycle can retry it even without a new upstream ref.
-      - uses: actions/cache/restore@v4
-        with:
-          path: .monitor-state
-          key: transformers-examples-monitor-state-${{ github.run_id }}-post
-          restore-keys: transformers-examples-monitor-state-
-      - name: Record outcome
-        env:
-          REASON: ${{ needs.monitor.outputs.reason }}
-          RUN_RESULT: ${{ needs.run-example.result }}
-          MANIFEST_RESULT: ${{ needs.manifest-check.result }}
-          HAS_SUPPORTED: ${{ needs.manifest-check.outputs.has_supported }}
-        run: |
-          set -euo pipefail
-          base="${REASON%-retry}"
-          if [ "$RUN_RESULT" = success ] || { [ "$RUN_RESULT" = skipped ] && [ "$MANIFEST_RESULT" = success ] && [ "$HAS_SUPPORTED" = false ]; }; then out=success; else out=failure; fi
-          mkdir -p .monitor-state
-          echo "$out" > ".monitor-state/.${base}_outcome"
-      - uses: actions/cache/save@v4
-        with:
-          path: .monitor-state
-          key: transformers-examples-monitor-state-${{ github.run_id }}-post
+  transformers-examples:
+    uses: ./.github/workflows/examples-template.yml
+    with:
+      # Namespaces cache keys (examples-monitor-state-transformers_*),
+      # artifact names and the scheduling paths under
+      # projects/transformers.
+      project: transformers
+      upstream_repo: huggingface/transformers
+      target_ref: ${{ inputs.target_ref }}
+      # 27 supported entries on linux-aarch64-a2-2; the legacy workflow
+      # fired them all at once. 8 keeps the daily run moving without
+      # stacking the whole matrix on the runner pool at once.
+      max_parallel: 8

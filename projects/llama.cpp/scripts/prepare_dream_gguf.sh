@@ -6,7 +6,11 @@
 set -euo pipefail
 
 TARGET_ROOT="${TARGET_ROOT:?TARGET_ROOT is required}"
-CACHE_ROOT="${DREAM_CACHE_ROOT:-/root/.cache/cosdt-ci-test/llama.cpp}"
+# Shared persistent runner cache (pool volume at ~/.cache/huggingface);
+# the legacy default /root/.cache/cosdt-ci-test/llama.cpp existed only
+# via a container bind-mount the engine does not provide. Keep the
+# DREAM_CACHE_ROOT expression in sync with setup_example.sh.
+CACHE_ROOT="${DREAM_CACHE_ROOT:-${HF_HOME:-${HOME}/.cache/huggingface}/llama.cpp}"
 HF_DIR="$CACHE_ROOT/Dream-v0-Instruct-7B-hf"
 GGUF_PATH="$CACHE_ROOT/Dream-v0-Instruct-7B.Q8_0.gguf"
 SITE_DIR="$CACHE_ROOT/convert-site"

@@ -11,8 +11,8 @@ concurrency:
 
 on:
   # Enable after the first successful workflow_dispatch run.
-  # schedule:
-  #   - cron: '40 */6 * * *'
+  schedule:
+    - cron: '40 */6 * * *'
   workflow_dispatch:
 
 permissions:

@@ -6,25 +6,24 @@
 # parallelism. The guard loop (monitor / manifest-check / run-example
 # matrix / validate-results / save-monitor-state) lives in the engine.
 #
-# === Status (2026-09-18) ===
-# The self-hosted quickstarts (projects/opencv/examples/
-# quickstart_py_version.py / quickstart_dnn_inference.py /
-# quickstart_cann_unit_tests.sh) and the fork-mirror (A) / engine
-# pre-check-sync (B) plan they required are RETIRED. The current
-# supported entry is a single self-hosted NPU DNN CANN smoke
-# (projects/opencv/scripts/test_npu_dnn.py) that mirrors the Quick-
-# start's mobilenetv2-12 + DNN_BACKEND_CANN + NPU forward path with
-# zero source patches.
-#
-# The earlier 4 supported legs (samples/dnn/{gpt2,gemma3,qwen,vlm}
-# _inference.py, 5.0.0 headless LLM/VLM samples) are withdrawn from
-# supported: each requires a multi-GB user-exported ONNX + opencv-
-# style tokenizer config.json and HF-mirror xet backup is blocked
-# from CN runners, so they can't run until a model-seed workflow
-# (cache-seed-class) is wired up. See projects/opencv/examples_manifest.yaml
-# header for the per-script blocker list. Re-enable them after the
-# first green run of test_npu_dnn.py + after the seed workflow lands.
-# schedule stays DISABLED until then:
+# === Status (2026-09-22) ===
+# supported = 3 self-hosted NPU smoke scripts (source: project,
+# projects/opencv/example/), all verified on 910B4 + CANN 9.1.0:
+#   - test_npu_dnn_classification.py   mobilenetv2-12 ONNX via
+#     DNN_BACKEND_CANN + DNN_TARGET_NPU, top-1=372 vs CPU reference
+#   - test_npu_dnn_superres.py         super-resolution-10 ONNX (static
+#     224x224, single output; fcn-resnet50 segmentation fails on CANN:
+#     dynamic H/W + dual output -> createOutputDataset ret=100000)
+#   - test_npu_cann_ops.py             cv2.cann classic ops vs CPU
+#     reference (cvtColor/flip/rotate/transpose/merge/split/add/subtract/
+#     bitwise; resize/crop are DVPP-VPC-broken on 910B4, threshold is
+#     AscendC-broken, uint8 arithmetic saturation diverges from CPU)
+# Upstream samples/ has no CANN-selectable sample (samples/dnn/common.py
+# backend/target maps lack cann/npu; classic DNN samples are GUI-bound),
+# hence the self-hosted legs. setup_example.sh source-builds opencv-cann
+# (~23 min cold) via scripts/patch_opencv_cann.py (8 CANN 9.1.0/aarch64
+# source patches, extracted from build_opencv_cann.sh).
+# schedule stays DISABLED until the first green manual run:
 #   schedule:
 #     - cron: '0 */6 * * *'
 
@@ -60,19 +59,12 @@ jobs:
         uses: ./.github/workflows/examples-template.yml
         with:
             project: opencv
-            # Upstream-native: the manifest's supported entries are real
-            # samples/ paths in opencv/opencv (5.0.0 LLM/VLM inference
-            # samples), so manifest-check validates against the upstream
-            # tree directly.
+            # supported = 3 self-hosted NPU smoke legs (source: project,
+            # see manifest). max_parallel 4 lets all 3 legs run in
+            # parallel; each leg's setup_example.sh source-builds
+            # opencv-cann (~23 min cold @-j2) when the image has no
+            # pre-built install, so cold pods serialize on the shared
+            # runner regardless.
             upstream_repo: opencv/opencv
             target_ref: ${{ inputs.target_ref }}
-            # 1 (single supported leg): keep matrix pressure low on
-            # the shared NPU runner. The supported entry is the
-            # self-hosted NPU DNN CANN smoke (projects/opencv/scripts/
-            # test_npu_dnn.py); the setup leg still source-builds
-            # opencv-cann on this runner (~23 min cold @-j2; the
-            # k8s runner pods are ephemeral so this never caches),
-            # so serialization matters. The 5
-            # doc-snippet CPU algorithms run as a setup_example.sh
-            # step-5 sanity check, not matrix legs.
-            max_parallel: 1
+            max_parallel: 4

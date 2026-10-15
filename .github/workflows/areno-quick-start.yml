@@ -1,0 +1,68 @@
+# areno quick start 看护 - 项目薄触发器。
+# 调用公共引擎 quick-start-template.yml；这里只声明项目差异（并发、runner、
+# 镜像、容器选项、upstream、被看护文档、测试命令）。
+#
+# AReno（inclusionAI）：单机 RL post-training 工具包（SFT/DPO/GRPO/GSPO/PPO +
+# OpenAI 兼容 serving）。NPU 栈：CANN 9.0.0 + torch 2.10.0+cpu + torch_npu
+# 2.10.0.post2，故用 9.0.0 镜像（非多数项目用的 9.1.0）。文档从引擎解析到的最新
+# release（v0.9.0 已带 NPU）源码安装：安装器检测到 torch_npu 后走
+# requirements/npu.txt，并现场编译 areno.accel._areno_accel_npu（Ascend C，无
+# Python 回退），timeout 覆盖整次源码构建。
+# 文档内容：单卡 GSPO-on-GSM8K 1 步 RLVR（Qwen3-0.6B，ModelScope）落 checkpoint，
+# 再 areno serve --backend npu 该 checkpoint，检查 /health + /v1/models +
+# /v1/chat/completions。Qwen3-0.6B bf16 约 1.2 GB，单卡 a2-1 足够。训练与推理都
+# 用 --attn-backend native（flash-attn-npu 0.3.0 的 kvcache 在 NPU graph capture
+# 下做同步 aclrtMemcpy，报 CANN 107030 杀掉 rollout worker）；serve 另限
+# --max-running-prompts 2（默认 16 × 32k KV 池约 60 GB 会 OOM）。
+name: areno-quick-start
+
+concurrency:
+  # schedule 串行；手动各自独立 group（format 必需，直接写 'manual-'||run_id 会
+  # 因字面量真值短路成同一 group）。
+  group: ${{ github.event_name == 'schedule' && 'areno-quick-start-schedule' || format('manual-{0}', github.run_id) }}
+  # 中途取消会丢 outcome 回写（重试依赖它）；手动本就是独立 group，无需取消。
+  cancel-in-progress: false
+
+on:
+  schedule:
+    - cron: '5 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  areno-quick-start:
+    uses: ./.github/workflows/quick-start-template.yml
+    with:
+      # 命名 cache key（quick-start-monitor-state-areno_*）、artifact
+      # （areno-quick-start-<run_id>）与测试工作目录（workflows/projects/areno）。
+      project: areno
+      # 测试 job 用自托管 NPU runner；cache I/O job 由引擎固定在 ubuntu-latest。
+      # 单卡即可：文档冒烟是 Qwen3-0.6B、--tp-size 1 --world-size 1。
+      test_runner: '["linux-aarch64-a2-1"]'
+      # CANN 9.0.0 配文档 pin 的 torch 2.10.0+cpu + torch_npu 2.10.0.post2。
+      image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+      container_options: >-
+        --shm-size=64g
+        --device=/dev/davinci0
+        --device=/dev/davinci_manager
+        --device=/dev/devmm_svm
+        --device=/dev/hisi_hdc
+        --volume=/usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        --volume=/usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi:ro
+        --volume=/etc/ascend_install.info:/etc/ascend_install.info:ro
+        --volume=/data/ci-cache/modelscope/areno:/root/.cache/modelscope
+      # 整次源码构建 + 首次 ModelScope 下载（Qwen3-0.6B ~1.2 GB + gsm8k）+
+      # 1 步 RLVR 冒烟 + serve 启停/对话。
+      timeout_minutes: 240
+      upstream_repo: inclusionAI/AReno
+      # 用 GitHub Contents API（非 raw）：引擎 monitor 与测试端都带同样的鉴权头，
+      # 保证读到同一份文档字节；?ref= 固定到触发本次的 ref，便于分支侧改文档后
+      # dispatch 验证。
+      doc_url: https://api.github.com/repos/cosdt-ci-test/workflows/contents/projects/areno/docs/Quick-start-Ascend.md?ref=${{ github.sha }}
+      doc_path: https://github.com/cosdt-ci-test/workflows/blob/${{ github.sha }}/projects/areno/docs/Quick-start-Ascend.md
+      # cwd 是 workflows/projects/areno；环境契约（MONITORED_DOC_URL / UPSTREAM_REF
+      # / NPU_READY）由引擎注入。项目侧的环境与安装都写在文档块里，测试类只搭 CANN
+      # 环境 + uv。
+      test_command: python -m unittest tests.test_quick_start_ascend -v 2>&1

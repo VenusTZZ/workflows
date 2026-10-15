@@ -31,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       target_ref:
-        description: Branch, tag, or SHA of deepspeedai/DeepSpeed to test (empty resolves to upstream default)
+        description: Branch, tag, or SHA of deepspeedai/DeepSpeed (empty selects latest release, falls back to master)
         required: false
         default: ''
         type: string
@@ -50,6 +50,8 @@ jobs:
       # scheduling paths under projects/deepspeed.
       project: deepspeed
       upstream_repo: deepspeedai/DeepSpeed
+      # Latest-release lookup may fail (e.g. API HTTP 403); DeepSpeed has no main branch.
+      default_branch: master
       examples_repo: deepspeedai/DeepSpeedExamples
       target_ref: ${{ inputs.target_ref }}
       max_parallel: 4

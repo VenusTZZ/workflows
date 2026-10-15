@@ -240,7 +240,10 @@ supported:
       - --diffusion-eps 0.001
       - --diffusion-algorithm 4
       - -v
-    timeout_minutes: 90
+    # 含冷缓存 prepare（~15GB ModelScope 下载 + Q8_0 转换，旧独立
+    # prepare-dream-gguf job 预算 240min）+ CANN 构建 + 运行。暖缓存
+    # 时 setup 秒级返回，富余无害。
+    timeout_minutes: 300
   - path: examples/simple-cmake-pkg
     profile: cmake-pkg
     runner: linux-aarch64-a2-1

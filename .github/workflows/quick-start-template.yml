@@ -377,7 +377,8 @@ jobs:
             echo "Monitor fired: reason=$reason ref=$ref"
 
             [ -n "$ref" ] || { echo "ERROR: monitor fired (reason=$reason) with empty ref - no upstream ref to test"; exit 1; }
-            SHA=$(curl -fsSL "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/$ref" \
+            SHA=$(curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 --max-time 30 \
+              "$GH_API/repos/${{ env.UPSTREAM_REPO }}/commits/$ref" \
               | jq -r '.sha // empty')
             [ -z "$SHA" ] && { echo "failed to resolve $ref"; exit 1; }
             echo "sha=$SHA" >> "$GITHUB_OUTPUT"
@@ -604,7 +605,10 @@ jobs:
             echo "result.json is empty; skipping schema validation"
             exit 0
           fi
-          python3 -m pip install -q check-jsonschema
+          # -U click：runner 宿主机 ~/.local 可能残留 click<8.2（新版
+          # check-jsonschema 的 ParamType 泛型下标语法要求 8.2+，否则
+          # TypeError: type 'ParamType' is not subscriptable）
+          python3 -m pip install -q --upgrade click check-jsonschema
           check-jsonschema \
             --schemafile workflows/schemas/result.schema.json output/result.json
 

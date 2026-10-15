@@ -1,256 +1,336 @@
 version: 1
-
-# OpenCV examples guard manifest — 2026-09-18 全量源码重析版。
-#
-# 数据源：opencv/opencv@5.0.0 sparse checkout 逐文件扫描（samples/ 共
-# 1157 文件；矩阵相关 .py 174 + .sh 5）。扫描方法：对每个 .py grep
-# namedWindow / imshow / waitKey / createTrackbar / setMouseCallback /
-# VideoCapture(0) / tkinter / plt.show / SpanSelector（GUI 判定）+
-# readNet* / setPreferableBackend / Caffe / FaceDetectorYN（设备与格
-# 式判定），可疑条目逐个读源码复核。
-#
-# === 自建 example 方案已废弃 ===
-# 原 supported 三件套（examples/quickstart_py_version.py /
-# quickstart_dnn_inference.py / quickstart_cann_unit_tests.sh）连同名
-# 为其准备的 fork-mirror (A) / 引擎 pre-check sync (B) 方案一并退役：
-# projects/opencv/examples/ 已删除，supported 直接指向 samples/ 真实
-# 路径，manifest-check 对上游 opencv/opencv 原生通过，不再依赖 fork
-# 或引擎改造。cannops gtest 的 25 个 known-broken 排除项记录仍在
-# docs/Quick-start-Ascend.md §"跑 CANN 单元测试"，随 gtest example
-# 移出本 manifest。
-#
-# === 分类总账（.py 174）===
-#   exclude（非 example）  117 = python/dnn helper 11 + dnn_model_runner
-#                              管线 19 + gdb 调试器 1 + 教程树
-#                              snippets(19)/tutorial_code(67) 86
-#   unsupported             53 = python 27（GUI 24 + cpu_only 3）
-#                              + dnn 26（GUI 24 + 设备 1 + 评估管线 1）
-#   supported                1 = NPU DNN CANN smoke（Quick-start 子集，
-#                              self-hosted in projects/opencv/scripts/
-#                              test_npu_dnn.py，详见 supported 段注）
-# 另：.sh 5 个全为 samples/install 安装脚本（exclude）；samples/cpp
-# (289 .cpp) + java/android/swift/winrt/winrt_universal/wp8/gpu/tapi/
-# hal/semihosting/directx/opengl/opencl/sycl/va_intel 等平台树
-# （~890 文件）矩阵不跑（cpp_matrix_skip，见 unsupported 末段）。
-#
-# === NPU 看护现状 ===
-# supported 段当前是 1 个 Quick-start 风格的 DNN CANN+NPU smoke
-#（mobilenetv2-12.onnx + OPENCV_FORCE_DNN_ENGINE=1 + DNN_BACKEND_CANN
-# + DNN_TARGET_NPU + 期望 top-1=372 patas monkey）。这条腿真正走
-# classic 引擎的 switchToCannBackend → GE 编译 → NPU forward，看护
-# 的是"源码构建 opencv 的 NPU 推理端到端链路"。源码构建本身含
-# CANN 后端的事由 setup_example.sh 第 5 步 DNN_BACKEND_CANN != 0 断
-# 言提前看护。
-#
-# === 5.0.0 LLM/VLM 推理样本（已退役出 supported）===
-# 此前 supported 列了 samples/dnn/gpt2_inference.py /
-# gemma3_inference.py / qwen_inference.py / vlm_inference.py 四个
-# 5.0.0 新增的 headless LLM/VLM 推理脚本。它们零非 cv2 依赖、纯
-# readNetFromONNX + cv.dnn.Tokenizer 自回归 decode，但每条都需要
-# 用户按各脚本 docstring 自行 export 的多 GB ONNX + opencv 风格
-# tokenizer config.json：
-#   - gpt2_inference.py  需要 fix-dynamic-axis 导出版（脚本固定
-#     窗口约束），onnx/models 的 gpt2-10.onnx 动态轴不可用。
-#   - gemma3_inference.py / qwen_inference.py  要 optimum-cli 从
-#     google/gemma-3-1b-it / Qwen2.5-0.5B-Instruct 重导。
-#   - vlm_inference.py    要 3 段（siglip + embedding + gemma2）
-#     多 GB ONNX，HF 镜像 xet 备份从 CN runner 拉不通。
-# 在上游补上模型种子 workflow（cache-seed 类，命中 shared hf cache
-# 根）之前没法跑通；因此从 supported 撤出。这与原 manifest §"未实
-# 跑验证（模型 seed 未接）"是同一判断。源码构建本身含 CANN 后端
-# 这件事继续由 setup_example.sh 第 5 步看护。
-
 scan:
   root: samples
-  include_extensions: ['.py', '.sh']
-
+  include_extensions: ['.py', '.sh', '.cpp']
 supported:
-  # ===== NPU DNN CANN smoke（Quick-start 子集）=====
-  # 走 Quick-start-Ascend.md §"跑 DNN 推理" 的核心子集：mobilenetv2-12
-  # + OPENCV_FORCE_DNN_ENGINE=1 + DNN_BACKEND_CANN + DNN_TARGET_NPU。
-  # path 是相对 target 的 '..' 跳出，指向本仓库
-  # projects/opencv/scripts/test_npu_dnn.py —— 这个脚本是 self-hosted
-  # 的 NPU 端到端 smoke（无第三方依赖，零 patch），原 manifests 的
-  # 4 个 LLM/VLM supported 因模型种子 workflow 未接入已撤出（见文件
-  # 头 "5.0.0 LLM/VLM 推理样本（已退役出 supported）" 段）。
+  # ===== self-hosted NPU smoke（projects/opencv/example/，source: project）=====
+  # 上游 samples 无一能经 CLI 选 CANN 后端（见 unsupported 各段注释），故
+  # NPU 核心特性用 3 个 self-hosted 脚本看护，覆盖 OpenCV 在 NPU 上的两条
+  # 通路：① cv::dnn 的 CANN 后端（分类 + 超分辨率）；② cannops 经典算子。
+  # 均已在 910B4 + CANN 9.1.0 实测跑通（细节见各 example docstring）。
+  # timeout_minutes 统一 60：setup_example.sh 冷启动要源码构建 opencv-cann
+  # （~23 min @-j2），3 腿并行时在共享 runner 上还有争抢；40 以下实测会被
+  # 15m/20m 上限在构建中途 kill（run 35725672646 的 cannops 腿）。
   #
-  # overlay_args 全是 fixture / target 解析：
-  #   --model      mobilenetv2-12.onnx，13.9 MB，CI 入仓（projects/
-  #                opencv/fixtures/），setup_example.sh step 4 已拷到
-  #                $TARGET_ROOT/fixtures/ 备用
-  #   --input      baboon.jpg 512x512，setup step 4 已从 upstream
-  #                samples/data/ 拷到 $TARGET_ROOT/fixtures/
-  #   --imagenet-topk  5（默认打印 top-5，落地日志看 class score 分布）
-  #   --expected-top1  372（ImageNet-1k patas / hussar monkey 类，与
-  #                     Quick-start 文档预期完全一致；CPU 参考 ≈ 0.91）
-  #
-  # 期望：GE 编译 + NPU forward 出 top-1=372，exit 0。GE 编译首腿约
-  # 0.5–1 min，整腿在 NPU box 端到端 ≈ 2–4 min。冷启动时 setup 还要
-  # 源码构建 opencv-cann（实测 ~23 min @-j2），合计 ~28 min，超时
-  # 留足余量设 40。
-  - path: ../workflows/projects/opencv/scripts/test_npu_dnn.py
+  # 1) DNN 分类：mobilenetv2-12.onnx（fixtures 入仓 13.9MB），conv/BN/ReLU/
+  #    pooling/FC/softmax 全链路 + top-1=372 与 CPU 参考对齐。
+  - source: project
+    path: example/test_npu_dnn_classification.py
     profile: opencv
     runner: linux-aarch64-a2-1
+    npu_devices: '0'
     image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
     overlay_args:
       - --model ${FIXTURE_DIR}/mobilenetv2-12.onnx
       - --input ${TARGET_ROOT}/samples/data/baboon.jpg
       - --imagenet-topk 5
       - --expected-top1 372
-    timeout_minutes: 40
+    timeout_minutes: 60
 
-# ===== unsupported =====
-# 源码重析后的完整清单（53 项 .py + 平台树）。分段：
-#   1. environment_blocked  GUI/交互依赖，headless CI 跑不动（48）
-#   2. device_blocked       CANN 不可达的路径/格式（1；openpose 等
-#                          格式障碍以叠加注释附在对应 GUI 条目上）
-#   3. cpu_only             headless 可跑但纯 CPU，NPU 看护价值低（3）
-#   4. eval_pipeline        精度评估需数据集（1）
-#   5. cpp_matrix_skip      非 .py/.sh 平台树（不占上面计数）
+  # 2) cannops 经典算子（cv2.cann.*）：cvtColor/flip/rotate/transpose/
+  #    merge/split/add/subtract/bitwise，全部与 CPU 参考逐元素对齐（910B4
+  #    实测）。跳过已知 broken：resize/crop（DVPP VPC 通道建失败）、
+  #    threshold（AscendC kernel 越界）、uint8 算术（饱和与 CPU 不一致）。
+  - source: project
+    path: example/test_npu_cann_ops.py
+    profile: opencv
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --input ${TARGET_ROOT}/samples/data/baboon.jpg
+    timeout_minutes: 60
+
+  # 3) DNN 超分辨率（非分类 layer：Conv/ReLU/Reshape/Transpose=PixelShuffle）。
+  #    super-resolution-10.onnx（SubPixel CNN，240KB 入仓），静态 224x224 单
+  #    输出，无 Shape/Gather/Cast——是 fcn-resnet50（动态 H/W + 双输出，CANN
+  #    后端 forward 报 ret=100000）的替代，覆盖分类之外的 layer。
+  - source: project
+    path: example/test_npu_dnn_superres.py
+    profile: opencv
+    runner: linux-aarch64-a2-1
+    npu_devices: '0'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12
+    overlay_args:
+      - --model ${FIXTURE_DIR}/super-resolution-10.onnx
+      - --input ${TARGET_ROOT}/samples/data/baboon.jpg
+    timeout_minutes: 60
+
+
 unsupported:
-  # ===== 1. environment_blocked =====
-  # setup_example.sh 的 BUILD_LIST 故意不编译 highgui（headless 镜像
-  # 无 GTK/Qt）——任何 namedWindow/imshow/waitKey/setMouseCallback/
-  # createTrackbar 在首个调用处 AttributeError；matplotlib 交互
-  # （SpanSelector/plt.show）与 VideoCapture(0) 摄像头兜底同理。
+  # ---- 最接近 NPU 的 5 个「整型直传后端」样本 ----
+  # 唯一「后端可调参」的形态：--backend/--target 用 type=int，
+  # raw int 直接塞给 net.setPreferableBackend/setPreferableTarget（不经
+  # common.py 的字符串映射），是离 CANN 后端物理距离最近的一批。
+  # 但仍被两道墙挡住，任一道都要 patch 源码才能突破：
+  #   1) argparse choices 白名单：backends 元组 = (DEFAULT=0, IE=2,
+  #      OPENCV=3, VKCOM=4, CUDA=5)，targets 元组 = (CPU=0, OPENCL=1,
+  #      OPENCL_FP16=2, MYRIAD=3, HDDL=8, VULKAN=4, CUDA=6, CUDA_FP16=7)。
+  #      两个元组都缺 DNN_BACKEND_CANN=8 / DNN_TARGET_NPU=9，于是
+  #      --backend 8 --target 9 在 argparse 处即被拒（invalid choice），
+  #      根本没走到 setPreferableBackend。
+  #   2) GUI 绑定：5 个全带 imshow/waitKey/namedWindow，headless CI 未编
+  #      highgui，首帧即挂。
+  # 若上游把 8/9 补进 choices 并 headless 化，这 5 个才有资格升 supported。
+  - samples/dnn/colorization.py
+  - samples/dnn/human_parsing.py
+  - samples/dnn/siamrpnpp.py
+  - samples/dnn/speech_recognition.py
+  - samples/dnn/virtual_try_on.py
 
-  # ---- samples/python（24）----
-  - samples/python/aruco_detect_board_charuco.py     # imshow+waitKey+摄像头兜底
-  - samples/python/asift.py                          # waitKey 渲染循环
-  - samples/python/audio_spectrogram.py              # imshow+waitKey+摄像头
-  - samples/python/background_subtractor_mask.py     # 同上
-  - samples/python/camera_calibration_show_extrinsics.py  # matplotlib 3D 交互
-  - samples/python/color_correction_model.py         # imshow+waitKey
-  - samples/python/demo.py                           # tkinter 样本启动器（非 highgui 但同为 GUI）
-  - samples/python/drawing.py                        # imshow+waitKey
-  - samples/python/essential_mat_reconstr.py         # 同上
-  - samples/python/floodfill.py                      # imshow+waitKey+trackbar+鼠标（原归 cpu_only；源码实测 GUI 绑死，已纠正）
-  - samples/python/grabcut.py                        # namedWindow+鼠标 ROI
-  - samples/python/lappyr.py                         # namedWindow+trackbar（同上纠正）
-  - samples/python/macbeth_chart_detection.py        # imshow+摄像头
-  - samples/python/morphology.py                     # namedWindow+trackbar（同上纠正）
-  - samples/python/mouse_and_match.py                # setMouseCallback
-  - samples/python/plane_tracker.py                  # namedWindow+鼠标
-  - samples/python/point_cloud.py                    # waitKey 渲染循环
-  - samples/python/qrcode.py                         # imshow+摄像头兜底
-  - samples/python/stereo_match.py                   # imshow+waitKey+trackbar
-  - samples/python/stitching_detailed.py             # imshow+waitKey
-  - samples/python/tst_scene_render.py               # 3D 场景渲染+waitKey（也被 calibrate 等当模块 import）
-  - samples/python/video.py                          # imshow+摄像头（CamShift；5.0.0 在树，原 manifest 漏登）
-  - samples/python/volume.py                         # imshow+waitKey 体渲染（同上漏登）
-  - samples/python/visualize_mono_calibration.py     # matplotlib SpanSelector 交互
+  # ---- 可经 CLI 切后端、但映射/choices 无 cann/npu 的 11 个 ----
+  # 走 common.py::get_backend_id 的字符串映射，--backend 默认 "default"(CPU)，
+  # choices=("default","openvino","opencv","vkcom","cuda")，可显式换到 cuda/openvino/vkcom。
+  # 但 get_backend_id/get_target_id 映射表与 choices 里都没有 cann/npu，到不了 NPU；
+  # 且 11 个全 GUI 绑定（imshow/waitKey/namedWindow），headless CI 未编 highgui。
+  # 较「整型直传」那 5 个多改一处：补自己的 choices 之外，还要给共享 common.py 补
+  # "cann"/"npu" 两行映射（改一次覆盖这 11 个）。
+  - samples/dnn/alpha_matting.py
+  - samples/dnn/auto_white_balance.py
+  - samples/dnn/classification.py
+  - samples/dnn/deblurring.py
+  - samples/dnn/edge_detection.py
+  - samples/dnn/inpainting.py
+  - samples/dnn/ldm_inpainting.py
+  - samples/dnn/object_detection.py
+  - samples/dnn/person_reid.py
+  - samples/dnn/segmentation.py
+  - samples/dnn/super_resolution.py
 
-  # ---- samples/dnn（24）----
-  # 通用画像：readNet*(ONNX) + setInput + forward 纯推理，但结果展示
-  # 全部 imshow/waitKey（部分 VideoCapture(0)/视频输入兜底）。"strip
-  # GUI 3-5 行 + 切 CANN 2 行"即可升 supported——留待上游 headless 化
-  # 或暴露 backend 参数后批量迁移。
-  - samples/dnn/action_recognition.py    # 3D-ResNet34 Kinetics；额外硬编码 DNN_BACKEND_INFERENCE_ENGINE（:49，OpenVINO）——CANN 镜像无 IE
-  - samples/dnn/alpha_matting.py         # MODNet ONNX；namedWindow x3
-  - samples/dnn/auto_white_balance.py    # FC4 ONNX；imshow+waitKey（最易 strip）
-  - samples/dnn/classification.py        # squeezenet/googlenet/resnet50；imshow+摄像头兜底
-  - samples/dnn/colorization.py          # Siggraph ONNX；imshow；backend 菜单含 IE 项
-  - samples/dnn/deblurring.py            # NAFNet ONNX；imshow x2
-  - samples/dnn/edge_detection.py        # 5.0.0 新增（原 manifest 只登记了 .cpp，.py 漏登）；imshow+视频输入
-  - samples/dnn/face_detect.py           # FaceDetectorYN 高层 API（非 readNet 路径），CANN 后端不直接适用；imshow+摄像头
-  - samples/dnn/fast_neural_style.py     # instance-norm ONNX；imshow+视频
-  - samples/dnn/human_parsing.py         # 5.0.0 新增（.py 原漏登）；imshow；backend 菜单含 IE
-  - samples/dnn/inpainting.py            # 5.0.0 新增（.py 原漏登）；imshow
-  - samples/dnn/ldm_inpainting.py        # 5.0.0 新增；LDM 三段 ONNX（需按文档自行导出）；imshow+waitKey 循环
-  - samples/dnn/mask_rcnn.py             # imshow+视频（4.x 归 object_detection 家族，5.0.0 独立成文件）
-  - samples/dnn/object_detection.py      # yolo/ssd/faster-rcnn；imshow+摄像头兜底
-  - samples/dnn/object_tracker.py        # 5.0.0 新增（.py 原漏登）；imshow+视频
-  - samples/dnn/openpose.py              # cv.dnn.readNet(.proto,.caffemodel)——5.0.0 已移除 Caffe importer，上游断供；另有 imshow+摄像头
-  - samples/dnn/optical_flow.py          # RAFT ONNX（旧 FlowNet Caffe 管线 5.0.0 已删；原 manifest 记 Caffe 障碍已过时）；imshow+waitKey
-  - samples/dnn/person_reid.py           # 5.0.0 新增（.py 原漏登）；imshow+视频
-  - samples/dnn/segmentation.py          # fcn-resnet50/u2netp；imshow+摄像头兜底
-  - samples/dnn/siamrpnpp.py             # SiamRPN++ ONNX；imshow+视频；backend 菜单含 IE
-  - samples/dnn/speech_recognition.py    # imshow+waitKey；backend 菜单含 IE
-  - samples/dnn/super_resolution.py      # SeeMoreDetails ONNX；namedWindow x2 键盘循环
-  - samples/dnn/text_detection.py        # DB/EAST ONNX；imshow
-  - samples/dnn/virtual_try_on.py        # 5.0.0 新增（.py 原漏登）；imshow；backend 菜单含 IE
+  # ---- 锁死后端、无法经 CLI 切换 ----
+  # 后端/引擎写死在源码里，或走不暴露 backend 的高层 API，没有 --backend 切换入口（换不了 cuda，更到不了 NPU）：
+  #   硬编码 DNN_BACKEND_OPENCV（CPU）      mobilenet_ssd_accuracy / fast_neural_style / mask_rcnn / optical_flow
+  #   硬编码 DNN_BACKEND_INFERENCE_ENGINE   action_recognition（OpenVINO）
+  #   硬编码 ENGINE_NEW（新引擎 CPU-only）  gpt2 / qwen / gemma3 / vlm
+  #   高层 API / 无 backend 入口（纯 CPU）  face_detect(FaceDetectorYN) / object_tracker(Tracker*) / text_detection(TextDetectionModel) / openpose(Caffe 已删)
+  - samples/dnn/mobilenet_ssd_accuracy.py
+  - samples/dnn/fast_neural_style.py
+  - samples/dnn/mask_rcnn.py
+  - samples/dnn/optical_flow.py
+  - samples/dnn/action_recognition.py
+  - samples/dnn/gpt2_inference.py
+  - samples/dnn/qwen_inference.py
+  - samples/dnn/gemma3_inference.py
+  - samples/dnn/vlm_inference.py
+  - samples/dnn/face_detect.py
+  - samples/dnn/object_tracker.py
+  - samples/dnn/text_detection.py
+  - samples/dnn/openpose.py
 
-  # ===== 2. device_blocked =====
-  - samples/dnn/custom_layer.py   # headless 纯推理，但走 CPU 自定义层注册路径——cannops 未实现 custom layer 注册
-
-  # ===== 3. cpu_only =====
-  # headless 可跑（源码实测无 GUI 调用——原 manifest 把 calibrate/
-  # odometry 归 GUI 是过时判定，已纠正），但纯 CPU 算法/打印，NPU 看
-  # 护价值低；CANN 算子覆盖归 cannops gtest 侧（见 Quick-start 文档），
-  # 不占 examples 矩阵。
-  - samples/python/calibrate.py       # 棋盘标定：输入 samples/data/left01-14.jpg 仓内自带，写 ./output；纯 CPU
-  - samples/python/odometry.py        # cv.Odometry RGBD：headless，但输入帧 repo data 不含（需 fixture）；纯 CPU
-  - samples/python/opencv_version.py  # 纯版本打印；CANN enum 断言已并入 setup_example.sh 第 5 步 sanity
-
-  # ===== 4. eval_pipeline =====
-  - samples/dnn/mobilenet_ssd_accuracy.py   # TF 模型精度评估，需 VOC/COCO 数据集与参考标注，非单例推理
-
-  # ===== 5. cpp_matrix_skip（非 .py/.sh，不占上面计数）=====
-  # run_example.sh 的解释器分发只覆盖 .py/.sh；C++ 走
-  # BUILD_EXAMPLES=ON + cmake add_executable 单独编译链，本期不接入
-  # （保留"未来可加"语义，peft 同款归类）。
-  - samples/cpp/**                  # 226 文件（含 124 tutorial .cpp），GUI/相机 demo 居多
-  - samples/dnn/*.cpp               # 与 .py 对应的 C++ 版（alpha_matting / auto_white_balance / classification / colorization / deblurring / edge_detection / face_detect / human_parsing / inpainting / object_detection / object_tracker / openpose / person_reid / segmentation / speech_recognition / super_resolution / text_detection + 纯 C++ 的 custom_layer_onnx）
-  - samples/java/**                 # Java 绑定 demo
-  - samples/android/**              # Android 平台
-  - samples/swift/**                # Swift/iOS 平台
-  - samples/winrt/**                # Windows Runtime
-  - samples/winrt_universal/**      # UWP
-  - samples/wp8/**                  # Windows Phone 8
-  - samples/gpu/**                  # CUDA/NPP demo
-  - samples/tapi/**                 # T-API (OpenCL 泛化) demo
-  - samples/hal/**                  # HAL demo
-  - samples/semihosting/**          # 嵌入式 semihosting
-  - samples/directx/**              # Direct3D
-  - samples/opengl/**               # OpenGL interop
-  - samples/opencl/**               # OpenCL kernel
-  - samples/sycl/**                 # SYCL
-  - samples/va_intel/**             # VA-API
-
-  # ===== 原 scan.exclude 项迁移（2026-09-20）：opencv 的 exclude 形态是
-  # helpers + 构建配置 + 文档 + 资源 + 教程树 + 管线 + 调试配套，分目录/单文件
-  # 两种形式混合。扫描引擎从未实现 exclude，下列子项此前每天 audit 都作为
-  # + new_paths 报红（命中 include_extensions 的子文件均会出现在 discovered
-  # 集合里）；迁移后这里作为单一事实源。具体子文件清单以
-  # 上游 opencv/opencv@5.0.0 HEAD 为准，本段覆盖 exclude 原意。
-  #
-  # ---- helpers / 构建配置 / 文档 / 资源（samples/python + samples/dnn）----
-  - samples/python/_coverage.py             # 上游测试覆盖率 helper
-  - samples/python/_doc.py                  # doc 生成 helper
-  - samples/python/common.py                # samples/python 共享 helper（splitfn/Sketcher）
-  - samples/python/CMakeLists.txt           # 构建配置（扩展名不进扫描）
-  - samples/python/_run_winpack_demo.cmd    # Windows 启动脚本（扩展名不进扫描）
-  - samples/dnn/common.py                   # dnn 样本共享 helper
-  - samples/dnn/common.hpp                  # 同上（C++ 头，扩展名不进扫描）
-  - samples/dnn/custom_layers.hpp           # custom_layer 的实现配套（扩展名不进扫描）
-  - samples/dnn/custom_layer_onnx.cpp       # 同上（扩展名不进扫描）
-  - samples/dnn/download_models.py          # 模型下载器：seed 接管后无需单独看护
-  - samples/dnn/shrink_tf_graph_weights.py  # TF graph 工具
-  - samples/dnn/tf_text_graph_common.py     # TF→OpenCV text graph 转换 helper
+  # ---- 8 个辅助工具（非 example）：被 dnn sample import 或作为前置调用 ----
+  #   common.py                     参数/模型/后端映射 helper（各 sample 均 from common import *）
+  #   shrink_tf_graph_weights.py    TF 冻结图权重转 fp16 的独立 CLI（非推理 demo）
+  #   face_detector/                目录：FaceDetector 的 .prototxt/.pbtxt 模型 + 训练配置
+  #   tf_text_graph_*.py            生成 .pbtxt 文本图的前置工具（SSD/Faster-RCNN 等 sample 依赖）
+  - samples/dnn/common.py  
+  - samples/dnn/shrink_tf_graph_weights.py  
+  - samples/dnn/face_detector/    
+  - samples/dnn/tf_text_graph_common.py     
   - samples/dnn/tf_text_graph_efficientdet.py
   - samples/dnn/tf_text_graph_faster_rcnn.py
   - samples/dnn/tf_text_graph_mask_rcnn.py
   - samples/dnn/tf_text_graph_ssd.py
-  - samples/dnn/models.yml                  # 模型清单元数据（扩展名不进扫描）
-  - samples/dnn/README.md                   # 文档（扩展名不进扫描）
-  - samples/dnn/CMakeLists.txt              # 构建配置（扩展名不进扫描）
-  - samples/dnn/js_face_recognition.html    # js demo（扩展名不进扫描）
-  - samples/dnn/face_detector/              # 资源目录
-  - samples/dnn/results/                    # 资源目录
+
+  # ---- C++ sample 矩阵（samples/cpp 198 .cpp + samples/dnn/*.cpp 18）----
+  # 绝大多数纯 CPU 经典 CV demo，纯 CPU 的样本/片段/教程按目录裸列在下面「纯 CPU」块；
+  # 非纯 CPU 的例外集中在「例外」块并逐条注释。
+
+  # ==== 例外（非纯 CPU，dnn 21 + GPU/异构 2 + CUDA 教程 2）====
+  # dnn（21 = samples/dnn/*.cpp 18 + samples/cpp 3）：走 cv::dnn 但默认 CPU backend、
+  # 无 cann/npu 后端选项，故不在 NPU 看护范围。
+    # GPU/异构（2）：
+  - samples/cpp/stitching_detailed.cpp    # 全景拼接，CUDA 可选（默认 CPU）；headless
+  - samples/cpp/application_trace.cpp    # cv::UMat→OpenCL；GUI
+  # CUDA 教程（tutorial_code/gpu/）：
+  - samples/cpp/tutorial_code/gpu/gpu-basics-similarity/gpu-basics-similarity.cpp    # CUDA
+
+  - samples/dnn/alpha_matting.cpp    # MODNet；GUI
+  - samples/dnn/auto_white_balance.cpp    # FC4；GUI
+  - samples/dnn/classification.cpp    # 分类；GUI
+  - samples/dnn/colorization.cpp    # 上色；GUI
+  - samples/dnn/custom_layer_onnx.cpp    # ONNX 自定义层教程配套 sample；GUI
+  - samples/dnn/deblurring.cpp    # 去模糊；GUI
+  - samples/dnn/edge_detection.cpp    # 边缘检测；GUI
+  - samples/dnn/face_detect.cpp    # FaceDetectorYN（非 readNet 路径）；GUI
+  - samples/dnn/human_parsing.cpp    # 人体解析；GUI
+  - samples/dnn/inpainting.cpp    # 修复；GUI
+  - samples/dnn/object_detection.cpp    # yolo/ssd；GUI
+  - samples/dnn/object_tracker.cpp    # 跟踪；GUI
+  - samples/dnn/openpose.cpp    # Caffe（5.0.0 importer 已删→断供）；GUI
+  - samples/dnn/person_reid.cpp    # ReID；GUI
+  - samples/dnn/segmentation.cpp    # 分割；GUI
+  - samples/dnn/speech_recognition.cpp    # 语音；GUI
+  - samples/dnn/super_resolution.cpp    # 超分；GUI
+  - samples/dnn/text_detection.cpp    # 文本检测；GUI
+  - samples/cpp/digits_lenet.cpp    # Caffe LeNet（注释自称 CPU-only）；GUI
+  - samples/cpp/color_correction_model.cpp    # 可选 TF 检测器；GUI
+  - samples/cpp/macbeth_chart_detection.cpp    # 可选 TF 检测器；GUI
+
+  # ==== 纯 CPU（顶层 43 个直接子文件 + 3 个整目录折叠）====
+  # 顶层 43 个 *.cpp 是 samples/cpp/ 的直接子文件（无更小子目录）；
+  # ---- 顶层（纯 CPU）----
+  - samples/cpp/3calibration.cpp
+  - samples/cpp/aruco_dict_utils.cpp
+  - samples/cpp/asift.cpp
+  - samples/cpp/audio_spectrogram.cpp
+  - samples/cpp/barcode.cpp
+  - samples/cpp/bgfg_segm.cpp
+  - samples/cpp/calibration.cpp
+  - samples/cpp/connected_components.cpp
+  - samples/cpp/cout_mat.cpp
+  - samples/cpp/delaunay2.cpp
+  - samples/cpp/demhist.cpp
+  - samples/cpp/detect_mser.cpp
+  - samples/cpp/drawing.cpp
+  - samples/cpp/essential_mat_reconstr.cpp
+  - samples/cpp/example_features_aliked_lightglue.cpp
+  - samples/cpp/fback.cpp
+  - samples/cpp/flann_search_dataset.cpp
+  - samples/cpp/floodfill.cpp
+  - samples/cpp/gauge.cpp
+  - samples/cpp/geometry.cpp
+  - samples/cpp/grabcut.cpp
+  - samples/cpp/image_alignment.cpp
+  - samples/cpp/imagelist_creator.cpp
+  - samples/cpp/intelligent_scissors.cpp
+  - samples/cpp/lkdemo.cpp
+  - samples/cpp/morphology2.cpp
+  - samples/cpp/multiview_calibration_sample.cpp
+  - samples/cpp/npr_demo.cpp
+  - samples/cpp/opencv_version.cpp
+  - samples/cpp/pca.cpp
+  - samples/cpp/qrcode.cpp
+  - samples/cpp/select3dobj.cpp
+  - samples/cpp/simd_basic.cpp
+  - samples/cpp/stereo_calib.cpp
+  - samples/cpp/stereo_match.cpp
+  - samples/cpp/videocapture_audio.cpp
+  - samples/cpp/videocapture_audio_combination.cpp
+  - samples/cpp/videocapture_combined.cpp
+  - samples/cpp/videocapture_depth.cpp
+  - samples/cpp/videocapture_gphoto2_autofocus.cpp
+  - samples/cpp/videocapture_gstreamer_pipeline.cpp
+  - samples/cpp/videocapture_microphone.cpp
+  - samples/cpp/videowriter.cpp
+
+  # ----  纯CPU ----
+  - samples/cpp/example_cmake/    # CMake 构建模板 demo（纯 CPU）
+  - samples/cpp/snippets/         # 25 个纯 CPU 短片段
+  # tutorial_code 纯 CPU 教程（123 .cpp 按子目录折叠；gpu/ 2 个 CUDA 已单独列在「例外」块）
+  - samples/cpp/tutorial_code/calib3d/             # 相机标定 + 实时位姿估计（9）
+  - samples/cpp/tutorial_code/core/                # core 基础（12）
+  - samples/cpp/tutorial_code/features/            # 特征/匹配/Homography（11）
+  - samples/cpp/tutorial_code/HighGUI/             # HighGUI trackbar（2）
+  - samples/cpp/tutorial_code/Histograms_Matching/ # 直方图（6）
+  - samples/cpp/tutorial_code/imgcodecs/           # 图像读写（2）
+  - samples/cpp/tutorial_code/ImgProc/             # 图像处理（16）
+  - samples/cpp/tutorial_code/ImgTrans/            # 图像变换（13）
+  - samples/cpp/tutorial_code/introduction/        # 入门（3）
+  - samples/cpp/tutorial_code/ml/                  # ML PCA（1）
+  - samples/cpp/tutorial_code/objectDetection/     # ArUco 检测（10）
+  - samples/cpp/tutorial_code/photo/               # 照片处理（5）
+  - samples/cpp/tutorial_code/ShapeDescriptors/    # 形状描述（6）
+  - samples/cpp/tutorial_code/snippets/            # 片段（14）
+  - samples/cpp/tutorial_code/TrackingMotion/      # 角点/跟踪（4）
+  - samples/cpp/tutorial_code/video/               # 视频处理（5）
+  - samples/cpp/tutorial_code/videoio/             # 视频读写（4）
+  
+  # ===== gpu_hetero_platform（GPU/异构/图形/硬件/平台 示例）=====
+  # 按内容分（不按语言）：这批是真·GPU / 异构 / 图形 / 硬件 / 平台绑定示例。
+  # 其中 GPU/异构类与算力后端相关，但目标是 CUDA/OpenCL/SYCL/OpenGL/D3D/VA-API，均无 NPU（上游
+  # samples 全树 0 处 Ascend 引用）。
+  #
+  # ---- GPU / 异构计算示例（C++）----
+  - samples/gpu                  # CUDA：cv::cuda::GpuMat 加速（morphology/hough/光流/立体/super_resolution/video 读写等 13 .cpp）
+  - samples/tapi                # T-API：cv::UMat 可调度到 OpenCL（clahe/光流/camshift/自定义 OpenCL kernel 等 8 .cpp）
+  - samples/opencl              # OpenCV↔OpenCL 互操作
+  - samples/sycl                 # OpenCV↔SYCL 互操作
+  # ---- GPU 图形 / 硬件视频互操作 ----
+  - samples/opengl               # OpenGL interop
+  - samples/directx              # Direct3D 9/10/11 surface↔UMat 互操作
+  - samples/va_intel             # VA-API（Intel 视频硬解码）互操作
+  # ---- 硬件抽象 / 嵌入式 ----
+  - samples/hal                  # 功能替换机制演示（c_hal 返错 + slow_hal 慢逻辑运算，纯 CPU，非 GPU）
+  - samples/semihosting          # 嵌入式 norm / histogram
+  # ---- 平台 / 语言绑定（GUI/移动端，非 GPU 计算）----
+  - samples/java                # Java/Scala/Clojure 绑定
+  - samples/android              # Android 平台
+  - samples/swift                # Swift/iOS 平台
+  - samples/winrt                # Windows Runtime
+  - samples/winrt_universal      # UWP
+  - samples/wp8                  # Windows Phone 8
+
+  # ---- helpers / 构建配置 / 文档 / 资源（samples/python + samples/dnn）----
+  - samples/python/_coverage.py             
+  - samples/python/_doc.py                 
+  - samples/python/common.py               
+  - samples/python/_run_winpack_demo.cmd   
+           
+  - samples/dnn/common.hpp                  
+  - samples/dnn/custom_layers.hpp           
+  - samples/dnn/download_models.py         
+
+  - samples/dnn/results/     # 对比文件
+
   # ---- 管线 / 调试配套 ----
-  - samples/dnn/dnn_model_runner/           # 19 个 .py：转换 + 精度评估管线
-  - samples/gdb/                            # gdb pretty-printer
-  - samples/install/                        # 5 个 .sh 安装脚本
+  - samples/dnn/dnn_model_runner/           
+  - samples/gdb/                            
+  - samples/install/   
+
   # ---- 教程树（非 example 树，整体剪枝）----
-  # snippets(19) + tutorial_code(67) = 86 个 .py。源码实测其中 9 个
-  # headless：7 个纯 CPU 教程可跑（snippets/stitching.py、
-  # compareHist_Demo、file_input_output、hough_line x2、hdr_imaging、
-  # documentation），2 个是 PyTorch→ONNX 转换工具（voc_segm_test /
-  # py_to_py_fcn_resnet50，需 torch + VOC 数据）。即便可跑也是教程
-  # 价值（纯 CPU 算子演示），不入 unsupported 复审段。
   - samples/python/snippets/
   - samples/python/tutorial_code/
+
   # ---- 资源 / 元数据 / 全局 ----
   - samples/data/                           # 图/视频/模型资源
   - '**/__pycache__'                        # 字节码缓存
-  - '**/CMakeLists.txt'                     # 构建配置（glob）
+
+  # ---- samples/python（3）：可选加速路径 ----
+  # 默认仍是 CPU，但暴露了可选的非 CPU 加速入口，不算「与 GPU 无关」：
+  #   stitching_detailed.py       --try_cuda → cv.detail_*Matcher(try_cuda)，可选 CUDA
+  #   color_correction_model.py   可选 TF(dnn) ColorChecker 检测器（backend 含 cuda/webnn），默认非 dnn 兜底
+  #   macbeth_chart_detection.py  可选 TF(dnn) Macbeth 检测器（backend 含 cuda），默认非 dnn 兜底
+  # 三者都到不了 NPU：backend 映射无 cann/npu，CUDA 路径无 Ascend 对应。
+  - samples/python/color_correction_model.py
+  - samples/python/macbeth_chart_detection.py
+  - samples/python/stitching_detailed.py
+
+  # ---- samples/python（21）：纯 CPU 算法 demo，与 GPU/NPU 都无关 ----
+  # 这些不走 cv.dnn，是 OpenCV 非 DNN API（特征/标定/立体/3D/音频/
+  # 绘图…）的演示，既无 GPU 也无 NPU 概念——没有 backend/target 可暴露，
+  # 也就没有任何「上游改动后升 supported」的路径，headless 化后仍是 CPU
+  # sample。
+  - samples/python/aruco_detect_board_charuco.py
+  - samples/python/asift.py
+  - samples/python/audio_spectrogram.py
+  - samples/python/background_subtractor_mask.py
+  - samples/python/camera_calibration_show_extrinsics.py
+  - samples/python/demo.py
+  - samples/python/drawing.py
+  - samples/python/essential_mat_reconstr.py
+  - samples/python/floodfill.py
+  - samples/python/grabcut.py
+  - samples/python/lappyr.py
+  - samples/python/morphology.py
+  - samples/python/mouse_and_match.py
+  - samples/python/plane_tracker.py
+  - samples/python/point_cloud.py
+  - samples/python/qrcode.py
+  - samples/python/stereo_match.py
+  - samples/python/tst_scene_render.py
+  - samples/python/video.py
+  - samples/python/volume.py
+  - samples/python/visualize_mono_calibration.py
+
+  # ---- 纯 CPU 示例（4，headless，与 GPU/NPU 无关）----
+  # 这 4 个是真 example 但纯 CPU 路径：要么不走 cv.dnn（标定/里程计/版本打印），
+  # 要么走 cv.dnn 但自定义层是 CPU 注册（cannops 未实现 custom layer 注册）。
+  # 没有任何 backend/target 可暴露到 NPU，headless 化后仍是 CPU，性质不变。
+  #   custom_layer.py   headless 纯推理，CPU 自定义层注册路径
+  #   calibrate.py      棋盘标定：输入 samples/data/left01-14.jpg 仓内自带，写 ./output
+  #   odometry.py       cv.Odometry RGBD：headless，输入帧 repo data 不含（需 fixture）
+  #   opencv_version.py 纯版本打印；CANN enum 断言已并入 setup_example.sh 第 5 步 sanity
+  - samples/dnn/custom_layer.py
+  - samples/python/calibrate.py
+  - samples/python/odometry.py
+  - samples/python/opencv_version.py
