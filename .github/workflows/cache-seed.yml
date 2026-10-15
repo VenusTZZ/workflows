@@ -69,7 +69,7 @@ jobs:
       PIP_EXTRA_INDEX_URL: https://repo.huaweicloud.com/ascend/repos/pypi
       PIP_TIMEOUT: "120"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install seeder stack
         run: |

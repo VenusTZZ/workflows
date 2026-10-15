@@ -282,12 +282,12 @@ jobs:
       has_supported: ${{ steps.check.outputs.has_supported }}
     steps:
       - name: Checkout workflows
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: workflows
 
       - name: Checkout target
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ needs.monitor.outputs.target_repo }}
           ref: ${{ needs.monitor.outputs.target_ref }}
@@ -299,7 +299,7 @@ jobs:
       # branch (DeepSpeedExamples uses master, not main).
       - name: Checkout examples repo
         if: inputs.examples_repo != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ inputs.examples_repo }}
           path: examples
@@ -358,12 +358,12 @@ jobs:
       image: ${{ matrix.example.image }}
     steps:
       - name: Checkout workflows
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: workflows
 
       - name: Checkout target
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ needs.monitor.outputs.target_repo }}
           ref: ${{ needs.monitor.outputs.target_ref }}
@@ -371,7 +371,7 @@ jobs:
 
       - name: Checkout examples repo
         if: inputs.examples_repo != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ inputs.examples_repo }}
           path: examples
@@ -421,7 +421,7 @@ jobs:
         example: ${{ fromJSON(needs.manifest-check.outputs.supported_matrix) }}
     steps:
       - name: Checkout workflows
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: workflows
 
