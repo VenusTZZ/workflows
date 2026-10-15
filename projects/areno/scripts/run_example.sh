@@ -46,6 +46,11 @@ export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
 # 持久（modelscope 复用过），故把 triton 缓存也指到那里，让一次性编译成果跨 run
 # 复用（kernel 源码/triton/SoC 变了会按 key 正确重编）。
 export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-/root/.cache/triton}"
+# NPU 内存分配器碎片治理：pi 的 backward OOM 里 reserved(25.63GiB) 明显大于
+# allocated(24.08GiB)——约 1.5GiB 卡在碎片上拿不回来。expandable_segments
+# 让分配器复用保留段（本仓 slime 的 run_example.sh 同款做法），对长序列
+# 训练的收益最直接。
+export PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:True}"
 
 python -c "import torch, torch_npu; print('NPU available:', torch.npu.is_available(), 'devices:', torch.npu.device_count())"
 

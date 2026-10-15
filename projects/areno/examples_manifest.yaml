@@ -337,6 +337,9 @@ supported:
       - --tp-size 4
       - --world-size 4
       - --adam-4bit
+      # backward 实测 OOM（打包批 215K token）：优化器状态挪 CPU，省 ~1GB/卡，
+      # 配合 run_example.sh 的 expandable_segments 治碎片
+      - --optimizer-state-offload cpu
       - --dataset-path ${ARENO_PI_DATA}
       - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/pi/dataset_loader.py
       - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/pi/reward.py
