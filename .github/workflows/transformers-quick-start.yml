@@ -64,7 +64,7 @@ jobs:
           key: transformers-quick-start-monitor-state-${{ github.run_id }}
           restore-keys: transformers-quick-start-monitor-state-
       - name: Checkout workflows
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: workflows
       - name: Monitor signals
@@ -106,7 +106,7 @@ jobs:
           python -c "import torch, torch_npu; print(torch.__version__, torch_npu.__version__, torch.npu.device_count())" || true
       - name: Checkout target
         if: steps.monitor.outputs.changed == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ env.UPSTREAM_REPO }}
           ref: ${{ steps.monitor.outputs.test_ref }}
@@ -171,7 +171,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout workflows (provides schemas/result.schema.json)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: workflows
           fetch-depth: 1

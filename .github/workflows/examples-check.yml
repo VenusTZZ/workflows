@@ -1,5 +1,5 @@
 # examples-check: daily reconciliation of every project's examples_manifest.yaml
-# against its upstream example tree. Design: docs/examples-check-design.md.
+# against its upstream example tree.
 #
 # Data source of truth is the thin workflow that actually runs (with.project /
 # with.upstream_repo / with.examples_repo / with.default_branch) - never
@@ -22,9 +22,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.x'
 
