@@ -29,7 +29,7 @@ SUPPORTED_PROFILES=(
   diffusers-controlnet-sdxl diffusers-llada2 diffusers-gligen diffusers-controlnet-wds
   diffusers-orpo-wds diffusers-sdxl-full diffusers-lcm-zero3
   diffusers-kandinsky-prior diffusers-multi-subject-inpaint diffusers-pixart
-  diffusers-realfill diffusers-flux2-klein diffusers-hidream
+  diffusers-realfill diffusers-flux2-klein
 )
 profile_known=0
 for _p in "${SUPPORTED_PROFILES[@]}"; do
@@ -429,10 +429,8 @@ declare -A PROFILE_PIP=(
   [diffusers-controlnet-wds]="webdataset==0.2.86 braceexpand opencv-python-headless deepspeed>=0.18.2"
   [diffusers-orpo-wds]="webdataset braceexpand"
   # hf_transfer: parallel hub downloads for the pre-downloaded models.
-  # diffusers-hidream runs with launcher=accelerate-deepspeed-zero3.
   [diffusers-pixart]="hf_transfer"
   [diffusers-flux2-klein]="hf_transfer"
-  [diffusers-hidream]="hf_transfer deepspeed>=0.18.2"
 )
 
 # download_assets tokens (comma-separated) for the profile's models/datasets.
@@ -829,20 +827,6 @@ with open(os.environ["GITHUB_ENV"], "a") as fh:
     fh.write(f"FLUX2_KLEIN_DATASET={data_dir}\n")
 print(f"prepared img2img dataset at {data_dir}", flush=True)
 PY
-}
-
-setup_diffusers_hidream() {
-  # HiDream-I1-Dev（17B DiT + CLIP×2 + T5；仓内不含第 4 编码器）+ 第 4 编码器
-  # Llama-3.1-8B-Instruct 用 NousResearch 社区镜像（实测非 gated；4 个权重分片
-  # 与 meta 原仓逐字节同大小、tokenizer.json/config 一致；HiDream 只取 32 层
-  # hidden_states，不用 LM head/chat template，替换零影响）。跳过 llama 仓
-  # original/ 里 16GB 的 .pth 重复。合计下载 ~64GB。deepspeed（ZeRO-3
-  # launcher）与 hf_transfer 由 PROFILE_PIP 表提供。
-  hub_snapshot "HiDream-ai/HiDream-I1-Dev" hidream_model HIDREAM_MODEL_PATH \
-    "model_index.json,scheduler/*,tokenizer/*,tokenizer_2/*,tokenizer_3/*,text_encoder/*,text_encoder_2/*,text_encoder_3/*,transformer/*,vae/*" \
-    -
-  hub_snapshot "NousResearch/Meta-Llama-3.1-8B-Instruct" llama31_8b_instruct HIDREAM_LLAMA_PATH \
-    - "original/*"
 }
 
 # Base stack + the three tables ALWAYS apply; a bespoke setup_<profile>()
