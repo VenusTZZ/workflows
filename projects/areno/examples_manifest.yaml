@@ -312,50 +312,49 @@ supported:
       - --max-prompt-tokens 8192
       - --max-context-len 8192
       - --drop-rollout-state
-  # # pi：用 pi coding agent（pi.dev）做 ModelScope SWE-smith sqlparse 仓库修复的
-  # # agentic RLVR（GRPO）。run_agent.py 驱动外部 pi CLI（Node.js），经二级代理
-  # # pi_proxy.py 适配流式请求到本地 rollout 代理（保留 token/logprob/routing 回放）；
-  # # reward.py 跑 swesmith_verify 的 pytest 验证（0/1）。上游默认配方是单卡 QLoRA
-  # # （Ling-3.0-tiny + NF4 + LoRA 32），但 QLoRA 在 areno 源码里 CUDA-only
-  # # （engine/config.py:91,308 / worker.py:79）；QLoRA 与 pi 机制正交，故走非
-  # # QLoRA 变体：全参训练 Ling（同 bash_game 的 4 卡 TP + adam-4bit +
-  # # triton-ascend/fla）。外部 pi CLI + Node.js + fd/ripgrep 与 SWE-smith 数据由
-  # # install_pi_toolchain 提供（npmmirror/apt/ModelScope；generate_dataset
-  # # --limit 1 只取 1 个任务冒烟；overlay 把 max-new-tokens 压到 256（示例默认
-  # # 4096 × 32 轮 ≈ 13 万 token/attempt → 约 73 分钟，CI 压不动）。max_turns/
-  # # timeout 属数据契约/训练语义，不动；256 token × 32 轮 ≈ 4.5 分钟。
-  # # 只影响耗时不影响退出码（引擎只认退出码；GRPO 需 n-samples≥2，故保留 2）。
-  # # 组件见 unsupported。
-  # - path: examples/agentic/pi/run_agent.py
-  #   profile: pi_npu
-  #   runner: linux-aarch64-a2-4
-  #   npu_devices: '0,1,2,3'
-  #   image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
-  #   timeout_minutes: 300
-  #   overlay_args:
-  #     - --ckpt inclusionAI/Ling-3.0-tiny
-  #     - --tp-size 4
-  #     - --world-size 4
-  #     - --adam-4bit
-  #     # 注：--optimizer-state-offload 仅 CUDA 后端可用（trainer_config.py:110
-  #     # 硬校验），NPU 用不了。backward 显存余量靠 run_example.sh 的
-  #     # expandable_segments 治碎片，不够再降 max-context-len。
-  #     - --dataset-path ${ARENO_PI_DATA}
-  #     - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/pi/dataset_loader.py
-  #     - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/pi/reward.py
-  #     - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/pi/run_agent.py
-  #     - --algo grpo
-  #     - --batch-size 1
-  #     - --n-samples 2
-  #     - --mini-bs 1
-  #     - --max-steps 1
-  #     - --max-running-prompts 2
-  #     - --max-context-len 16384
-  #     - --max-new-tokens 256
-  #     - --disable-thinking
-  #     - --drop-rollout-state
+  # pi：用 pi coding agent（pi.dev）做 ModelScope SWE-smith sqlparse 仓库修复的
+  # agentic RLVR（GRPO）。run_agent.py 驱动外部 pi CLI（Node.js），经二级代理
+  # pi_proxy.py 适配流式请求到本地 rollout 代理（保留 token/logprob/routing 回放）；
+  # reward.py 跑 swesmith_verify 的 pytest 验证（0/1）。上游默认配方是单卡 QLoRA
+  # （Ling-3.0-tiny + NF4 + LoRA 32），但 QLoRA 在 areno 源码里 CUDA-only
+  # （engine/config.py:91,308 / worker.py:79）；QLoRA 与 pi 机制正交，故走非
+  # QLoRA 变体：全参训练 Ling（同 bash_game 的 4 卡 TP + adam-4bit +
+  # triton-ascend/fla）。外部 pi CLI + Node.js + fd/ripgrep 与 SWE-smith 数据由
+  # install_pi_toolchain 提供（npmmirror/apt/ModelScope；generate_dataset
+  # --limit 1 只取 1 个任务冒烟；overlay 把 max-new-tokens 压到 256（示例默认
+  # 4096 × 32 轮 ≈ 13 万 token/attempt → 约 73 分钟，CI 压不动）。max_turns/
+  # timeout 属数据契约/训练语义，不动；256 token × 32 轮 ≈ 4.5 分钟。
+  # 只影响耗时不影响退出码（引擎只认退出码；GRPO 需 n-samples≥2，故保留 2）。
+  # 组件见 unsupported。
+  - path: examples/agentic/pi/run_agent.py
+    profile: pi_npu
+    runner: linux-aarch64-a2-4
+    npu_devices: '0,1,2,3'
+    image: swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-910b-ubuntu22.04-py3.11
+    timeout_minutes: 300
+    overlay_args:
+      - --ckpt inclusionAI/Ling-3.0-tiny
+      - --tp-size 4
+      - --world-size 4
+      - --adam-4bit
+      # 注：--optimizer-state-offload 仅 CUDA 后端可用（trainer_config.py:110
+      # 硬校验），NPU 用不了。backward 显存余量靠 run_example.sh 的
+      # expandable_segments 治碎片，不够再降 max-context-len。
+      - --dataset-path ${ARENO_PI_DATA}
+      - --dataset-loader-fn ${EXAMPLES_ROOT}/examples/agentic/pi/dataset_loader.py
+      - --reward-fn-path ${EXAMPLES_ROOT}/examples/agentic/pi/reward.py
+      - --agent-fn ${EXAMPLES_ROOT}/examples/agentic/pi/run_agent.py
+      - --algo grpo
+      - --batch-size 1
+      - --n-samples 2
+      - --mini-bs 1
+      - --max-steps 1
+      - --max-running-prompts 2
+      - --max-context-len 16384
+      - --max-new-tokens 256
+      - --disable-thinking
+      - --drop-rollout-state
 unsupported:
-  - examples/agentic/pi/run_agent.py # 验证中
   # =====================================================================
   # ===== 工具类套件
   # =====================================================================
