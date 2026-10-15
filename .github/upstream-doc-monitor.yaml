@@ -14,3 +14,9 @@ projects:
   - project: TRL
     owner: lltiaor
     url: https://github.com/huggingface/trl/blob/main/docs/source/quickstart.md
+
+  # TGI（Ascend NPU）quick-start 看护的源头文档：cosdt fork 的 NPU 快速上手，
+  # 变化时提醒更新 projects/tgi/docs/Quick-start-Ascend.md。
+  - project: tgi
+    owner: VenusTZZ
+    url: https://github.com/cosdt/text-generation-inference/blob/main/docs/npu/quick-start.md
